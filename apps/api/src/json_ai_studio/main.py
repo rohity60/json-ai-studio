@@ -134,18 +134,17 @@ def _apply_diffs(obj: dict[str, Any], diffs: list[dict[str, Any]]) -> dict[str, 
         target_key = path_parts[-1] if path_parts else None
         if not target_key:
             continue
-        # Navigate to parent of target key
+         # Navigate to parent, creating intermediate dicts as needed
         current = result
         for part in path_parts[:-1]:
             if part not in current or not isinstance(current[part], dict):
-                break
+                current[part] = {}
             current = current[part]
-        else:   # Only reached if no break occurred
-            op = diff.get("operation")
-            if op == "delete":
-                current.pop(target_key, None)
-            else:
-                current[target_key] = diff.get("new_value")
+        op = diff.get("operation")
+        if op == "delete":
+            current.pop(target_key, None)
+        else:
+            current[target_key] = diff.get("new_value")
     return result
 
 
@@ -473,12 +472,12 @@ async def endpoint_chat(
 # ---------------------------------------------------------------------------
 
 
-    @app.post("/api/sessions/{session_id}/diffs/accept-all")
-    async def endpoint_accept_all_diffs(
+@app.post("/api/sessions/{session_id}/diffs/accept-all")
+async def endpoint_accept_all_diffs(
         session_id: str,
          _auth=Depends(require_api_key),
-    ):
-     """Accept all diffs in latest turn. Persists and returns the merged working_json."""
+):
+    """Accept all diffs in latest turn. Persists and returns the merged working_json."""
     session = get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
