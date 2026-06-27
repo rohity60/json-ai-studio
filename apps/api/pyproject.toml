@@ -1,0 +1,21 @@
+[project]
+name = "json-ai-studio-api"
+version = "0.1.0"
+description = "AI-powered JSON configuration management backend"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "litellm",
+    "deepdiff",
+    "python-multipart>=0.0.32",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "httpx",
+    "black>=26.5.1",
+]

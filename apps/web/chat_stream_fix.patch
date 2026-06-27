@@ -1,0 +1,19 @@
+# Chat Stream Fix Patch for JSON AI Studio
+
+This patch addresses the UI hang bug by forcing incremental state updates during SSE streaming in three core areas: `SessionContext.tsx`, `ChatPanel.tsx`, and `main.py`. The changes ensure that the frontend reacts to 'thinking' phase status, partial diff chunks, and final working JSON updates as they arrive via the SSE stream, rather than waiting for a single final payload read.
+
+## 1. apps/web/src/context/SessionContext.tsx
+**Change**: Overhauls `sendMessage` loop logic (lines ~160-248).
+**Impact**: Instead of updating state only after the entire stream finishes, `setState` is called *inside* the `for await...of` loop whenever a chunk type (`diff`, `content`, `complete`) is detected. This forces immediate re-renders and populates both history (`conversationHistory[lastIndex].diffs`) and the current JSON state (`workingJson`).
+
+## 2. apps/web/src/components/ChatPanel.tsx
+**Change**: Overhauls message rendering logic inside the `map` loop (lines ~100-120).
+**Impact**: The component now checks if a received message has accumulated diffs AND is flagged as streaming (`isStreaming`). If so, it renders the structured diff block *first*, making partial changes visible immediately.
+
+## 3. apps/api/src/json_ai_studio/main.py
+**Change**: Modifies `_stream_llm` generator (lines ~180-236).
+**Impact**: Explicitly structures the stream output to:
+    a) Yield separate `event: diff` chunks for every detected change in line 202.
+    b) Ensure that the final `event: complete` payload contains the JSON state *after* all collected diffs have been applied (`_apply_diffs(...)`).
+
+**Review:** Apply this patch set and test chat flow thoroughly, verifying immediate visual updates during LLM thinking time.

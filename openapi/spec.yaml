@@ -1,0 +1,966 @@
+# JSON AI Studio API — Machine-Readable Contract
+# Monolithic OpenAPI 3.1 spec at project root (see ADR-0012)
+# Generated from PRD v1.0 + backend/frontend requirements
+# All shared types live in components/schemas; each endpoint references them.
+
+openapi: "3.1.0"
+info:
+  title: JSON AI Studio API
+  description: |-
+    AI-powered configuration management platform — enable developers, product
+    managers, and solution architects to create, modify, validate, and manage
+    JSON configurations through natural language conversation.
+  version: "0.1.0"
+
+securitySchemes:
+  simpleApiKey:
+    type: apiKey
+    in: header
+    name: X-API-Key
+servers:
+   - url: http://localhost:8000
+     description: Local development server
+
+tags:
+   - name: sessions
+     description: Session lifecycle management
+   - name: upload
+     description: JSON upload and parsing
+   - name: chat
+     description: Conversational editing (SSE streaming)
+   - name: validate
+     description: JSON validation engine
+   - name: diff
+     description: Diff generation between JSON documents
+   - name: export
+     description: Export downloaded JSON files
+
+paths:
+   # =====================================================================
+   # SESSION MANAGEMENT
+   # =====================================================================
+
+   /api/sessions:
+    post:
+      tags: [sessions]
+      summary: Create a new session
+      description: |-
+        Create an empty session and return its ID. The frontend stores this
+        ID in localStorage for session recovery across page refreshes.
+      operationId: createSession
+       security:
+                  - simpleApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/CreateSessionRequest'
+            example:
+              name: "My Configuration"
+      responses:
+         '201':
+          description: Session created successfully
+          headers:
+            X-Session-Id:
+              description: UUID of the newly created session
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/SessionResponse'
+              example:
+                id: "abc123"
+                name: "My Configuration"
+                working_json: {}
+                versions: []
+                conversation_history: []
+                created_at: "2026-06-21T00:00:00Z"
+                updated_at: "2026-06-21T00:00:00Z"
+         '400':
+           $ref: '#/components/responses/Error400'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '429':
+           $ref: '#/components/responses/Error429'
+         '500':
+           $ref: '#/components/responses/Error500'
+
+   /api/sessions/{sessionId}:
+    get:
+      tags: [sessions]
+      summary: Get session state
+      description: |-
+        Retrieve the full session state including working JSON, conversation
+        history, and version list. Used by the frontend to restore the UI on
+        page load or after a client-side refresh.
+       security:
+                  - simpleApiKey: []
+      operationId: getSession
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           description: UUID of the session to retrieve
+           schema:
+             type: string
+      responses:
+         '200':
+          description: Session state retrieved
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/SessionResponse'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   /api/sessions/{sessionId}/versions:
+    get:
+      tags: [sessions]
+      summary: List all versions for a session
+      description: |-
+        Return all version snapshots (original, working, approved) with their
+       security:
+                  - simpleApiKey: []
+        timestamps. Used to populate the version sidebar in the frontend.
+      operationId: listVersions
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           description: UUID of the session
+           schema:
+             type: string
+      responses:
+         '200':
+          description: Version list retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items:
+                       $ref: '#/components/schemas/VersionSnapshot'
+                required: [versions]
+              example:
+                versions:
+                   - id: "v1"
+                     parent_id: null
+                     json_data: {}
+                     label: "original"
+                     created_at: "2026-06-21T00:00:00Z"
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+    post:
+      tags: [sessions]
+      summary: Create a version snapshot
+      description: |-
+        Take a named snapshot of the current working JSON. Each snapshot is an
+        immutable point-in-time state that can be restored later.
+      operationId: createVersionSnapshot
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           description: UUID of the session
+           schema:
+             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/CreateVersionRequest'
+            example:
+              label: "v1 — increase timeout"
+              json_data:
+                services:
+                  api:
+                    timeout: 60
+      responses:
+         '201':
+          description: Version snapshot created
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/VersionSnapshot'
+              example:
+                id: "v2"
+                parent_id: "v1"
+                json_data: {}
+                label: "v1 — increase timeout"
+                created_at: "2026-06-21T00:01:00Z"
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   /api/sessions/{sessionId}/diffs/{diffId}/accept:
+    post:
+      tags: [sessions]
+      summary: Apply an approved diff to the working JSON
+      description: |-
+        Merge the specified diff into the session's working_json. The diff is
+        marked as accepted and the updated state becomes the new baseline for
+        subsequent chat turns. An automatic validation run is triggered after
+       security:
+                  - simpleApiKey: []
+        acceptance; if validation fails, a warning toast is shown to the user
+        but the diff remains applied.
+      operationId: acceptDiff
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           description: UUID of the session
+           schema:
+             type: string
+         - name: diffId
+           in: path
+           required: true
+           description: UUID of the diff to accept
+           schema:
+             type: string
+      responses:
+         '200':
+          description: Diff applied successfully
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/DiffAcceptResponse'
+              example:
+                success: true
+                working_json: {}
+                validation_passed: true
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   /api/sessions/{sessionId}/diffs/{diffId}/reject:
+    post:
+      tags: [sessions]
+      summary: Revert a rejected diff from the working JSON
+       security:
+                  - simpleApiKey: []
+      description: |-
+        Remove the specified diff from the working JSON. The diff is marked as
+        rejected and does not affect the baseline state.
+      operationId: rejectDiff
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           description: UUID of the session
+           schema:
+             type: string
+         - name: diffId
+           in: path
+           required: true
+           description: UUID of the diff to reject
+           schema:
+             type: string
+      responses:
+         '200':
+          description: Diff rejected successfully
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/DiffRejectResponse'
+              example:
+                success: true
+                working_json: {}
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   # =====================================================================
+   # JSON UPLOAD & PARSING
+   # =====================================================================
+
+   /api/json/upload:
+    post:
+      tags: [upload]
+      summary: Upload or paste JSON for parsing
+      description: |-
+        Accept a .json file upload or raw JSON body. Parse the input, validate
+       security:
+                  - simpleApiKey: []
+        syntax, generate a schema summary (top-level keys, nested depth, array
+        lengths), and return the structured tree along with session metadata.
+        The response includes a sessionId that the frontend uses for all
+        subsequent chat operations.
+      operationId: uploadJson
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: .json file to upload (max 20 MB)
+                json_body:
+                  type: string
+                  description: Raw JSON string to parse as an alternative to file upload
+              oneOf:
+                 - required: [file]
+                 - required: [json_body]
+          application/json:
+            schema:
+              type: object
+              properties:
+                json_body:
+                  type: string
+                  description: Raw JSON string to parse
+            example:
+              json_body: '{"services": {"api": {"timeout": 30}}}'
+      responses:
+         '200':
+          description: JSON parsed successfully
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/UploadResponse'
+              example:
+                session_id: "abc123"
+                parsed_json:
+                  services:
+                    api:
+                      timeout: 30
+                schema_summary:
+                  top_level_keys: ["services"]
+                  nested_depth: 3
+                  array_lengths: {}
+         '400':
+           $ref: '#/components/responses/Error400'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '413':
+          description: Payload too large — file exceeds 20 MB limit
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/Error'
+              example:
+                error: "File size exceeds 20 MB limit"
+                hint: "Please reduce the file size and try again."
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   # =====================================================================
+   # CHAT (SSE STREAMING)
+   # =====================================================================
+
+   /api/chat:
+    post:
+      tags: [chat]
+      summary: Send a chat turn; stream SSE response
+      description: |-
+        Process a natural language message against the current working JSON.
+       security:
+                  - simpleApiKey: []
+        Returns an SSE stream with three event types in sequence: (1) thinking
+          — LLM reasoning text shown inline in the chat, (2) diff(s) — individual
+        change entries from the LLM, and (3) complete — final applied state with
+        a summary explanation. The frontend accumulates all events and updates
+        the working JSON preview panel on the complete event.
+      operationId: sendChatTurn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/ChatRequest'
+            examples:
+              simple_modification:
+                summary: Increase a single timeout value
+                value:
+                  session_id: "abc123"
+                  conversation_history: []
+                  working_json:
+                    services:
+                      api:
+                        timeout: 30
+                  message: "Increase timeout to 60 for all services."
+              conditional_modification:
+                summary: Exclude specific services from a bulk change
+                value:
+                  session_id: "abc123"
+                  conversation_history:
+                     - role: user
+                      content: "Add retry count of 5"
+                  working_json:
+                    services:
+                      api:
+                        timeout: 30
+                      payment:
+                        timeout: 30
+                  message: "Exclude payment services."
+      responses:
+         '200':
+          description: SSE stream — thinking → diff(s) → complete
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |-
+                  Raw SSE wire format. Each event is a block of two lines:
+                   "event: <type>\ndata: <json_body>\n\n"
+              example: |
+                event: thinking
+                data: {"text":"Applying timeout change to all services..."}
+
+                event: diff
+                data: {"entry":{"path":"/services/api/timeout","operation":"modify","old_value":30,"new_value":60}}
+
+                event: diff
+                data: {"entry":{"path":"/services/payment/timeout","operation":"modify","old_value":30,"new_value":60}}
+
+                event: complete
+                data: {"working_json":{"services":{"api":{"timeout":60},"payment":{"timeout":60}}},"explanation":"Done — 2 changes applied."}
+         '401':
+           $ref: '#/components/responses/Error401'
+         '429':
+           $ref: '#/components/responses/Error429'
+         '500':
+           $ref: '#/components/responses/Error500'
+
+   # =====================================================================
+   # VALIDATION ENGINE
+   # =====================================================================
+
+   /api/validate:
+    post:
+      tags: [validate]
+      summary: Validate a JSON document
+      description: |-
+       security:
+                  - simpleApiKey: []
+        Run syntax and business rule validation on the provided JSON. Syntax
+        validation ensures the input parses as valid JSON. Business rule
+        validation checks constraints like timeout > 0, retryCount <= 10, and
+        mandatory fields populated. Schema validation (JSON Schema draft-2020-12)
+        is deferred to a future phase. Validation runs automatically after each
+        approved diff before marking it as final.
+      operationId: validateJson
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/ValidateRequest'
+            examples:
+              valid_config:
+                summary: A valid configuration document
+                value:
+                  json_data:
+                    services:
+                      api:
+                        timeout: 60
+                        retryCount: 5
+              invalid_config:
+                summary: An invalid configuration (timeout = -1)
+                value:
+                  json_data:
+                    services:
+                      api:
+                        timeout: -1
+      responses:
+         '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/ValidateResponse'
+              examples:
+                valid:
+                  summary: All rules pass
+                  value:
+                    valid: true
+                    errors: []
+                invalid:
+                  summary: Business rule violation (timeout <= 0)
+                  value:
+                    valid: false
+                    errors:
+                       - path: "/services/api/timeout"
+                         message: "timeout must be greater than 0"
+         '400':
+           $ref: '#/components/responses/Error400'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   # =====================================================================
+   # DIFF GENERATION
+   # =====================================================================
+
+   /api/diff:
+    post:
+       security:
+                  - simpleApiKey: []
+      tags: [diff]
+      summary: Compute diff between two JSON documents
+      description: |-
+        Return a structured field-level diff between old and new JSON objects.
+        Supports nested objects, arrays, and scalar types. Used by the frontend
+        to render the before/after side-by-side comparison view with color-coded
+        diff indicators (green for added, orange for modified, red for deleted).
+      operationId: computeDiff
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                old_json:
+                  type: object
+                  additionalProperties: true
+                  description: The original JSON state (before)
+                new_json:
+                  type: object
+                  additionalProperties: true
+                  description: The modified JSON state (after)
+              required: [old_json, new_json]
+            examples:
+              modify_value:
+                summary: Modify a single scalar value
+                value:
+                  old_json:
+                    services:
+                      api:
+                        timeout: 30
+                  new_json:
+                    services:
+                      api:
+                        timeout: 60
+              add_field:
+                summary: Add a new field
+                value:
+                  old_json:
+                    services:
+                      api: {}
+                  new_json:
+                    services:
+                      api:
+                        timeout: 30
+              delete_field:
+                summary: Remove an existing field
+                value:
+                  old_json:
+                    services:
+                      api:
+                        timeout: 30
+                  new_json:
+                    services:
+                      api: {}
+      responses:
+         '200':
+          description: Structured diff between two JSON documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  diffs:
+                    type: array
+                    items:
+                       $ref: '#/components/schemas/DiffEntry'
+                    description: List of field-level changes
+                required: [diffs]
+              example:
+                diffs:
+                   - path: "/services/api/timeout"
+                     operation: "modify"
+                     old_value: 30
+                     new_value: 60
+         '400':
+           $ref: '#/components/responses/Error400'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   # =====================================================================
+   # EXPORT
+   # =====================================================================
+
+       security:
+                  - simpleApiKey: []
+   /api/sessions/{sessionId}/export:
+    get:
+      tags: [export]
+      summary: Download JSON file for a session
+      description: |-
+        Return the current working JSON as a downloadable file. Default format
+        is pretty-printed; add ?format=minified for compact output. Used by the
+        frontend's export button to save the final approved configuration.
+      operationId: exportSessionJson
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           description: UUID of the session to export
+           schema:
+             type: string
+         - name: format
+           in: query
+           required: false
+           description: Output format — pretty (default) or minified
+           schema:
+             type: string
+             enum: [pretty, minified]
+             default: pretty
+      responses:
+         '200':
+          description: JSON file content
+          headers:
+            Content-Disposition:
+              description: Filename for the downloaded file
+              schema:
+                type: string
+                example: 'attachment; filename="session-export.json"'
+            Content-Type:
+              description: Always application/json
+              schema:
+                type: string
+                example: "application/json"
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+# =======================================================================
+# COMPONENTS — SHARED TYPES, RESPONSES, EXAMPLES
+# =======================================================================
+
+components:
+  schemas:
+     # -- Core Domain Models --
+
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+          description: UUID of the session
+        name:
+          type: string
+          description: Human-readable session name
+        working_json:
+          type: object
+          additionalProperties: true
+          description: Current mutable state (arbitrary user-provided schema)
+        versions:
+          type: array
+          items:
+             $ref: '#/components/schemas/VersionSnapshot'
+          description: Historical version snapshots
+        conversation_history:
+          type: array
+          items:
+             $ref: '#/components/schemas/ChatTurn'
+          description: Full chat history for this session
+        created_at:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp of session creation
+        updated_at:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp of last update
+      required: [id, working_json, versions, conversation_history]
+
+    VersionSnapshot:
+      type: object
+      properties:
+        id:
+          type: string
+          description: UUID of this version snapshot
+        parent_id:
+          type: string
+          nullable: true
+          description: Reference to the predecessor version
+        json_data:
+          type: object
+          additionalProperties: true
+          description: The JSON state at time of snapshot
+        label:
+          type: string
+          description: Human-readable label (e.g., "original", "v1 — increase timeout")
+        created_at:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp of creation
+      required: [id, json_data, label, created_at]
+
+    ChatTurn:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+          description: Speaker of the chat turn
+        content:
+          type: string
+          description: The message text
+        diffs:
+          type: array
+          items:
+             $ref: '#/components/schemas/DiffEntry'
+          nullable: true
+          description: Attached diff entries for assistant turns
+      required: [role, content]
+
+     # -- Wire Contracts --
+
+    DiffEntry:
+      type: object
+      properties:
+        path:
+          type: string
+          description: JSON Pointer path to the changed field (e.g., "/services/api/timeout")
+        operation:
+          type: string
+          enum: [add, modify, delete]
+          description: Type of change applied
+        old_value:
+          nullable: true
+          description: Value before the change; null for "add" operations
+        new_value:
+          nullable: true
+          description: Value after the change; null for "delete" operations
+      required: [path, operation]
+
+    ValidationError:
+      type: object
+      properties:
+        path:
+          type: string
+          nullable: true
+          description: JSON Pointer to the field that failed validation; null for global errors
+        message:
+          type: string
+          description: Human-readable error description
+      required: [message]
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+        hint:
+          type: string
+          nullable: true
+          description: Suggestion for how to resolve the error; null if not applicable
+      required: [error]
+
+     # -- Request/Response Wrappers --
+
+    CreateSessionRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Human-readable session name
+      required: [name]
+
+    SessionResponse:
+      allOf:
+         - $ref: '#/components/schemas/Session'
+      description: Full session state returned by GET /api/sessions/{id} and POST /api/sessions
+
+    CreateVersionRequest:
+      type: object
+      properties:
+        label:
+          type: string
+          description: Human-readable version label
+        json_data:
+          type: object
+          additionalProperties: true
+          description: JSON state to snapshot
+      required: [label, json_data]
+
+    ChatRequest:
+      type: object
+      properties:
+        session_id:
+          type: string
+          description: UUID of the session to send a message in
+        conversation_history:
+          type: array
+          items:
+             $ref: '#/components/schemas/ChatTurn'
+          description: Full chat history for context-aware LLM processing
+        working_json:
+          type: object
+          additionalProperties: true
+          description: Current working JSON sent to the LLM as context every turn
+        message:
+          type: string
+          description: User's natural language modification request
+      required: [session_id, working_json, message]
+
+    UploadResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+          description: UUID of the created or retrieved session
+        parsed_json:
+          type: object
+          additionalProperties: true
+          description: The parsed JSON tree from the uploaded file
+        schema_summary:
+           $ref: '#/components/schemas/SchemaSummary'
+      required: [session_id, parsed_json]
+
+    SchemaSummary:
+      type: object
+      properties:
+        top_level_keys:
+          type: array
+          items:
+            type: string
+          description: Top-level keys in the JSON structure
+        nested_depth:
+          type: integer
+          minimum: 0
+          description: Maximum nesting depth of the JSON
+        array_lengths:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Array lengths keyed by path (e.g., "/services": 3)
+      required: [top_level_keys, nested_depth]
+
+    ValidateRequest:
+      type: object
+      properties:
+        json_data:
+          type: object
+          additionalProperties: true
+          description: JSON document to validate
+      required: [json_data]
+
+    ValidateResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+          description: Whether the JSON passes all validation rules
+        errors:
+          type: array
+          items:
+             $ref: '#/components/schemas/ValidationError'
+          description: List of validation error messages; empty if valid
+      required: [valid, errors]
+
+    DiffAcceptResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        working_json:
+          type: object
+          additionalProperties: true
+        validation_passed:
+          type: boolean
+          description: Whether the post-acceptance validation passed
+      required: [success, working_json]
+
+    DiffRejectResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        working_json:
+          type: object
+          additionalProperties: true
+      required: [success, working_json]
+
+     # -- HTTP Error Response Templates --
+
+  responses:
+    Error400:
+      description: Bad request — invalid input format or missing required fields
+      content:
+        application/json:
+          schema:
+             $ref: '#/components/schemas/Error'
+          example:
+            error: "Invalid request body"
+            hint: "Check your JSON syntax and required fields."
+
+    Error401:
+      description: Unauthorized — missing or invalid API key in X-API-Key header
+      content:
+        application/json:
+          schema:
+             $ref: '#/components/schemas/Error'
+          example:
+            error: "Missing or invalid API key. Send valid X-API-Key header."
+            hint: null
+
+    Error404:
+      description: Not found — session does not exist
+      content:
+        application/json:
+          schema:
+             $ref: '#/components/schemas/Error'
+          example:
+            error: "Session not found"
+            hint: "Check the session ID and try again."
+
+    Error429:
+      description: Too many requests — rate limit exceeded (10 requests per 60s window per API key)
+      content:
+        application/json:
+          schema:
+             $ref: '#/components/schemas/Error'
+          example:
+            error: "Rate limited. 10 requests per 60s window."
+            hint: null
+
+    Error500:
+      description: Internal server error — LLM call failed or unexpected error
+      content:
+        application/json:
+          schema:
+             $ref: '#/components/schemas/Error'
+          example:
+            error: "LLM call failed: timeout after 5000ms"
+            hint: "Please try again."
