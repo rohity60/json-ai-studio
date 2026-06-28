@@ -58,9 +58,10 @@ Technical decisions are documented in `docs/adr/`.
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| V-01 | Sidebar or dropdown listing all versions (original, working, approved) | MVP |
-| V-02 | Click a version to restore / preview it in the diff viewer | MVP |
-| V-03 | Visual indicator for the currently active / "working" version | MVP |
+| V-01 | Sidebar or dropdown listing all versions (original, working, approved) | MVP ✅ |
+| V-02 | Click a version to restore / preview it in the diff viewer | MVP ✅ |
+| V-03 | Visual indicator for the currently active / "working" version | MVP ✅ |
+| V-04 | Refresh versions list from backend via API call | MVP ✅ |
 
 ## 7. Export
 
