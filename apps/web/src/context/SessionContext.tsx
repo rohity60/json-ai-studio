@@ -33,7 +33,7 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
-        // API key read via useEffect -- never during SSR render
+    // API key read via useEffect -- never during SSR render
   const [apiKey, setApiKey] = useState<string>('');
 
   useEffect(() => {
@@ -41,55 +41,55 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!key) {
       key = crypto.randomUUID();
       localStorage.setItem('json-ai-studio-api-key', key);
-           }
+    }
     setApiKey(key);
-            // eslint-disable-next-line react-hooks/exhaustive-deps
-           }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [state, setState] = useState<SessionState>({
     sessionId: null, workingJson: {}, versions: [],
     conversationHistory: [], activeVersionId: null,
     loading: true, error: null,
-          });
+  });
 
-          // Hydrate from localStorage + fetch session from backend
+  // Hydrate from localStorage + fetch session from backend
   useEffect(() => {
     if (!apiKey) return;
     const saved = localStorage.getItem('json-ai-studio-session');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-                  // Fetch full session state from backend
+        // Fetch full session state from backend
         api.getSession(parsed.sessionId, apiKey).then((data) => {
           setState({
             sessionId: parsed.sessionId,
             workingJson: (data.working_json as Record<string, any>) || {},
             versions: (data.versions || []).map((v: any) => ({
               id: v.id, label: v.label, json_data: v.json_data
-                        })),
+            })),
             conversationHistory: [],
             activeVersionId: null,
             loading: false,
             error: null,
-                    });
-                  }).catch(() => {
-                    // Session load failed -- clear stale data & start fresh
+          });
+        }).catch(() => {
+            // Session load failed -- clear stale data & start fresh
               localStorage.removeItem('json-ai-studio-session');
               toast.warning('Session expired. Starting fresh.');
               setState((prev) => ({ ...prev, loading: false }));
-                   });
-                } catch {
+                    });
+                 } catch {
         localStorage.removeItem('json-ai-studio-session');
-               }
-              } else {
-                 // No saved session -- start fresh
+                }
+               } else {
+                  // No saved session -- start fresh
         setState((prev) => ({ ...prev, loading: false }));
-              }
-            }, [apiKey]);
+               }
+             }, [apiKey]);
 
   const updateSessionStorage = (sessionId: string) => {
     localStorage.setItem('json-ai-studio-session', JSON.stringify({ sessionId }));
-           };
+            };
 
   const createSession = useCallback(async (name: string) => {
     setState((prev) => ({ ...prev, loading: true }));
@@ -97,92 +97,91 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       const data = await api.createSession(name, apiKey);
       updateSessionStorage(data.id);
       setState({
-              ...state,
+               ...state,
         sessionId: data.id,
         workingJson: (data.working_json as Record<string, any>) || {},
         versions: (data.versions || []).map((v: any) => ({
           id: v.id, label: v.label, json_data: v.json_data
-               })),
+                })),
         conversationHistory: [],
         loading: false,
         error: null,
-             });
-           } catch (err: any) {
+              });
+            } catch (err: any) {
       if (err.message?.includes('401') || err.message?.includes('API key')) {
         toast.error('Auth required. Refresh the page to get a new key.');
-             } else if (err.message?.includes('429')) {
+              } else if (err.message?.includes('429')) {
         toast.warning('Rate limited. Wait a moment before trying again.');
-             } else {
+              } else {
         toast.error(String(err));
-             }
+              }
       setState({ ...state, error: String(err), loading: false });
-           }
-           }, [apiKey, state]);
+            }
+            }, [apiKey, state]);
 
   const uploadJson = useCallback(async (jsonData: Record<string, any>) => {
     if (!state.sessionId) {
       await createSession('Uploaded');
-            }
+             }
     try {
       const data = await api.uploadJson(
         JSON.stringify(jsonData), undefined, apiKey, state.sessionId || undefined,
-                );
+      );
        if (data?.session_id) updateSessionStorage(data.session_id);
-          // Store parsed_json as workingJson so the UI can render it immediately
-      setState((prev) => ({
-             ...prev,
+       // Store parsed_json as workingJson so the UI can render it immediately
+      setState((prev) => ({...prev,
         sessionId: data.session_id || prev.sessionId,
         workingJson: data.parsed_json || prev.workingJson,
         error: null,
         loading: false,
-            }));
-            } catch (err: any) {
+      }));
+    } catch (err: any) {
       if (err.message?.includes('401') || err.message?.includes('API key')) {
         toast.error('Auth required. Refresh page to get a new key.');
-             } else if (err.message?.includes('429')) {
+              } else if (err.message?.includes('429')) {
         toast.warning('Rate limited. Wait a moment before trying again.');
-             } else {
+              } else {
         toast.error(String(err));
-             }
+              }
       setState((prev) => ({ ...prev, error: String(err) }));
-            }
-           }, [state.sessionId, createSession, apiKey]);
+             }
+            }, [state.sessionId, createSession, apiKey]);
 
   const sendMessage = useCallback(async (message: string) => {
     console.log('[SessionContext] sendMessage ENTRY called, messageLen:', message.length, 'sessionId:', state.sessionId, 'workingJsonKeys:', Object.keys(state.workingJson).length);
     if (!state.sessionId) {
       console.warn('[SessionContext] sendMessage early-return: no sessionId');
       return;
-       }
+        }
 
-        // 1. Snapshot the initial payload variables
+         // 1. Snapshot the initial payload variables
     const currentWorkingJson = state.workingJson;
     console.log('[SessionContext] Snapshot workingJson, keys:', Object.keys(currentWorkingJson));
 
     setState((prev) => ({
-         ...prev,
+          ...prev,
       loading: false,
       conversationHistory: [...prev.conversationHistory, { role: 'user', content: message }]
-       }));
+        }));
     console.log('[SessionContext] SET_STATE: loading=true, added user message to history');
 
     try {
-         // Track streaming variables locally
+          // Track streaming variables locally
       let activeJson = currentWorkingJson;
       const diffs: any[] = [];
       let textAccumulator = '';
 
-         // Initialize the assistant message container in UI history
+          // Initialize the assistant message container in UI history
       setState((prev) => ({
-           ...prev,
+            ...prev,
         conversationHistory: [
-             ...prev.conversationHistory,
-             { role: 'assistant', content: '', diffs: [] }
-           ]
-         }));
+              ...prev.conversationHistory,
+              { role: 'assistant', content: '', diffs: [] }
+            ]
+          }));
       console.log('[SessionContext] Initialized assistant message container in history');
 
-         // 2. Stream loop
+          // 2. Stream loop
       console.log('[SessionContext] Starting stream loop over api.streamChat...');
       let chunkCount = 0;
       for await (const chunk of api.streamChat(state.sessionId, message, currentWorkingJson, apiKey)) {
@@ -193,16 +192,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         if (chunk.type === 'diff' && chunk.data.entry) {
           diffs.push(chunk.data.entry);
           structureChanged = true;
-           } else if (chunk.type === 'complete' && chunk.data.working_json) {
-              // Capture the brand new JSON emitted from your API response
+            } else if (chunk.type === 'complete' && chunk.data.working_json) {
+               // Capture the brand new JSON emitted from your API response
           activeJson = chunk.data.working_json;
-             // Also extract explanation text from the complete event payload
+              // Also extract explanation text from the complete event payload
             if (chunk.data.explanation) {
               textAccumulator += String(chunk.data.explanation);
-            }
+             }
           structureChanged = true;
           console.log('[SessionContext] Received COMPLETE event, working_json keys:', Object.keys(activeJson));
-           } else if (chunk.type === 'content' || chunk.type === 'text') {
+        } else if (chunk.type === 'content' || chunk.type === 'text') {
           textAccumulator += chunk.data.text || '';
              // Backend may embed explanation alongside working_json in content/text chunks
             if (chunk.data.explanation) {
@@ -267,7 +266,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!state.sessionId) return;
     try {
       const data = await api.acceptDiff(state.sessionId, diffId, apiKey);
-      setState(prev => ({ ...prev, workingJson: data.working_json }));
+      setState(prev => {
+        const history = [...prev.conversationHistory];
+        if (history.length > 0) {
+          const last = { ...history[history.length - 1] };
+          last.diffs = (last.diffs || []).filter((d: any) => d.id !== diffId);
+          history[history.length - 1] = last;
+        }
+        return { ...prev, workingJson: data.working_json, conversationHistory: history };
+      });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
 
@@ -283,7 +290,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!state.sessionId) return;
     try {
       const data = await api.rejectDiff(state.sessionId, diffId, apiKey);
-      setState(prev => ({ ...prev, workingJson: data.working_json }));
+      setState(prev => {
+        const history = [...prev.conversationHistory];
+        if (history.length > 0) {
+          const last = { ...history[history.length - 1] };
+          last.diffs = (last.diffs || []).filter((d: any) => d.id !== diffId);
+          history[history.length - 1] = last;
+        }
+        return { ...prev, workingJson: data.working_json, conversationHistory: history };
+      });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
 
@@ -291,7 +306,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!state.sessionId) return;
     try {
       const data = await api.acceptDiffBatch(state.sessionId, apiKey);
-      setState(prev => ({ ...prev, workingJson: data.working_json }));
+      setState(prev => {
+        const history = [...prev.conversationHistory];
+        if (history.length > 0) {
+          const last = { ...history[history.length - 1] };
+          last.diffs = [];
+          history[history.length - 1] = last;
+        }
+        return { ...prev, workingJson: data.working_json, conversationHistory: history };
+      });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
 
@@ -299,7 +322,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!state.sessionId) return;
     try {
       const data = await api.rejectDiffBatch(state.sessionId, apiKey);
-      setState(prev => ({ ...prev, workingJson: data.working_json }));
+      setState(prev => {
+        const history = [...prev.conversationHistory];
+        if (history.length > 0) {
+          const last = { ...history[history.length - 1] };
+          last.diffs = [];
+          history[history.length - 1] = last;
+        }
+        return { ...prev, workingJson: data.working_json, conversationHistory: history };
+      });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
 
