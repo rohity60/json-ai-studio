@@ -109,8 +109,21 @@ All routes + auth/rate-limit middleware in `main.py`. No separate router/middlew
 
 ## Editing rules
 
+**Rule: Do not use string matching or single-line replacements.
+When making edits, you MUST output code modifications using the following strict Search & Replace block format:
+
+<<<<<<< SEARCH
+[Exact unique lines of original code to replace]
+=======
+[New code to insert]
+>>>>>>> REPLACE
+
+Include enough surrounding context lines in the SEARCH block to make it completely unique.
+
+
 **Rule: # CRITICAL WORKFLOW FOR INDENTATION ISSUES:
-1. When you read Python files, note the exact indentation rule used (e.g., 4 spaces).
+1. "The code below has indentation mismatches and irregular docstring spacing. I want you to behave exactly like the black code formatter tool.Apply a strict, uncompromising 4-space indentation rule to every line. Do not try to preserve the original irregular spacing. Output the entire file as if it were processed by running black -l 88."
+2. When you read Python files, note the exact indentation rule used (e.g., 4 spaces).
 2. When editing, do not attempt large string matches if you suspect the linter modified whitespace.
 3. Immediately after any edit, run your `lint-and-validate` tool.
 4. If the linter fixes indentation, you MUST completely reread the file before making your next edit to update your memory cache.

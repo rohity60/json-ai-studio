@@ -8,7 +8,8 @@ Auth: all endpoints protected by X-API-Key header + rate limiter (10 req/min per
 """
 
 from __future__ import annotations
-
+import logging
+import json
 import asyncio
 import json as _json
 from datetime import datetime, timezone
@@ -19,8 +20,10 @@ from fastapi import Depends, FastAPI, Form, HTTPException
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pygments.lexer import combined
 
 from .auth import require_api_key
+from .gateway import GatewayService
 from .models import (
     ChatRequest,
     ChatTurn,
@@ -54,6 +57,7 @@ app.add_middleware(
     max_age=86400,
 )
 
+logger = logging.getLogger("json_ai_studio.main")
 
 # ---------------------------------------------------------------------------
 # LiteLLM integration (ADR-0002)
@@ -154,51 +158,60 @@ def _apply_diffs(obj: dict[str, Any], diffs: list[dict[str, Any]]) -> dict[str, 
 
 
 async def _stream_llm(
-    working_json: dict[str, Any], message: str
+    working_json: dict[str, Any], message: str, api_key: str
 ) -> AsyncGenerator[str, None]:
-    """Stream LLM response as SSE events.
+    """Stream LLM response as SSE events via GatewayService.
 
     Event sequence: thinking -> diff(s) -> complete (ADR-0004).
-    Uses litellm streaming against local Ollama backend (ADR-0002, ADR-0004).
-    After collecting diffs, applies them to working_json so the final JSON
-    reflects all suggested changes -- even if individual diff new_value is null.
+    Delegates litellm call to GatewayService.invoke for credit tracking.
+    Parses diffs, applies them, emits final complete event.
     """
-    yield "event: thinking\ndata" + _json.dumps(
-        {"text": "Analyzing your request..."}
-    ) + "\n\n"
-    await asyncio.sleep(0.1)
-
     try:
-        import litellm
+
+        yield "event: thinking\ndata" + json.dumps(
+            {"text": "Analyzing your request..."}
+        ) + "\n\n"
 
         system_prompt = _build_system_prompt(working_json)
-        response = await litellm.acompletion(
-            model="ollama/qwen3.6:35b-mlx",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message},
-            ],
-            stream=True,
-            timeout=120.0,
-        )
 
+        # Collect all events from gateway
+        gateway_events = []
         content_parts: list[str] = []
-        async for chunk in response:
-            text = chunk.choices[0].delta.get("content")
-            if text:
-                content_parts.append(text)
-                yield "event: thinking\ndata" + _json.dumps({"text": text}) + "\n\n"
-
+        async for event_text in GatewayService.invoke(
+                "chat-session", message, api_key, system_prompt
+        ):
+            gateway_events.append(event_text)
+            yield event_text
+            # Extract combined text from event:raw
+            if event_text.startswith("event: thinking"):
+                try:
+                    parts = event_text.split("\n", 1)
+                    if len(parts) > 1:
+                        data_str = parts[1].lstrip("data").strip()
+                        raw_data = _json.loads(data_str)
+                        content_parts.append(raw_data.get("text"))
+                except (_json.JSONDecodeError, ValueError):
+                    pass
         combined = "".join(content_parts)
-
-        # Try to parse the LLM response as a list of diff entries
+        logger.error("invoke session=%s ",combined)
+        # Parse diffs from combined text
         diffs_to_apply: list[dict[str, Any]] = []
         try:
             parsed = _json.loads(combined)
             if isinstance(parsed, list):
                 for d in parsed:
-                    if isinstance(d, dict) and "path" in d and "operation" in d:
-                        diffs_to_apply.append(d)
+                    if isinstance(d, dict):
+                        # Accept both standard and LLM variants
+                        if "path" in d and "operation" in d:
+                            diffs_to_apply.append(d)
+                        elif "op" in d and "value" in d:
+                            entry = {
+                                "path": "/" + str(d.get("key", "unknown")).replace(".", "/"),
+                                "operation": d["op"],
+                                "old_value": d.get("value"),
+                                "new_value": d["value"],
+                            }
+                            diffs_to_apply.append(entry)
         except (_json.JSONDecodeError, ValueError):
             pass
 
@@ -434,7 +447,7 @@ async def endpoint_chat(
         try:
             merged_json = None
             all_diffs: list[dict[str, Any]] = []
-            async for event_text in _stream_llm(working_json, message):
+            async for event_text in _stream_llm(working_json, message, _auth):
                 yield event_text
                 # Capture working_json from the "complete" event payload
                 if event_text.startswith("event: complete"):
