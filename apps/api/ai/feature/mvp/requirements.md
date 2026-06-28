@@ -46,11 +46,11 @@ Technical decisions are documented in `docs/adr/`.
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| V-06 | `GET /api/sessions/{id}` — retrieve a session with its working JSON, conversation history, version list | MVP |
-| V-07 | `POST /api/sessions/{id}/versions` — create a named snapshot of the current state | MVP |
-| V-08 | `POST /api/sessions/{id}/diffs/{diff_id}/accept` — apply an approved diff to the working JSON | MVP |
-| V-09 | `POST /api/sessions/{id}/diffs/{diff_id}/reject` — revert the rejected change from working state | MVP |
-| V-10 | `GET /api/sessions/{id}/versions` — list all versions with timestamps | MVP |
+| V-06 | `GET /api/sessions/{id}` — retrieve a session with its working JSON, conversation history, version list | MVP ✅ |
+| V-07 | `POST /api/sessions/{id}/versions` — create a named snapshot of the current state | MVP ✅ |
+| V-08 | `POST /api/sessions/{id}/diffs/{diff_id}/accept` — apply an approved diff to the working JSON | MVP ✅ |
+| V-09 | `POST /api/sessions/{id}/diffs/{diff_id}/reject` — revert the rejected change from working state | MVP ✅ |
+| V-10 | `GET /api/sessions/{id}/versions` — list all versions with timestamps | MVP ✅ |
 
 ## 6. Diff Generation API
 
