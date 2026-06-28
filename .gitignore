@@ -3,3 +3,6 @@ apps/web/.next/*
 apps/api/.idea/*
 .claude/
 .mdc
+apps/web/.idea/
+apps/web/node_modules/
+apps/web/package-lock.json
