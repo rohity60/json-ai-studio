@@ -81,10 +81,12 @@ Technical decisions are documented in `docs/adr/`.
 
 ```python
 class Session(BaseModel):
-    id: str                          # human-readable name
-    working_json: Any                # current mutable state
-    versions: list[VersionSnapshot]  # historical snapshots
+    id: str                           # human-readable name
+    working_json: Any                 # current mutable state (after)
+    baseline_json: Any                # stable "before" state; only changes on accept/reject-all
+    versions: list[VersionSnapshot]   # historical snapshots
     conversation_history: list[ChatTurn]
+    applied_diffs: list[str]          # diff IDs already applied
     created_at: datetime
     updated_at: datetime
 ```
@@ -94,9 +96,9 @@ class Session(BaseModel):
 ```python
 class VersionSnapshot(BaseModel):
     id: str
-    parent_id: str | None            # reference to predecessor
+    parent_id: str | None             # reference to predecessor
     json_data: Any
-    label: str                       # e.g. "original", "v1 - increase timeout"
+    label: str                        # e.g. "original", "v1 - increase timeout"
     created_at: datetime
 ```
 
@@ -105,23 +107,52 @@ class VersionSnapshot(BaseModel):
 ```python
 class ChatTurn(BaseModel):
     role: Literal["user", "assistant"]
-    content: str                     # the message text
-    diffs: list[DiffEntry] | None    # attached diff from assistant turn
+    content: str                      # the message text
+    diffs: list[DiffEntry] | None     # attached diff from assistant turn
 ```
+
+## 9.5 Bidirectional Diff State Management
+
+Backend maintains `baseline_json` alongside `working_json` per session. `baseline_json` = "before" state (stable, only changes on accept/reject-all). `working_json` = "after" state (mutable, changes on upload, chat, single diff actions).
+
+### R1 — Upload: Return Before + After as Same JSON
+- `POST /api/json/upload` — parse uploaded JSON → `data`
+- Set `session["baseline_json"] = data`, `session["working_json"] = data`
+- Response: `{ "session_id": sid, "before": data, "after": data, "diffs": [] }`
+
+### R2 — Chat: Return Baseline + Working + Unapplied Diffs
+- `POST /api/chat` — on SSE `complete` event: `baseline_json` unchanged, `working_json` = LLM result
+- Response: `{ "baseline_json": <baseline>, "working_json": <working>, "diffs": [entries] }`
+
+### R3 — Accept All: Merge Working into Baseline
+- `POST /api/sessions/{id}/diffs/accept-all` — `session["baseline_json"] = copy(session["working_json"])`
+- Response: `{ "baseline_json": working_copy, "working_json": working_copy, "diffs": [] }`
+
+### R4 — Reject All: Restore Baseline
+- `POST /api/sessions/{id}/diffs/reject-all` — `session["working_json"] = copy(session["baseline_json"])`
+- Response: `{ "baseline_json": baseline, "working_json": baseline, "diffs": [] }`
+
+### R5 — Accept Single Diff: Apply + Return Updated State
+- `POST /api/sessions/{id}/diffs/{diffId}/accept` — apply diff to `working_json`, add diff ID to `applied_diffs`
+- Response: `{ "baseline_json": baseline, "working_json": new_working, "diffs": [remaining_diffs] }`
+
+### R6 — Reject Single Diff: Reverse + Return Updated State
+- `POST /api/sessions/{id}/diffs/{diffId}/reject` — reverse diff on `working_json`, remove from `applied_diffs`
+- Response: `{ "baseline_json": baseline, "working_json": new_working, "diffs": [remaining_diffs] }`
 
 ## 10. API Summary (Routes)
 
-| Method | Endpoint                          | Purpose                   |
+| Method | Endpoint                          | Purpose                    |
 |--------|-----------------------------------|---------------------------|
-| POST     | `/api/sessions`                   | Create a new session      |
-| POST     | `/api/json/upload`                | Upload / parse JSON       |
-| POST     | `/api/chat`                       | Send a chat turn (SSE)    |
-| POST     | `/api/validate`                   | Validate a JSON blob      |
-| POST     | `/api/diff`                       | Compute diff              |
-| GET      | `/api/sessions/{id}`              | Get session state         |
-| POST     | `/api/sessions/{id}/versions`     | Create version snapshot   |
-| POST     | `/api/sessions/{id}/diffs/`       | Apply / reject diffs      |
-| GET      | `/api/sessions/{id}/export`       | Download JSON file        |
+| POST      | `/api/sessions`                    | Create a new session       |
+| POST      | `/api/json/upload`                 | Upload / parse JSON        |
+| POST      | `/api/chat`                        | Send a chat turn (SSE)     |
+| POST      | `/api/validate`                    | Validate a JSON blob       |
+| POST      | `/api/diff`                        | Compute diff               |
+| GET       | `/api/sessions/{id}`               | Get session state          |
+| POST      | `/api/sessions/{id}/versions`      | Create version snapshot    |
+| POST      | `/api/sessions/{id}/diffs/`        | Apply / reject diffs       |
+| GET       | `/api/sessions/{id}/export`        | Download JSON file         |
 
 ## 11. Excluded from MVP (Backend)
 
