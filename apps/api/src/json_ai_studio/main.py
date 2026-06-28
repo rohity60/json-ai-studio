@@ -311,11 +311,12 @@ async def endpoint_create_version_snapshot(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    versions_list = session.get("versions", [])
+    parent = versions_list[-1] if versions_list else None
+    parent_id = parent.id if parent else None
     version = VersionSnapshot(
-        id=f"v{len(session.get('versions', [])) + 1}",
-        parent_id=(
-            session.get("versions", [])[-1]["id"] if session.get("versions") else None
-        ),
+        id=f"v{len(versions_list) + 1}",
+        parent_id=parent_id,
         json_data=req.json_data,
         label=req.label,
         created_at=datetime.now(timezone.utc),
