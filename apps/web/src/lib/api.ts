@@ -10,7 +10,7 @@ export async function createSession(name: string, apiKey: string) {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
         body: JSON.stringify({name}),
-      });
+    });
     if (!res.ok) throw new Error(`Failed to create session: ${await res.text()}`);
     console.log('[api] createSession OK, status:', res.status);
     return await res.json();
@@ -20,18 +20,20 @@ export async function getSession(sessionId: string, apiKey: string) {
     console.log('[api] getSession ENTRY, sessionId:', sessionId.slice(0, 8));
     const res = await fetch(`${BASE}/sessions/${sessionId}`, {
         headers: {'X-API-Key': apiKey},
-      });
+    });
     if (!res.ok) throw new Error('Failed to load session');
     console.log('[api] getSession OK, status:', res.status);
     return await res.json();
 }
 
-export async function createVersion(sessionId: string, label: string, apiKey: string) {
+export async function createVersion(
+    sessionId: string, label: string, workingJson: Record<string, any>, apiKey: string,
+) {
     const res = await fetch(`${BASE}/sessions/${sessionId}/versions`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
-        body: JSON.stringify({label, json_data: label}),
-      });
+        body: JSON.stringify({label, json_data: workingJson}),
+    });
     if (!res.ok) throw new Error('Failed to create version');
     return await res.json();
 }
@@ -56,7 +58,7 @@ export async function validateJson(jsonData: object, apiKey: string) {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
         body: JSON.stringify({json_data: jsonData}),
-      });
+    });
     if (!res.ok) throw new Error('Validation failed');
     return await res.json();
 }
@@ -66,7 +68,7 @@ export async function computeDiff(oldJson: object, newJson: object, apiKey: stri
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
         body: JSON.stringify({old_json: oldJson, new_json: newJson}),
-      });
+    });
     if (!res.ok) throw new Error('Diff computation failed');
     return await res.json();
 }
@@ -76,7 +78,7 @@ export async function acceptDiff(sessionId: string, diffId: string, apiKey: stri
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/${diffId}/accept`, {
         method: 'POST',
         headers: {'X-API-Key': apiKey},
-      });
+    });
     if (!res.ok) throw new Error('Failed to accept diff');
     console.log('[api] acceptDiff OK, status:', res.status);
     return await res.json();
@@ -87,7 +89,7 @@ export async function rejectDiff(sessionId: string, diffId: string, apiKey: stri
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/${diffId}/reject`, {
         method: 'POST',
         headers: {'X-API-Key': apiKey},
-      });
+    });
     if (!res.ok) throw new Error('Failed to reject diff');
     console.log('[api] rejectDiff OK, status:', res.status);
     return await res.json();
@@ -100,6 +102,14 @@ export async function exportSession(sessionId: string, format = 'pretty', apiKey
     return await res.blob();
 }
 
+export async function getVersions(sessionId: string, apiKey: string) {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/versions`, {
+        headers: {'X-API-Key': apiKey},
+    });
+    if (!res.ok) throw new Error('Failed to fetch versions');
+    return await res.json();
+}
+
 export async function* streamChat(sessionId: string, message: string, workingJson: object | null, apiKey: string) {
     console.log('[api] streamChat ENTRY: sessionId=', sessionId.slice(0, 8), 'msgLen=', message.length, 'wjKeys=', workingJson ? Object.keys(workingJson).length : 'null');
 
@@ -108,7 +118,7 @@ export async function* streamChat(sessionId: string, message: string, workingJso
     formData.append('message', message);
     if (workingJson) {
         formData.append('working_json_str', JSON.stringify(workingJson));
-      }
+    }
 
     console.log('[api] streamChat POSTING to /api/chat...');
     const fetchStart = performance.now();
@@ -137,11 +147,11 @@ export async function* streamChat(sessionId: string, message: string, workingJso
             if (done) break;
 
             buffer += decoder.decode(value, {stream: true});
-              // Process the entire accumulated buffer for complete SSE chunks
+               // Process the entire accumulated buffer for complete SSE chunks
             let currentBuffer = buffer;
             buffer = ''; // Clear buffer for next read cycle
 
-              // Splits by \n\n or handles last line if it's not followed by a blank line
+               // Splits by \n\n or handles last line if it's not followed by a blank line
             const potentialChunks = currentBuffer.split(/\r?\n\r?\n/);
 
             for (const chunk of potentialChunks) {
@@ -151,7 +161,7 @@ export async function* streamChat(sessionId: string, message: string, workingJso
                 let tempEventType: string | null = null;
                 let dataLines: string[] = [];
 
-                  // Process line-by-line within this complete SSE message block
+                   // Process line-by-line within this complete SSE message block
                 for (const line of lines) {
                     const trimmedLine = line.trim();
                     if (!trimmedLine) continue;
@@ -160,12 +170,12 @@ export async function* streamChat(sessionId: string, message: string, workingJso
                         tempEventType = trimmedLine.substring(7).trim();
                         dataLines = []; // Reset data payload on new event start
                         continue;
-                      } else if (trimmedLine.startsWith('data')) {
+                       } else if (trimmedLine.startsWith('data')) {
                         let dataPayload = trimmedLine.substring(4).trim();
-                          // Handle continuation lines (if payload starts with 'data:' but follows another 'data:')
+                           // Handle continuation lines (if payload starts with 'data:' but follows another 'data:')
                         dataLines.push(dataPayload);
-                      }
-                  }
+                       }
+                   }
 
                 if (!tempEventType) continue; // Must have an event type to yield anything
 
@@ -173,37 +183,37 @@ export async function* streamChat(sessionId: string, message: string, workingJso
                 let eventType = tempEventType;
                 let rawData = combinedData.trim();
 
-                  // Attempt JSON parse for final payload
+                   // Attempt JSON parse for final payload
                 try {
                     const dataObject = JSON.parse(rawData);
                     console.log('[api] streamChat yield chunk (parsed): type=' + eventType + ' keys=' + Object.keys(dataObject).join(','));
                     yield {type: eventType, data: dataObject};
 
-                  } catch (e) {
-                      // Fallback: Treat as raw text payload
+                   } catch (e) {
+                       // Fallback: Treat as raw text payload
                     console.log('[api] streamChat yield chunk (raw): type=' + eventType);
                     yield {type: eventType, data: {text: rawData}};
-                  }
+                   }
 
-              }
-          } // End while(true) loop
+               }
+           } // End while(true) loop
 
-          // Final error handling remains outside the streaming logic
-       } catch (err: any) {
+           // Final error handling remains outside the streaming logic
+        } catch (err: any) {
             clearTimeout(timeoutId);
             if (err.name === 'AbortError') {
                 throw new Error('LLM request timed out. Server may be slow or unavailable.');
-             }
+              }
             console.error('[api] streamChat error in fetch/reader:', err?.message || String(err));
             throw err;
-         }
+          }
 }
 
 export async function acceptDiffBatch(sessionId: string, apiKey: string) {
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/accept-all`, {
         method: 'POST',
         headers: {'X-API-Key': apiKey},
-     });
+    });
     if (!res.ok) throw new Error('Failed to accept all diffs');
     return await res.json();
 }
@@ -212,7 +222,7 @@ export async function rejectDiffBatch(sessionId: string, apiKey: string) {
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/reject-all`, {
         method: 'POST',
         headers: {'X-API-Key': apiKey},
-     });
+    });
     if (!res.ok) throw new Error('Failed to reject all diffs');
     return await res.json();
 }

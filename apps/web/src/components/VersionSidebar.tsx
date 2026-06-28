@@ -1,62 +1,75 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, History, Download } from 'lucide-react';
+import { Plus, History, Download, RefreshCw } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
 
 export default function VersionSidebar() {
-  const { state, createVersion, selectVersion, exportJson } = useSession();
+  const { state, createVersion, selectVersion, exportJson, refreshSession } = useSession();
   const [creating, setCreating] = useState(false);
   const [label, setLabel] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshSession();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (!state.sessionId && state.versions.length === 0) {
     return (
-        <div className='h-full flex items-center justify-center text-sm text-muted-foreground'>
+         <div className='h-full flex items-center justify-center text-sm text-muted-foreground'>
           No versions yet
-        </div>
-      );
-    }
+         </div>
+       );
+     }
 
   return (
-      <div className='flex flex-col h-full'>
-        <div className='border-b p-3 flex items-center gap-2'>
-          <History className='w-5 h-5 text-purple-600' />
-          <h3 className='font-semibold text-sm'>Versions</h3>
-        </div>
-        <div className='flex-1 overflow-y-auto p-2 space-y-1'>
-          {state.versions.length === 0 && (
-            <p className='text-xs text-muted-foreground text-center py-4'>No versions saved yet</p>
-          )}
-          {state.versions.map((v) => (
-            <div key={v.id} onClick={() => selectVersion(v)} className={`p-2 rounded-lg cursor-pointer transition-colors ${state.activeVersionId === v.id ? 'bg-purple-50 border-purple-300' : 'hover:bg-gray-50'} border`}>
-              <div className='flex items-center gap-2'>
-                <span className={`w-2 h-2 rounded-full ${state.activeVersionId === v.id ? 'bg-purple-600' : 'bg-gray-300'}`} />
-                <span className='text-sm font-medium'>{v.label || 'Unnamed'}</span>
-              </div>
-              <p className='text-xs text-muted-foreground mt-1'>{(v.json_data as Record<string, any>) ? `${Object.keys(v.json_data).length} keys` : 'Empty'}</p>
-            </div>
-          ))}
-        </div>
-        <div className='border-t p-3 space-y-2'>
-          {creating ? (
-            <div className='space-y-2'>
-              <input placeholder='Version label...' value={label} onChange={(e) => setLabel(e.target.value)} className='w-full px-3 py-2 text-sm rounded-lg border' />
-              <div className='flex gap-1'>
-                <button onClick={() => { if (label.trim()) createVersion(label); setLabel(''); setCreating(false); }} className='flex-1 px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg'>Save</button>
-                <button onClick={() => { setLabel(''); setCreating(false); }} className='px-3 py-1.5 border text-sm rounded-lg'>Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <button onClick={() => setCreating(true)} className='w-full flex items-center justify-center gap-2 px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700'>
-              <Plus className='w-4 h-4' />
-              <span>New Version</span>
-            </button>
-          )}
-          <button onClick={() => exportJson()} className='w-full flex items-center justify-center gap-2 px-3 py-1.5 border text-sm rounded-lg hover:bg-gray-50'>
-            <Download className='w-4 h-4' />
-            <span>Export JSON</span>
-          </button>
-        </div>
-      </div>
-    );
+       <div className='flex flex-col h-full'>
+         <div className='border-b p-3 flex items-center gap-2'>
+           <History className='w-5 h-5 text-purple-600' />
+           <h3 className='font-semibold text-sm'>Versions</h3>
+           <button onClick={handleRefresh} className='ml-auto p-1 hover:bg-gray-200 rounded transition-colors' title='Refresh versions' disabled={refreshing}>
+             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+           </button>
+         </div>
+         <div className='flex-1 overflow-y-auto p-2 space-y-1'>
+           {state.versions.length === 0 && (
+             <p className='text-xs text-muted-foreground text-center py-4'>No versions saved yet</p>
+           )}
+           {state.versions.map((v) => (
+             <div key={v.id} onClick={() => selectVersion(v)} className={`p-2 rounded-lg cursor-pointer transition-colors ${state.activeVersionId === v.id ? 'bg-purple-50 border-purple-300' : 'hover:bg-gray-50'} border`}>
+               <div className='flex items-center gap-2'>
+                 <span className={`w-2 h-2 rounded-full ${state.activeVersionId === v.id ? 'bg-purple-600' : 'bg-gray-300'}`} />
+                 <span className='text-sm font-medium'>{v.label || 'Unnamed'}</span>
+               </div>
+               <p className='text-xs text-muted-foreground mt-1'>{(v.json_data as Record<string, any>) ? `${Object.keys(v.json_data).length} keys` : 'Empty'}</p>
+             </div>
+           ))}
+         </div>
+         <div className='border-t p-3 space-y-2'>
+           {creating ? (
+             <div className='space-y-2'>
+               <input placeholder='Version label...' value={label} onChange={(e) => setLabel(e.target.value)} className='w-full px-3 py-2 text-sm rounded-lg border' />
+               <div className='flex gap-1'>
+                 <button onClick={() => { if (label.trim()) createVersion(label); setLabel(''); setCreating(false); }} className='flex-1 px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg'>Save</button>
+                 <button onClick={() => { setLabel(''); setCreating(false); }} className='px-3 py-1.5 border text-sm rounded-lg'>Cancel</button>
+               </div>
+             </div>
+           ) : (
+             <button onClick={() => setCreating(true)} className='w-full flex items-center justify-center gap-2 px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700'>
+               <Plus className='w-4 h-4' />
+               <span>New Version</span>
+             </button>
+           )}
+           <button onClick={() => exportJson()} className='w-full flex items-center justify-center gap-2 px-3 py-1.5 border text-sm rounded-lg hover:bg-gray-50'>
+             <Download className='w-4 h-4' />
+             <span>Export JSON</span>
+           </button>
+         </div>
+       </div>
+     );
 }

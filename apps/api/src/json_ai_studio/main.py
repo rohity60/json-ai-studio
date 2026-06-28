@@ -329,6 +329,25 @@ async def endpoint_create_version_snapshot(
     return version.model_dump()
 
 
+@app.get("/api/sessions/{session_id}/versions")
+async def endpoint_list_versions(
+    session_id: str,
+    _auth=Depends(require_api_key),
+):
+    """List all version snapshots for a session (V-10)."""
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    versions = session.get("versions", [])
+    return {
+        "versions": [
+            v.model_dump() if hasattr(v, "model_dump") else v
+            for v in versions
+        ],
+        "count": len(versions),
+    }
+
+
 @app.post("/api/json/upload")
 async def endpoint_upload_json(
     request: Request,

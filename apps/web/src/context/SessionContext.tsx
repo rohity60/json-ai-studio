@@ -28,6 +28,7 @@ type SessionContextValue = {
   removeDiff: (diffId: string) => Promise<void>;
   acceptAllDiffs: () => Promise<void>;
   rejectAllDiffs: () => Promise<void>;
+  refreshSession: () => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -289,11 +290,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const createVersion = useCallback(async ( label: string) => {
     if (!state.sessionId) return;
     try {
-      const data = await api.createVersion(state.sessionId,label, apiKey);
-      setState(prev => ({ ...prev, workingJson: data.working_json }));
+      const data = await api.createVersion(state.sessionId, label, state.workingJson, apiKey);
+      setState(prev => ({
+        ...prev,
+        workingJson: data.json_data || data.working_json || prev.workingJson,
+        versions: [...prev.versions, { id: data.id, label: data.label, json_data: data.json_data }],
+      }));
      } catch (err: any) { toast.error(String(err)); }
-   }, [state.sessionId, apiKey]);
-
+  }, [state.sessionId, state.workingJson, apiKey]);
   const removeDiff = useCallback(async (diffId: string) => {
     if (!state.sessionId) return;
     try {
@@ -343,6 +347,21 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
    }, [state.sessionId, apiKey]);
 
 
+  const refreshSession = useCallback(async () => {
+    if (!state.sessionId || !apiKey) return;
+    try {
+      const data = await api.getSession(state.sessionId, apiKey);
+      setState(prev => ({
+        ...prev,
+        workingJson: (data.working_json as Record<string, any>) || {},
+        baselineJson: (data.baseline_json as Record<string, any>) || {},
+        versions: (data.versions || []).map((v: any) => ({
+          id: v.id, label: v.label, json_data: v.json_data
+        })),
+      }));
+    } catch (err: any) { toast.error(String(err)); }
+  }, [state.sessionId, apiKey]);
+
   const selectVersion = useCallback((version: any) => {
       setState((prev) => ({ ...prev, workingJson: version.json_data || {}, activeVersionId: version.id }));
            }, []);
@@ -360,7 +379,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   if (state.loading) return null;
 
   return (
-            <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs }}>
+            <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession }}>
               {children}
             </SessionContext.Provider>
            );
