@@ -80,39 +80,39 @@ Technical decisions are documented in `docs/adr/`.
 
 Frontend reads `baseline_json` and `working_json` from backend responses. Never computes "before" from local state. Every JSON-affecting response returns both values + remaining diff list.
 
-### F1 — Upload Response: Populate Diff Viewer Before/After
+### F1 — Upload Response: Populate Diff Viewer Before/After ✅
 - `uploadJson()` reads `before` and `after` from response
 - Set `workingJson` = `after`
 - DiffViewer auto-populates: before panel = `before`, after panel = `after`
 - Both panels show identical JSON initially
 
-### F2 — Chat Response: Render Baseline vs Working
-- `sendMessage()` reads `baseline_json` → store as `prevJson` (replaces local useState)
+### F2 — Chat Response: Render Baseline vs Working ✅
+- `sendMessage()` reads `baseline_json` → store as `baselineJson` (replaces local useState)
 - Reads `working_json` → store as `workingJson`
 - Reads `diffs` → append to conversation history
 - DiffViewer renders: before = `baseline_json`, after = `working_json`
 
-### F3 — Accept All: Merge Both Panels
+### F3 — Accept All: Merge Both Panels ✅
 - `workingJson` = `baseline_json` = `working_json` (all identical from response)
 - Clear all diffs from last conversation turn
 - DiffViewer: both panels show identical JSON, no change list
 
-### F4 — Reject All: Restore Baseline View
+### F4 — Reject All: Restore Baseline View ✅
 - `workingJson` = `baseline_json` (both identical from response)
 - Clear last turn's diffs
 - DiffViewer: both panels show baseline, no changes
 
-### F5 — Accept Single Diff: Update Working + Diff List
+### F5 — Accept Single Diff: Update Working + Diff List ✅
 - `workingJson` = new `working_json` from response
 - Remove accepted diff from last turn's diff list
 - DiffViewer: before = baseline, after = new_working, change list shrinks
 
-### F6 — Reject Single Diff: Reverse Working + Diff List
+### F6 — Reject Single Diff: Reverse Working + Diff List ✅
 - `workingJson` = new `working_json` from response
 - Remove rejected diff from last turn's diff list
 - DiffViewer: before = baseline, after = new_working, change list shrinks
 
-### Updated State Management
+### Updated State Management ✅
 - Remove local `prevJson` useState from `page.tsx` — derive "before" from `baseline_json` in responses
 - `SessionContext` reads `baseline_json` from every upload/chat/accept/reject response
 - DiffViewer always receives `before` and `after` from backend — never computes from history

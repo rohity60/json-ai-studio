@@ -11,8 +11,7 @@ import { FileJson2, MessageSquare, Code2, LayoutList } from 'lucide-react';
 
 export default function Home() {
   const { state, createSession, uploadJson } = useSession();
-   // Track previous json for diff viewer — snapshot before each upload
-  const [prevJson, setPrevJson] = useState<Record<string, any>>({});
+ 
   const [activeTab, setActiveTab] = useState<'chat' | 'upload'>('chat');
   const [previewTab, setPreviewTab] = useState<'preview' | 'diff'>('preview');
   const [showSidebar, setShowSidebar] = useState(false);
@@ -28,7 +27,6 @@ export default function Home() {
      // Do NOT call createSession here — the upload endpoint already creates or reuses a session.
      // Calling createSession('My Config') spawns a fresh empty session that overwrites
      // the working_json, causing the UI to blank out immediately after upload succeeds.
-    setPrevJson(json);
     setActiveTab('chat');
    };
 
@@ -106,7 +104,7 @@ export default function Home() {
               )}
               {previewTab === 'diff' && (
               json
-                  ? <DiffViewer before={prevJson} after={json} />
+                  ? <DiffViewer before={state.baselineJson} after={json} />
                   : <div className="flex items-center justify-center h-full text-muted-foreground">No diff data available</div>
               )}
             </div>

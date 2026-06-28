@@ -134,7 +134,7 @@ def _apply_diffs(obj: dict[str, Any], diffs: list[dict[str, Any]]) -> dict[str, 
         target_key = path_parts[-1] if path_parts else None
         if not target_key:
             continue
-         # Navigate to parent, creating intermediate dicts as needed
+        # Navigate to parent, creating intermediate dicts as needed
         current = result
         for part in path_parts[:-1]:
             if part not in current or not isinstance(current[part], dict):
@@ -206,7 +206,7 @@ async def _stream_llm(
             # Emit individual diff events for frontend rendering (with UUIDs)
             diff_entries_with_ids = []
             for diff in diffs_to_apply:
-                entry = {**diff, "id": str(uuid4())}       # inject id
+                entry = {**diff, "id": str(uuid4())}  # inject id
                 diff_entries_with_ids.append(entry)
                 yield "event: diff\ndata" + _json.dumps({"entry": entry}) + "\n\n"
             yield "event: complete\ndata" + _json.dumps(
@@ -340,7 +340,7 @@ async def endpoint_upload_json(
     sid = None
     if "multipart/form-data" in content_type:
         form = await request.form()
-        sid = form.get("session_id", None)   # Reuse from frontend if present
+        sid = form.get("session_id", None)  # Reuse from frontend if present
         raw = form.get("json_body", "{}")
         try:
             data = _json.loads(raw)
@@ -373,17 +373,20 @@ async def endpoint_upload_json(
         data.pop("session_id", None)
         data.pop("name", None)
     session["working_json"] = data if isinstance(data, dict) else {}
+    session["baseline_json"] = data if isinstance(data, dict) else {}
     session["updated_at"] = datetime.now(timezone.utc).isoformat()
     save_session(session)
 
     return {
-        "session_id": sid,
-        "parsed_json": session["working_json"],
-        "schema_summary": {
-            "top_level_keys": list((data if isinstance(data, dict) else {}).keys()),
-            "nested_depth": 0,
-        },
-    }
+          "session_id": sid,
+          "before": session["baseline_json"],
+          "after": session["working_json"],
+          "diffs": [],
+          "schema_summary": {
+              "top_level_keys": list((data if isinstance(data, dict) else {}).keys()),
+              "nested_depth": 0,
+          },
+      }
 
 
 @app.post("/api/chat")
@@ -413,7 +416,7 @@ async def endpoint_chat(
             all_diffs: list[dict[str, Any]] = []
             async for event_text in _stream_llm(working_json, message):
                 yield event_text
-                 # Capture working_json from the "complete" event payload
+                # Capture working_json from the "complete" event payload
                 if event_text.startswith("event: complete"):
                     try:
                         parts = event_text.split("\n", 1)
@@ -423,7 +426,7 @@ async def endpoint_chat(
                             merged_json = complete_data.get("working_json")
                     except (_json.JSONDecodeError, ValueError):
                         pass
-                 # Collect LLM-injected diff entries for conversation_history
+                # Collect LLM-injected diff entries for conversation_history
                 elif event_text.startswith("event: diff"):
                     try:
                         parts = event_text.split("\n", 1)
@@ -440,30 +443,32 @@ async def endpoint_chat(
             if merged_json is not None:
                 session["working_json"] = merged_json
                 if all_diffs:
-                    session.setdefault("conversation_history", []).append({
-                         "role": "assistant",
-                         "content": "",
-                         "diffs": [
-                             {
-                                 "path": d.get("path", ""),
-                                 "operation": d.get("operation", ""),
-                                 "old_value": d.get("old_value"),
-                                 "new_value": d.get("new_value"),
-                                 "id": str(d.get("id", "")),
-                             }
-                            for d in all_diffs
-                         ],
-                     })
+                    session.setdefault("conversation_history", []).append(
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "diffs": [
+                                {
+                                    "path": d.get("path", ""),
+                                    "operation": d.get("operation", ""),
+                                    "old_value": d.get("old_value"),
+                                    "new_value": d.get("new_value"),
+                                    "id": str(d.get("id", "")),
+                                }
+                                for d in all_diffs
+                            ],
+                        }
+                    )
                 session["updated_at"] = datetime.now(timezone.utc).isoformat()
                 save_session(session)
 
         except Exception as e:
             yield "event: complete\ndata" + _json.dumps(
-                 {
-                     "working_json": working_json,
-                     "explanation": f"Error: {e}",
-                 }
-             ) + "\n\n"
+                {
+                    "working_json": working_json,
+                    "explanation": f"Error: {e}",
+                }
+            ) + "\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -474,17 +479,24 @@ async def endpoint_chat(
 
 @app.post("/api/sessions/{session_id}/diffs/accept-all")
 async def endpoint_accept_all_diffs(
-        session_id: str,
-         _auth=Depends(require_api_key),
+    session_id: str,
+    _auth=Depends(require_api_key),
 ):
-    """Accept all diffs in latest turn. Persists and returns the merged working_json."""
     session = get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    working_json = session.get("working_json", {})
-    save_session(session)
-    return {"working_json": working_json}
+    import copy
 
+    session["baseline_json"] = copy.deepcopy(session["working_json"])
+    session["working_json"] = copy.deepcopy(session["baseline_json"])
+    session["applied_diffs"] = []
+    session["updated_at"] = datetime.now(timezone.utc).isoformat()
+    save_session(session)
+    return {
+        "working_json": session["working_json"],
+        "baseline_json": session["baseline_json"],
+        "diffs": [],
+    }
 
 
 @app.post("/api/sessions/{session_id}/diffs/reject-all")
@@ -492,46 +504,20 @@ async def endpoint_reject_all_diffs(
     session_id: str,
     _auth=Depends(require_api_key),
 ):
-    """Reject all diffs in latest turn. Reverses each diff to restore pre-diff state."""
     session = get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-
-    working_json = session.get("working_json", {})
-    # We need to reverse the last set of diffs.
-    # Strategy: re-read the conversation history, find the last assistant turn with diffs,
-    # and reverse each one.
     import copy
-    reverted = copy.deepcopy(working_json)
 
-    # Get last assistant turn from conversation history
-    turns = session.get("conversation_history", [])
-    for turn in reversed(turns):
-        if turn.get("role") == "assistant" and turn.get("diffs"):
-            for diff in reversed(turn["diffs"]):
-                op = diff.get("operation")
-                path_parts = [p for p in diff.get("path", "/").split("/") if p]
-                target_key = path_parts[-1] if path_parts else None
-                if not target_key:
-                    continue
-                current = reverted
-                for part in path_parts[:-1]:
-                    if part not in current or not isinstance(current[part], dict):
-                        break
-                    current = current[part]
-                else:
-                    if op == "add":
-                        current.pop(target_key, None)
-                    elif op == "modify" and "old_value" in diff:
-                        current[target_key] = diff["old_value"]
-                    elif op == "delete":
-                        pass  # nothing to restore (already deleted)
-            break
-
-    session["working_json"] = reverted
+    session["working_json"] = copy.deepcopy(session.get("baseline_json", {}))
+    session["applied_diffs"] = []
     session["updated_at"] = datetime.now(timezone.utc).isoformat()
     save_session(session)
-    return {"working_json": reverted}
+    return {
+        "working_json": session["working_json"],
+        "baseline_json": session.get("baseline_json", {}),
+        "diffs": [],
+    }
 
 
 @app.post("/api/sessions/{session_id}/diffs/{diff_id}/accept")
@@ -564,6 +550,7 @@ async def endpoint_accept_single_diff(
         )
 
     import copy
+
     current_json = copy.deepcopy(session.get("working_json", {}))
     # Re-apply this diff on top of current state
     path_parts = [p for p in target.get("path", "/").split("/") if p]
@@ -583,7 +570,15 @@ async def endpoint_accept_single_diff(
     session["working_json"] = current_json
     session["updated_at"] = datetime.now(timezone.utc).isoformat()
     save_session(session)
-    return {"success": True, "working_json": current_json}
+    session["applied_diffs"] = session.get("applied_diffs", []) + [target.get("id", "")]
+    session["updated_at"] = datetime.now(timezone.utc).isoformat()
+    save_session(session)
+    return {
+        "success": True,
+        "working_json": current_json,
+        "baseline_json": session.get("baseline_json", {}),
+        "applied_diffs": session.get("applied_diffs", []),
+    }
 
 
 @app.post("/api/sessions/{session_id}/diffs/{diff_id}/reject")
@@ -615,6 +610,7 @@ async def endpoint_reject_single_diff(
         )
 
     import copy
+
     current_json = copy.deepcopy(session.get("working_json", {}))
     path_parts = [p for p in target.get("path", "/").split("/") if p]
     target_key = path_parts[-1] if path_parts else None
@@ -636,4 +632,11 @@ async def endpoint_reject_single_diff(
     session["working_json"] = current_json
     session["updated_at"] = datetime.now(timezone.utc).isoformat()
     save_session(session)
-    return {"success": True, "working_json": current_json}
+    session["updated_at"] = datetime.now(timezone.utc).isoformat()
+    save_session(session)
+    return {
+        "success": True,
+        "working_json": current_json,
+        "baseline_json": session.get("baseline_json", {}),
+        "applied_diffs": session.get("applied_diffs", []),
+    }

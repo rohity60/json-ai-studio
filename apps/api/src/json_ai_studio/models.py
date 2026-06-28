@@ -23,8 +23,10 @@ class Session(BaseModel):
     id: str
     name: str | None = None
     working_json: dict[str, Any]
+    baseline_json: dict[str, Any] = {}
     versions: list[VersionSnapshot] = []
     conversation_history: list[ChatTurn] = []
+    applied_diffs: list[str] = []
     created_at: datetime
     updated_at: datetime
 
@@ -57,7 +59,7 @@ class DiffEntry(BaseModel):
     operation: Literal["add", "modify", "delete"]
     old_value: Any | None = None
     new_value: Any | None = None
-    id: str = ""             # UNIQUE ID — backend generates, frontend uses for accept/reject
+    id: str = ""  # UNIQUE ID — backend generates, frontend uses for accept/reject
 
 
 class ValidationErrorItem(BaseModel):
@@ -123,9 +125,12 @@ class ValidateResponse(BaseModel):
 class DiffAcceptResponse(BaseModel):
     success: bool
     working_json: dict[str, Any]
+    baseline_json: dict[str, Any] = {}
+    diffs: list[DiffEntry] = []
     validation_passed: bool = True
 
 
 class DiffRejectResponse(BaseModel):
     success: bool
     working_json: dict[str, Any]
+    baseline_json: dict[str, Any] = {}

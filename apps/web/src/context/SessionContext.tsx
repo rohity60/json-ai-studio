@@ -8,6 +8,7 @@ import * as api from '../lib/api';
 type SessionState = {
   sessionId: string | null;
   workingJson: Record<string, any>;
+  baselineJson: Record<string, any>;
   versions: Array<{ id: string; label: string; json_data: any }>;
   conversationHistory: Array<{ role: string; content: string; diffs?: any[]; explanation?: string }>;
   activeVersionId: string | null;
@@ -47,7 +48,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const [state, setState] = useState<SessionState>({
-    sessionId: null, workingJson: {}, versions: [],
+    sessionId: null, workingJson: {}, baselineJson: {}, versions: [],
     conversationHistory: [], activeVersionId: null,
     loading: true, error: null,
   });
@@ -64,6 +65,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           setState({
             sessionId: parsed.sessionId,
             workingJson: (data.working_json as Record<string, any>) || {},
+            baselineJson: (data.baseline_json as Record<string, any>) || {},
             versions: (data.versions || []).map((v: any) => ({
               id: v.id, label: v.label, json_data: v.json_data
             })),
@@ -131,7 +133,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
        // Store parsed_json as workingJson so the UI can render it immediately
       setState((prev) => ({...prev,
         sessionId: data.session_id || prev.sessionId,
-        workingJson: data.parsed_json || prev.workingJson,
+        workingJson: data.after || data.parsed_json || prev.workingJson,
+        baselineJson: data.before || data.parsed_json || {},
         error: null,
         loading: false,
       }));
@@ -168,6 +171,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     try {
           // Track streaming variables locally
       let activeJson = currentWorkingJson;
+      let baselineJson = state.baselineJson || {};
       const diffs: any[] = [];
       let textAccumulator = '';
 
@@ -195,6 +199,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             } else if (chunk.type === 'complete' && chunk.data.working_json) {
                // Capture the brand new JSON emitted from your API response
           activeJson = chunk.data.working_json;
+          if (chunk.data.baseline_json !== undefined) {
+            baselineJson = chunk.data.baseline_json;
+          }
               // Also extract explanation text from the complete event payload
             if (chunk.data.explanation) {
               textAccumulator += String(chunk.data.explanation);
@@ -229,7 +236,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                          ...prev,
                         conversationHistory: historyCopy,
                           // Use activeJson if updated, otherwise fallback to the absolutely latest prev state
-                        workingJson: activeJson || prev.workingJson
+                        workingJson: activeJson || prev.workingJson,
+                        baselineJson: baselineJson || prev.baselineJson
                      };
                  });
              });
@@ -273,7 +281,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           last.diffs = (last.diffs || []).filter((d: any) => d.id !== diffId);
           history[history.length - 1] = last;
         }
-        return { ...prev, workingJson: data.working_json, conversationHistory: history };
+        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: history };
       });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
@@ -297,7 +305,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           last.diffs = (last.diffs || []).filter((d: any) => d.id !== diffId);
           history[history.length - 1] = last;
         }
-        return { ...prev, workingJson: data.working_json, conversationHistory: history };
+        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: history };
       });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
@@ -313,7 +321,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           last.diffs = [];
           history[history.length - 1] = last;
         }
-        return { ...prev, workingJson: data.working_json, conversationHistory: history };
+        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: history };
       });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
@@ -329,7 +337,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           last.diffs = [];
           history[history.length - 1] = last;
         }
-        return { ...prev, workingJson: data.working_json, conversationHistory: history };
+        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: history };
       });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);

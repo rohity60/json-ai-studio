@@ -19,8 +19,10 @@ def create_session(*, name: str | None = None) -> str:
         "id": sid,
         "name": name,
         "working_json": {},
+        "baseline_json": {},
         "versions": [],
         "conversation_history": [],
+        "applied_diffs": [],
         "created_at": "",  # Filled by caller with ISO timestamp
         "updated_at": "",  # Filled by caller with ISO timestamp
     }
