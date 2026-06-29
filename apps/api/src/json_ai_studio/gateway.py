@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
@@ -23,6 +24,7 @@ logger = logging.getLogger("json_ai_studio.gateway")
 # Pricing: model -> (prompt_per_1k, completion_per_1k) in USD
 MODEL_PRICING: dict[str, tuple[float, float]] = {
     "ollama/qwen3.6:35b-mlx": (0.0, 0.0),
+    "ollama/gemma4:12b": (0.001, 0.003),
     "gpt-4.1": (0.001, 0.004),
     "gpt-4.1-mini": (0.0001, 0.0004),
     "claude-sonnet-4-20250514": (0.003, 0.015),
@@ -38,13 +40,15 @@ AI_PROFILES: dict[str, str] = {
 }
 
 # In-memory state
-_user_credits: dict[str, dict] = {}  # api_key -> credit record
-_usage_history: dict[str, list] = {}  # session_id -> usage records
+_user_credits: dict[str, dict[str, Any]] = {}   # api_key -> credit record
+_usage_history: dict[str, list] = {}   # session_id -> usage records
+_per_minute_tokens: dict[str, deque] = {}   # api_key -> deque of (timestamp, token_count)
 
 
 class GatewayService:
     """Single gateway class. All LLM calls flow through invoke()."""
 
+    _per_minute_tokens = _per_minute_tokens
     MODEL_PRICING = MODEL_PRICING
     AI_PROFILES = AI_PROFILES
     _user_credits = _user_credits
@@ -54,20 +58,29 @@ class GatewayService:
     def _ensure_credits(cls, api_key: str) -> dict[str, Any]:
         """Create default credit record for unknown API key."""
         if api_key not in cls._user_credits:
-            cls._user_credits[api_key] = {
-                "plan": "free",
-                "monthly_limit": 100,
-                "credits_used": 0,
-                "billing_cycle_start": datetime.now(timezone.utc).isoformat(),
-            }
-        return cls._user_credits[api_key]
+            if api_key == "dev-default-key":
+                cls._user_credits[api_key] = {
+                     "plan": "free",
+                     "monthly_limit": 10000,
+                     "per_min_credits": 1000,
+                     "credits_used": 0,
+                     "billing_cycle_start": datetime.now(timezone.utc).isoformat(),
+                 }
+            else:
+                cls._user_credits[api_key] = {
+                     "plan": "free",
+                     "monthly_limit": 100,
+                     "credits_used": 0,
+                     "billing_cycle_start": datetime.now(timezone.utc).isoformat(),
+                 }
 
     @classmethod
     def _check_credits(cls, api_key: str) -> None:
         """Raise HTTPException(402) if credits exhausted."""
-        credits = cls._user_credits.get(api_key)
+        credits: dict[str, Any] | None = cls._user_credits.get(api_key)
         if credits is None:
             return
+          # Monthly check
         if (
             credits["monthly_limit"] != -1
             and credits["credits_used"] >= credits["monthly_limit"]
@@ -75,12 +88,33 @@ class GatewayService:
             raise HTTPException(
                 status_code=402,
                 detail={
-                    "error": "Insufficient credits",
-                    "hint": "Upgrade your plan. Current balance: 0 credits.",
-                    "required": 0,
-                    "current_balance": 0,
-                },
-            )
+                      "error": "Insufficient credits",
+                      "hint": "Upgrade your plan. Current balance: 0 credits.",
+                      "required": 0,
+                      "current_balance": 0,
+                  },
+              )
+          # Per-minute token-sum check (sliding window)
+        now = time.monotonic()
+        window_start = now - 60
+        tokens_q = cls._per_minute_tokens.get(api_key)
+        if tokens_q is None:
+            tokens_q = deque()
+            cls._per_minute_tokens[api_key] = tokens_q
+          # Prune old entries outside 60s window
+        while tokens_q and tokens_q[0][0] < window_start:
+            tokens_q.popleft()
+          # Sum tokens in window
+        total_tokens = sum(tc for _, tc in tokens_q)
+          # Log current window token usage
+        logger.error("per_minute_tokens key=%s tokens=%d limit", api_key, total_tokens)
+          # Cap: 10000 tokens per minute for default key
+        if api_key == "dev-default-key":
+            if total_tokens >= credits.get("per_min_credits", 0):
+                raise HTTPException(
+                    status_code=429,
+                    detail="Per-minute token limit exceeded",
+                )
 
     @classmethod
     def _calculate_cost(
@@ -98,7 +132,7 @@ class GatewayService:
         return round(cost_usd / 0.001, 3)
 
     @classmethod
-    def _deduct_credits(cls, api_key: str, credits: float) -> None:
+    def _deduct_credits(cls, api_key: str, credits: float, tokens: int = 0) -> None:
         """Subtract credits from API key's monthly balance."""
         record = cls._user_credits.get(api_key)
         if record is None:
@@ -113,6 +147,11 @@ class GatewayService:
         except (ValueError, TypeError):
             pass
         record["credits_used"] = record.get("credits_used", 0) + credits
+          # Track tokens for per-minute sliding window
+        if api_key == "dev-default-key" and tokens > 0:
+            cls._per_minute_tokens.setdefault(api_key, deque()).append(
+                (time.monotonic(), credits)
+            )
 
     @classmethod
     def _log_usage(cls, session_id: str, api_key: str, record: dict[str, Any]) -> None:
@@ -343,8 +382,9 @@ class GatewayService:
                 completion_tokens,
             )
 
-            # Deduct credits and log
-            GatewayService._deduct_credits(api_key, credits_used)
+              # Deduct credits and log
+            total_tokens = prompt_tokens + completion_tokens
+            GatewayService._deduct_credits(api_key, credits_used, total_tokens)
             GatewayService._log_usage(
                 session_id,
                 api_key,
