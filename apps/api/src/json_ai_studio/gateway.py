@@ -42,13 +42,13 @@ AI_PROFILES: dict[str, str] = {
 # In-memory state
 _user_credits: dict[str, dict[str, Any]] = {}   # api_key -> credit record
 _usage_history: dict[str, list] = {}   # session_id -> usage records
-_per_minute_tokens: dict[str, deque] = {}   # api_key -> deque of (timestamp, token_count)
+_per_minute_credits: dict[str, deque] = {}   # api_key -> deque of (timestamp, token_count)
 
 
 class GatewayService:
     """Single gateway class. All LLM calls flow through invoke()."""
 
-    _per_minute_tokens = _per_minute_tokens
+    _per_minute_credits = _per_minute_credits
     MODEL_PRICING = MODEL_PRICING
     AI_PROFILES = AI_PROFILES
     _user_credits = _user_credits
@@ -97,10 +97,10 @@ class GatewayService:
           # Per-minute token-sum check (sliding window)
         now = time.monotonic()
         window_start = now - 60
-        tokens_q = cls._per_minute_tokens.get(api_key)
+        tokens_q = cls._per_minute_credits.get(api_key)
         if tokens_q is None:
             tokens_q = deque()
-            cls._per_minute_tokens[api_key] = tokens_q
+            cls._per_minute_credits[api_key] = tokens_q
           # Prune old entries outside 60s window
         while tokens_q and tokens_q[0][0] < window_start:
             tokens_q.popleft()
@@ -149,7 +149,7 @@ class GatewayService:
         record["credits_used"] = record.get("credits_used", 0) + credits
           # Track tokens for per-minute sliding window
         if api_key == "dev-default-key" and tokens > 0:
-            cls._per_minute_tokens.setdefault(api_key, deque()).append(
+            cls._per_minute_credits.setdefault(api_key, deque()).append(
                 (time.monotonic(), credits)
             )
 
