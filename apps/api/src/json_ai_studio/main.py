@@ -45,6 +45,7 @@ from .store import (
     save_session,
 )
 from .utils import compute_diff as _compute_diff, validate_document
+from .logging_config import configure as _configure_logging
 
 app = FastAPI(title="JSON AI Studio API", version="0.1.0")
 
@@ -58,6 +59,7 @@ app.add_middleware(
 )
 
 logger = logging.getLogger("json_ai_studio.main")
+_configure_logging()
 
 # ---------------------------------------------------------------------------
 # LiteLLM integration (ADR-0002)
@@ -178,7 +180,7 @@ async def _stream_llm(
         gateway_events = []
         content_parts: list[str] = []
         async for event_text in GatewayService.invoke(
-                "chat-session", message, api_key, system_prompt
+            "chat-session", message, api_key, system_prompt
         ):
             gateway_events.append(event_text)
             yield event_text
@@ -193,7 +195,7 @@ async def _stream_llm(
                 except (_json.JSONDecodeError, ValueError):
                     pass
         combined = "".join(content_parts)
-        logger.error("invoke session=%s ",combined)
+        logger.error("invoke session=%s ", combined)
         # Parse diffs from combined text
         diffs_to_apply: list[dict[str, Any]] = []
         try:
@@ -206,7 +208,8 @@ async def _stream_llm(
                             diffs_to_apply.append(d)
                         elif "op" in d and "value" in d:
                             entry = {
-                                "path": "/" + str(d.get("key", "unknown")).replace(".", "/"),
+                                "path": "/"
+                                + str(d.get("key", "unknown")).replace(".", "/"),
                                 "operation": d["op"],
                                 "old_value": d.get("value"),
                                 "new_value": d["value"],
@@ -355,8 +358,7 @@ async def endpoint_list_versions(
     versions = session.get("versions", [])
     return {
         "versions": [
-            v.model_dump() if hasattr(v, "model_dump") else v
-            for v in versions
+            v.model_dump() if hasattr(v, "model_dump") else v for v in versions
         ],
         "count": len(versions),
     }
@@ -411,15 +413,15 @@ async def endpoint_upload_json(
     save_session(session)
 
     return {
-          "session_id": sid,
-          "before": session["baseline_json"],
-          "after": session["working_json"],
-          "diffs": [],
-          "schema_summary": {
-              "top_level_keys": list((data if isinstance(data, dict) else {}).keys()),
-              "nested_depth": 0,
-          },
-      }
+        "session_id": sid,
+        "before": session["baseline_json"],
+        "after": session["working_json"],
+        "diffs": [],
+        "schema_summary": {
+            "top_level_keys": list((data if isinstance(data, dict) else {}).keys()),
+            "nested_depth": 0,
+        },
+    }
 
 
 @app.post("/api/chat")

@@ -62,7 +62,7 @@ class GatewayService:
                 cls._user_credits[api_key] = {
                      "plan": "free",
                      "monthly_limit": 10000,
-                     "per_min_credits": 1000,
+                     "per_min_credits": 40,
                      "credits_used": 0,
                      "billing_cycle_start": datetime.now(timezone.utc).isoformat(),
                  }
