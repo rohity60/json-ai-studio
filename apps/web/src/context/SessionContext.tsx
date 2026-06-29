@@ -282,7 +282,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           last.diffs = (last.diffs || []).filter((d: any) => d.id !== diffId);
           history[history.length - 1] = last;
         }
-        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: history };
+        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: [...history] };
       });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
@@ -309,7 +309,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           last.diffs = (last.diffs || []).filter((d: any) => d.id !== diffId);
           history[history.length - 1] = last;
         }
-        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: history };
+        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: [...history] };
       });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
@@ -325,7 +325,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           last.diffs = [];
           history[history.length - 1] = last;
         }
-        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: history };
+        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: [...history] };
       });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
@@ -341,7 +341,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           last.diffs = [];
           history[history.length - 1] = last;
         }
-        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: history };
+        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: [...history] };
       });
      } catch (err: any) { toast.error(String(err)); }
    }, [state.sessionId, apiKey]);
