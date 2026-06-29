@@ -32,7 +32,7 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 
 # Profile -> model mapping
 AI_PROFILES: dict[str, str] = {
-    "fast": "ollama/qwen3.6:35b-mlx",
+    "fast": "ollama/gemma4:12b",
     "balanced": "ollama/qwen3.6:35b-mlx",
     "premium": "gpt-4.1",
 }
@@ -126,7 +126,7 @@ class GatewayService:
             return model
         if profile and profile in cls.AI_PROFILES:
             return cls.AI_PROFILES[profile]
-        return "ollama/qwen3.6:35b-mlx"
+        return "ollama/gemma4:12b"
 
     @classmethod
     def _make_usage_event(
