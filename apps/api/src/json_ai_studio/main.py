@@ -73,10 +73,11 @@ natural language message, return structured diff proposals as a JSON array of Di
 
 Working JSON schema: {top_keys}
 
-Rules:
-- Each DiffEntry has: path (JSON Pointer), operation ("add"|"modify"|"delete"), old_value, new_value
-- Only output the JSON array -- nothing else.
-- If the user's request cannot be applied, explain why in plain text.
+RULES:
+- Output ONLY the JSON array. Nothing else. No markdown. No code blocks. No backticks.
+- The ENTIRE response must be a valid JSON array starting with '[' and ending with ']'.
+- If you cannot produce diffs, output an empty array: [].
+- Each DiffEntry has: path (JSON Pointer), operation ("add"|"modify"|"delete"), old_value, new_value.
 
 Example 1 - Modify a value:
 User: "Increase timeout from 30 to 60 for api service."
@@ -173,7 +174,7 @@ async def _stream_llm(
 
         system_prompt = _build_system_prompt(working_json)
         response = await litellm.acompletion(
-            model="ollama/qwen3.6:35b-mlx",
+            model="ollama/gemma4:12b",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message},
@@ -194,6 +195,14 @@ async def _stream_llm(
         # Try to parse the LLM response as a list of diff entries
         diffs_to_apply: list[dict[str, Any]] = []
         try:
+            combined = combined.strip()
+            # Strip markdown code blocks if LLM wraps output in ```
+            if combined.startswith("```"):
+                end = combined.find("```", 3)
+                if end >= 0:
+                    combined = combined[3:end].strip()
+                else:
+                    combined = combined[3:].strip()
             parsed = _json.loads(combined)
             if isinstance(parsed, list):
                 for d in parsed:
