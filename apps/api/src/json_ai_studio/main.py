@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .auth import require_api_key
+from .diff_utils import DiffUtils
 from .models import (
     ChatRequest,
     ChatTurn,
@@ -76,7 +77,7 @@ Working JSON schema: {top_keys}
 RULES:
 - Output ONLY the JSON array. Nothing else. No markdown. No code blocks. No backticks.
 - The ENTIRE response must be a valid JSON array starting with '[' and ending with ']'.
-- If you cannot produce diffs, output an empty array: [].
+- If the user's request cannot be applied, explain why in plain text.
 - Each DiffEntry has: path (JSON Pointer), operation ("add"|"modify"|"delete"), old_value, new_value.
 
 Example 1 - Modify a value:
@@ -351,8 +352,7 @@ async def endpoint_list_versions(
     versions = session.get("versions", [])
     return {
         "versions": [
-            v.model_dump() if hasattr(v, "model_dump") else v
-            for v in versions
+            v.model_dump() if hasattr(v, "model_dump") else v for v in versions
         ],
         "count": len(versions),
     }
@@ -407,15 +407,15 @@ async def endpoint_upload_json(
     save_session(session)
 
     return {
-          "session_id": sid,
-          "before": session["baseline_json"],
-          "after": session["working_json"],
-          "diffs": [],
-          "schema_summary": {
-              "top_level_keys": list((data if isinstance(data, dict) else {}).keys()),
-              "nested_depth": 0,
-          },
-      }
+        "session_id": sid,
+        "before": session["baseline_json"],
+        "after": session["working_json"],
+        "diffs": [],
+        "schema_summary": {
+            "top_level_keys": list((data if isinstance(data, dict) else {}).keys()),
+            "nested_depth": 0,
+        },
+    }
 
 
 @app.post("/api/chat")
@@ -580,33 +580,21 @@ async def endpoint_accept_single_diff(
 
     import copy
 
-    current_json = copy.deepcopy(session.get("working_json", {}))
-    # Re-apply this diff on top of current state
-    path_parts = [p for p in target.get("path", "/").split("/") if p]
-    target_key = path_parts[-1] if path_parts else None
-    if target_key:
-        current = current_json
-        for part in path_parts[:-1]:
-            if part not in current or not isinstance(current[part], dict):
-                break
-            current = current[part]
-        else:
-            if target.get("operation") == "delete":
-                current.pop(target_key, None)
-            else:
-                current[target_key] = target.get("new_value")
+    working_json = copy.deepcopy(session.get("working_json", {}))
+    baseline_json = copy.deepcopy(session.get("baseline_json", {}))
+    DiffUtils.apply(target, working_json)
+    DiffUtils.apply(target, baseline_json)
 
-    session["working_json"] = current_json
-    session["updated_at"] = datetime.now(timezone.utc).isoformat()
-    save_session(session)
+    session["working_json"] = working_json
+    session["baseline_json"] = baseline_json
     session["applied_diffs"] = session.get("applied_diffs", []) + [target.get("id", "")]
     session["updated_at"] = datetime.now(timezone.utc).isoformat()
     save_session(session)
     return {
         "success": True,
-        "working_json": current_json,
-        "baseline_json": session.get("baseline_json", {}),
-        "applied_diffs": session.get("applied_diffs", []),
+        "working_json": working_json,
+        "baseline_json": baseline_json,
+        "applied_diffs": session["applied_diffs"],
     }
 
 
@@ -640,32 +628,22 @@ async def endpoint_reject_single_diff(
 
     import copy
 
-    current_json = copy.deepcopy(session.get("working_json", {}))
-    path_parts = [p for p in target.get("path", "/").split("/") if p]
-    target_key = path_parts[-1] if path_parts else None
-    if target_key:
-        current = current_json
-        for part in path_parts[:-1]:
-            if part not in current or not isinstance(current[part], dict):
-                break
-            current = current[part]
-        else:
-            op = target.get("operation")
-            if op == "add":
-                current.pop(target_key, None)
-            elif op == "modify" and "old_value" in target:
-                current[target_key] = target["old_value"]
-            elif op == "delete" and "old_value" in target:
-                current[target_key] = target["old_value"]
+    working_json = copy.deepcopy(session.get("working_json", {}))
+    baseline_json = copy.deepcopy(session.get("baseline_json", {}))
+    DiffUtils.revert(target, working_json)
+    DiffUtils.revert(target, baseline_json)
 
-    session["working_json"] = current_json
-    session["updated_at"] = datetime.now(timezone.utc).isoformat()
-    save_session(session)
+    session["working_json"] = working_json
+    session["baseline_json"] = baseline_json
+    session["rejected_diffs"] = session.get("rejected_diffs", []) + [
+        target.get("id", "")
+    ]
     session["updated_at"] = datetime.now(timezone.utc).isoformat()
     save_session(session)
     return {
         "success": True,
-        "working_json": current_json,
-        "baseline_json": session.get("baseline_json", {}),
+        "working_json": working_json,
+        "baseline_json": baseline_json,
         "applied_diffs": session.get("applied_diffs", []),
+        "rejected_diffs": session["rejected_diffs"],
     }

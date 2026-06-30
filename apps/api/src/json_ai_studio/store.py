@@ -23,6 +23,7 @@ def create_session(*, name: str | None = None) -> str:
         "versions": [],
         "conversation_history": [],
         "applied_diffs": [],
+        "rejected_diffs": [],
         "created_at": "",  # Filled by caller with ISO timestamp
         "updated_at": "",  # Filled by caller with ISO timestamp
     }

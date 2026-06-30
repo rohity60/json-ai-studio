@@ -27,6 +27,7 @@ class Session(BaseModel):
     versions: list[VersionSnapshot] = []
     conversation_history: list[ChatTurn] = []
     applied_diffs: list[str] = []
+    rejected_diffs: list[str] = []
     created_at: datetime
     updated_at: datetime
 
