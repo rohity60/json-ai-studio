@@ -9,19 +9,19 @@ Technical decisions are documented in `docs/adr/`.
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| L-01 | Root layout with site title "JSON AI Studio" and tagline | MVP |
-| L-02 | Responsive two-panel layout: left (chat/upload) + right (diff/preview) | MVP |
-| L-03 | Persistent session/version badge in header or sidebar | MVP |
+| L-01 | Root layout with site title "JSON AI Studio" and tagline | MVP ✅ |
+| L-02 | Responsive two-panel layout: left (chat/upload) + right (diff/preview) | MVP ✅ |
+| L-03 | Persistent session/version badge in header or sidebar | MVP ✅ |
 
 ## 2. JSON Upload & Parsing UI
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| U-01 | Drag-and-drop zone for `.json` file upload | MVP |
-| U-02 | Textarea input as alternative paste method for raw JSON | MVP |
-| U-03 | Client-side syntax validation feedback on paste/upload (show error line/column) | MVP |
-| U-04 | Render the uploaded JSON as an expandable **tree view** | MVP |
-| U-05 | "Load existing session" and "Import previous version" placeholders for future wiring | MVP |
+| U-01 | Drag-and-drop zone for `.json` file upload | MVP ✅ |
+| U-02 | Textarea input as alternative paste method for raw JSON | MVP ✅ |
+| U-03 | Client-side syntax validation feedback on paste/upload (show error line/column) | MVP ✅ |
+| U-04 | Render the uploaded JSON as an expandable **tree view** | MVP ✅ |
+| U-05 | "Load existing session" and "Import previous version" placeholders for future wiring | MVP ✅ |
 
 ## 3. Conversational Editing Workspace (SSE)
 
@@ -29,30 +29,37 @@ Technical decisions are documented in `docs/adr/`.
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| C-01 | Persistent chat panel displaying full conversation history (user messages + AI streaming responses) | MVP |
-| C-02 | Input text area with "Send" button; Enter to submit, Shift+Enter for newline | MVP |
-| C-03 | On send, POST to `/api/chat` and receive SSE stream via `fetch` + `ReadableStream` | MVP |
-| C-04 | **Streaming phase handling**: render thinking text inline → accumulate diff entries → on `complete`, update JSON preview panel | MVP |
-| C-05 | Placeholder examples (inline hint): "Increase timeout from 30 to 60", "Add retry count of 5", etc. | MVP |
-| C-06 | Auto-scroll chat to bottom on new messages and during streaming | MVP |
+| C-01 | Persistent chat panel displaying full conversation history (user messages + AI streaming responses) | MVP ✅ |
+| C-02 | Input text area with "Send" button; Enter to submit, Shift+Enter for newline | MVP ✅ |
+| C-03 | On send, POST to `/api/chat` and receive SSE stream via `fetch` + `ReadableStream` | MVP ✅ |
+| C-04 | **Streaming phase handling**: render thinking text inline → accumulate diff entries → on `complete`, update JSON preview panel | MVP ✅ |
+| C-05 | Placeholder examples (inline hint): "Increase timeout from 30 to 60", "Add retry count of 5", etc. | MVP ✅ |
+| C-06 | Auto-scroll chat to bottom on new messages and during streaming | MVP ✅ |
 
 ## 4. Visual Diff Viewer
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| D-01 | Display diff between "before" and "after" versions of the JSON | MVP |
-| D-02 | Color-coded diff: <span style="color:green">+ added</span>, <span style="color:orange;color:#e68a00">~ modified</span>, <span style="color:red">- deleted</span> | MVP |
-| D-03 | Side-by-side comparison view for the JSON tree | MVP |
-| D-04 | Tree-level expand/collapse toggles within the diff | MVP |
-| D-05 | Search/filter changes by keyword or change type (added/modified/deleted) | MVP |
+| D-01 | Display diff between "before" and "after" versions of the JSON | MVP ✅ |
+| D-02 | Color-coded diff: green for added, red for deleted, yellow for modified | MVP ✅ |
+| D-03 | Side-by-side comparison view for the JSON tree | MVP ✅ |
+| D-04 | Tree-level expand/collapse toggles within the diff | MVP ✅ |
+| D-05 | Search/filter changes by keyword or change type (added/modified/deleted) | MVP ✅ |
+| D-06 | **Library**: `react-diff-viewer` (v3.1.1) for unified/split diff rendering | MVP ✅ |
+| D-07 | **View toggle**: Switch between "Diff Viewer" (unified split view) and "Side by Side" (JsonView trees) | MVP ✅ |
+| D-08 | **Word-level diff**: `DiffMethod.WORDS` for inline word-level highlighting | MVP ✅ |
+| D-09 | **Focused view**: `showDiffOnly={true}` + `extraLinesSurroundingDiff={3}` to show only changed lines with context | MVP ✅ |
+| D-10 | **Legend bar**: Color chips (Added/Modified/Deleted) with toggle bar in header | MVP ✅ |
+
+Implementation: `DiffViewer.tsx` uses `ReactDiffViewer` component with `oldCode`/`newCode` as stringified JSON. Two view modes — unified split view (green/red lines via library) and side-by-side JsonView fallback. Change list with accept/reject buttons preserved below the viewer.
 
 ## 5. Incremental Approval Workflow UI
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| A-01 | Per-change toggle: **Accept** / **Reject** for each proposed modification | MVP |
-| A-02 | Global actions: "Accept All" / "Reject All" | MVP |
-| A-03 | After acceptance, update the working JSON tree and refresh the view | MVP |
+| A-01 | Per-change toggle: **Accept** / **Reject** for each proposed modification | MVP ✅ |
+| A-02 | Global actions: "Accept All" / "Reject All" | MVP ✅ |
+| A-03 | After acceptance, update the working JSON tree and refresh the view | MVP ✅ |
 
 ## 6. Version Management UI
 
@@ -67,15 +74,15 @@ Technical decisions are documented in `docs/adr/`.
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| E-01 | Download button for current (approved) JSON as pretty-printed file | MVP |
-| E-02 | Download option for minified JSON (toggle or secondary button) | MVP |
+| E-01 | Download button for current (approved) JSON as pretty-printed file | MVP ✅ |
+| E-02 | Download option for minified JSON (toggle or secondary button) | MVP ✅ |
 
 ## 8. State Management
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| S-01 | Global client state holds: current JSON, conversation history, diff result, active version | MVP |
-| S-02 | Session recovery: persist conversation + working JSON in `localStorage` to survive refresh | MVP |
+| S-01 | Global client state holds: current JSON, conversation history, diff result, active version | MVP ✅ |
+| S-02 | Session recovery: persist conversation + working JSON in `localStorage` to survive refresh | MVP ✅ |
 
 ## 8.5 Bidirectional Diff State Synchronization
 
@@ -129,9 +136,9 @@ Frontend reads `baseline_json` and `working_json` from backend responses. Never 
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| X-01 | Loading spinners while awaiting backend responses (chat, diff, validation) | MVP |
-| X-02 | Empty states and tooltips explaining each section to first-time users | MVP |
-| X-03 | Toast notifications for success / error events from the API | MVP |
+| X-01 | Loading spinners while awaiting backend responses (chat, diff, validation) | MVP ✅ |
+| X-02 | Empty states and tooltips explaining each section to first-time users | MVP ✅ |
+| X-03 | Toast notifications for success / error events from the API | MVP ✅ |
 
 ## 10. Excluded from MVP (Frontend)
 
