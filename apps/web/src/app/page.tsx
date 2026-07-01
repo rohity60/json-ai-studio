@@ -36,11 +36,14 @@ export default function Home() {
         <header className="border-b bg-white px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FileJson2 className="w-6 h-6 text-purple-600" />
-            <h1 className="text-lg font-bold">JSON AI Studio</h1>
+            <div className="logo-container opt-1">
+              <span className="brand-main">JSON</span>
+              <span className="brand-sub-1">AI</span>
+              <span className="brand-sub-2">STUDIO</span>
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            {Object.keys(json).length === 0 && (
-              <button onClick={() => createSession('My Config')}
+            {Object.keys(json).length === 0 && (<button onClick={() => createSession('My Config')}
               className="px-4 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700">
               New Session</button>
             )}
