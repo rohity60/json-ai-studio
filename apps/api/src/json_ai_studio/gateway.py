@@ -19,6 +19,8 @@ import litellm
 from fastapi import HTTPException
 from openai.types.responses.responses_client_event_param import StreamOptions
 
+from .deployment import DeploymentConfig, DeploymentRegistry
+
 logger = logging.getLogger("json_ai_studio.gateway")
 
 # Pricing: model -> (prompt_per_1k, completion_per_1k) in USD
@@ -166,6 +168,7 @@ class GatewayService:
         if profile and profile in cls.AI_PROFILES:
             return cls.AI_PROFILES[profile]
         return "ollama/gemma4:12b"
+        #return "gemma-4-26b-a4b-it"
 
     @classmethod
     def _make_usage_event(
@@ -282,17 +285,35 @@ class GatewayService:
         GatewayService._ensure_credits(api_key)
         GatewayService._check_credits(api_key)
 
-        logger.info(
-            "invoke session=%s model=%s api_key=%s",
-            session_id,
-            resolved_model,
-            api_key[:8] + "...",
-        )
-
         start_time = time.monotonic()
         try:
+              # Select deployment for this model
+            deployment = DeploymentRegistry.pick(resolved_model)
+            litellm_model = (
+                 resolved_model
+                 if resolved_model.startswith(deployment.model_prefix)
+                 else f"{deployment.model_prefix}{resolved_model}"
+             )
+
+            logger.info(
+                "invoke session=%s model=%s deployment=%s api_key=%s",
+                session_id,
+                resolved_model,
+                deployment.name,
+                api_key[:8] + "...",
+               )
+
+              # Emit deployment selection event
+            yield f'event: deployment\ndata' + json.dumps({
+                    "model": resolved_model,
+                    "deployment": deployment.name,
+                    "provider": deployment.model_prefix,
+                }) + "\n\n"
+
             response = await litellm.acompletion(
-                model=resolved_model,
+                model=litellm_model,
+                base_url=deployment.base_url,
+                api_key=deployment.api_key or None,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message},
@@ -300,7 +321,7 @@ class GatewayService:
                 stream=True,
                 timeout=120.0,
                 stream_options={"include_usage": True},
-            )
+               )
 
             content_parts: list[str] = []
             last_chunk = None
