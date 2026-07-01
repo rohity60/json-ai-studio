@@ -39,7 +39,7 @@ export default function Home() {
             <div className="logo-container opt-1">
               <span className="brand-main">JSON</span>
               <span className="brand-sub-1">AI</span>
-              <span className="brand-sub-2">STUDIO</span>
+              <span className="brand-sub-1">STUDIO</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
