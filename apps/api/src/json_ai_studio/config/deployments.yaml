@@ -1,0 +1,41 @@
+# Deployment registry — multi-provider LLM backend configuration.
+# Environment variable placeholders: ${ENV_VAR_NAME}
+# Resolved at startup from os.environ. Fails if missing.
+
+deployments:
+    # Google AI Studio — Gemini family
+  google_ai_studio:
+    enabled: true
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    api_key_env: "GOOGLE_AI_STUDIO_API_KEY"
+    model_prefix: "gemini/"
+    models:
+        - "gemma-4-26b-a4b-it"
+
+    # NVIDIA NIM API — GPU-accelerated inference
+  nvidia_nim:
+    enabled: true
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key_env: "NVIDIA_NIM_API_KEY"
+    model_prefix: "nvidia/"
+    models:
+        - "gemma-4-26b-a4b-it"
+
+    # OpenRouter — aggregated multi-provider API
+  openrouter:
+    enabled: true
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    model_prefix: "openrouter/"
+    models:
+        - "gemma-4-26b-a4b-it"
+
+    # Local Ollama — development / offline
+  ollama_local:
+    enabled: true
+    base_url: "http://localhost:11434"
+    api_key_env: ""
+    model_prefix: "ollama/"
+    models:
+        - "qwen3.6:35b-mlx"
+        - "gemma4:12b"

@@ -159,7 +159,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         }
 
          // 1. Snapshot the initial payload variables
-    const currentWorkingJson = state.workingJson;
+    const currentWorkingJson = JSON.parse(JSON.stringify(state.workingJson));
     console.log('[SessionContext] Snapshot workingJson, keys:', Object.keys(currentWorkingJson));
 
     setState((prev) => ({
@@ -237,7 +237,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                          ...prev,
                         conversationHistory: historyCopy,
                           // Use activeJson if updated, otherwise fallback to the absolutely latest prev state
-                        workingJson: activeJson || prev.workingJson,
+                        workingJson: activeJson || currentWorkingJson,
                         baselineJson: baselineJson || prev.baselineJson
                      };
                  });
