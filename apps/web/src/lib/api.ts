@@ -110,6 +110,29 @@ export async function getVersions(sessionId: string, apiKey: string) {
     return await res.json();
 }
 
+export async function selectVersion(
+    sessionId: string,
+    versionId: string,
+    apiKey: string,
+): Promise<{
+    working_json: Record<string, any>;
+    baseline_json: Record<string, any>;
+    active_version_id: string | null;
+    versions: any[];
+    conversation_history: any[];
+}> {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/versions/select`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        body: JSON.stringify({ versionId }),
+      });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || `Failed to select version: ${res.status}`);
+       }
+    return await res.json();
+}
+
 export async function* streamChat(sessionId: string, message: string, workingJson: object | null, apiKey: string) {
     console.log('[api] streamChat ENTRY: sessionId=', sessionId.slice(0, 8), 'msgLen=', message.length, 'wjKeys=', workingJson ? Object.keys(workingJson).length : 'null');
 
