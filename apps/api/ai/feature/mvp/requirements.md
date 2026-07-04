@@ -51,6 +51,66 @@ Technical decisions are documented in `docs/adr/`.
 | V-08 | `POST /api/sessions/{id}/diffs/{diff_id}/accept` — apply an approved diff to the working JSON | MVP ✅ |
 | V-09 | `POST /api/sessions/{id}/diffs/{diff_id}/reject` — revert the rejected change from working state | MVP ✅ |
 | V-10 | `GET /api/sessions/{id}/versions` — list all versions with timestamps | MVP ✅ |
+| V-11 | `POST /api/sessions/{id}/versions/select` — select a version snapshot as the new working baseline (see R7–R10 below) | MVP |
+| V-12 | `POST /api/sessions/{id}/versions/select` returns full updated session state including `active_version_id` | MVP |
+
+## 5.5 Version Selection — Detailed Requirements
+
+When a user selects a previously created version snapshot, the system must treat it as branching point: the selected snapshot becomes both the current working state AND the new baseline, with a fresh conversation history branch. This enables the user to continue editing from any point in the version tree.
+
+### R7 — Select Version: Set Working + Baseline
+
+- `POST /api/sessions/{id}/versions/select` — accept `{ versionId: string }`.
+- Look up the `VersionSnapshot` by `versionId` from the session's `versions` list.
+- Set `session["working_json"] = copy(version.json_data)`.
+- Set `session["baseline_json"] = copy(version.json_data)`.
+- Both must be deep copies (not references to the snapshot's stored data).
+- Return updated session state: `{ working_json, baseline_json, versions, active_version_id }`.
+
+### R8 — Select Version: Reset Conversation History
+
+- On version selection, clear `session["conversation_history"]` to start a fresh branch.
+- The old conversation history is discarded; the session effectively branches at the selected version.
+- This mirrors the behavior after `accept-all` (R3): baseline and working converge, history resets.
+- Rationale: selecting a version means "start working from this point forward." Old chat turns are irrelevant to the new branch.
+
+### R9 — Select Version: Track Active Version
+
+- Session gains a new field: `active_version_id: str | None`.
+- On select: `session["active_version_id"] = versionId`.
+- On new session creation: `active_version_id = None`.
+- On upload: `active_version_id = None` (upload resets the branch).
+- GET session response includes `active_version_id` so frontend knows which version is active.
+- `active_version_id` is nullable: `null` means no version has been selected (default state).
+
+### R10 — Select Version: Validation
+
+- If `versionId` does not exist in the session's versions list → return 404 with error "Version not found".
+- If session does not exist → return 404 with error "Session not found".
+- If `versionId` matches the currently active version (no-op) → return 200 with unchanged state (idempotent).
+
+### Data Model Update: Session
+
+```python
+class Session(BaseModel):
+    id: str                            # human-readable name
+    working_json: Any                  # current mutable state (after)
+    baseline_json: Any                 # stable "before" state; only changes on accept/reject-all or version select
+    versions: list[VersionSnapshot]    # historical snapshots
+    conversation_history: list[ChatTurn]
+    applied_diffs: list[str]           # diff IDs already applied
+    active_version_id: str | None      # currently selected version; None = default
+    created_at: datetime
+    updated_at: datetime
+```
+
+### API Endpoint Signature
+
+```
+POST /api/sessions/{sessionId}/versions/select
+Request:  { "versionId": "v3" }
+Response: { "working_json": {...}, "baseline_json": {...}, "active_version_id": "v3", "versions": [...], "conversation_history": [] }
+```
 
 ## 6. Diff Generation API
 
@@ -81,12 +141,13 @@ Technical decisions are documented in `docs/adr/`.
 
 ```python
 class Session(BaseModel):
-    id: str                           # human-readable name
-    working_json: Any                 # current mutable state (after)
-    baseline_json: Any                # stable "before" state; only changes on accept/reject-all
-    versions: list[VersionSnapshot]   # historical snapshots
+    id: str                            # human-readable name
+    working_json: Any                  # current mutable state (after)
+    baseline_json: Any                 # stable "before" state; only changes on accept/reject-all or version select
+    versions: list[VersionSnapshot]    # historical snapshots
     conversation_history: list[ChatTurn]
-    applied_diffs: list[str]          # diff IDs already applied
+    applied_diffs: list[str]           # diff IDs already applied
+    active_version_id: str | None      # currently selected version; None = default (no version selected)
     created_at: datetime
     updated_at: datetime
 ```
@@ -113,7 +174,7 @@ class ChatTurn(BaseModel):
 
 ## 9.5 Bidirectional Diff State Management
 
-Backend maintains `baseline_json` alongside `working_json` per session. `baseline_json` = "before" state (stable, only changes on accept/reject-all). `working_json` = "after" state (mutable, changes on upload, chat, single diff actions).
+Backend maintains `baseline_json` alongside `working_json` per session. `baseline_json` = "before" state (stable, only changes on accept/reject-all or version-select). `working_json` = "after" state (mutable, changes on upload, chat, single diff actions).
 
 ### R1 — Upload: Return Before + After as Same JSON ✅
 - `POST /api/json/upload` — parse uploaded JSON → `data`
@@ -122,6 +183,7 @@ Backend maintains `baseline_json` alongside `working_json` per session. `baselin
 
 ### R2 — Chat: Return Baseline + Working + Unapplied Diffs ✅
 - `POST /api/chat` — on SSE `complete` event: `baseline_json` unchanged, `working_json` = LLM result
+- `baseline_json` only changes on: accept-all (R3), reject-all (R4), or version select (R7)
 - Response: `{ "baseline_json": <baseline>, "working_json": <working>, "diffs": [entries] }`
 
 ### R3 — Accept All: Merge Working into Baseline ✅
@@ -150,9 +212,14 @@ Backend maintains `baseline_json` alongside `working_json` per session. `baselin
 | POST      | `/api/validate`                    | Validate a JSON blob       |
 | POST      | `/api/diff`                        | Compute diff               |
 | GET       | `/api/sessions/{id}`               | Get session state          |
+| POST         | `/api/sessions/{id}/versions/select` | Select version as working baseline |
 | POST      | `/api/sessions/{id}/versions`      | Create version snapshot    |
 | POST      | `/api/sessions/{id}/diffs/`        | Apply / reject diffs       |
 | GET       | `/api/sessions/{id}/export`        | Download JSON file         |
+
+## 10.5 Version Selection — Unsaved Changes Guard
+
+When the user attempts to select a version, the backend must always succeed. The unsaved-changes guard is a **frontend-only** concern: the frontend must detect if the current `working_json` differs from the last saved baseline, and if so, show a confirmation modal before calling the select endpoint. See frontend requirements for full details.
 
 ## 11. Excluded from MVP (Backend)
 

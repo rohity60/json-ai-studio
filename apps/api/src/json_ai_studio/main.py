@@ -34,6 +34,7 @@ from .models import (
     DiffEntry,
     DiffRejectResponse,
     Error,
+    SelectVersionRequest,
     ValidateRequest,
     ValidationErrorItem,
     VersionSnapshot,

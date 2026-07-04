@@ -13,6 +13,11 @@ body {
 .json-boolean { color: #d73a49; }
 .json-null { color: #6a737d; font-style: italic; }
 
+/* Logo */
+.opt-1 { font-weight: 700; color: #2c3e50; }
+.opt-1 .brand-sub-1 { color: #3498db; font-weight: 500; margin-left: 6px; }
+.opt-1 .brand-sub-2 { color: #7f8c8d; font-weight: 300; margin-left: 6px; }
+
 /* Diff coloring */
 .diff-added { background-color: rgba(56, 178, 104, 0.1); border-left: 2px solid #38b268; }
 .diff-modified { background-color: rgba(230, 138, 0, 0.1); border-left: 2px solid #e68a00; }

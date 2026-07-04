@@ -23,7 +23,7 @@ type SessionContextValue = {
   sendMessage: (message: string) => Promise<void>;
   acceptDiff: (diffId: string) => Promise<void>;
   createVersion: (label: string) => void;
-  selectVersion: (version: any) => void;
+  selectVersion: (versionId: string) => Promise<void>;
   exportJson: () => void;
   removeDiff: (diffId: string) => Promise<void>;
   acceptAllDiffs: () => Promise<void>;
@@ -70,7 +70,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
               id: v.id, label: v.label, json_data: v.json_data
               })),
             conversationHistory: [],
-            activeVersionId: null,
+            activeVersionId: (data.active_version_id as string) || null,
             loading: false,
             error: null,
             });
@@ -157,8 +157,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       return;
       }
 
-        // 1. Snapshot the initial payload variables
-    const currentWorkingJson = state.workingJson;
+         // 1. Snapshot the initial payload variables
+    const currentWorkingJson = JSON.parse(JSON.stringify(state.workingJson));
     console.log('[SessionContext] Snapshot workingJson, keys:', Object.keys(currentWorkingJson));
 
     setState((prev) => ({
@@ -232,18 +232,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                   };
                 }
 
-              return {
-                  ...prev,
-                conversationHistory: historyCopy,
-                  // Use activeJson if updated, otherwise fallback to the absolutely latest prev state
-                workingJson: activeJson || prev.workingJson,
-                baselineJson: baselineJson || prev.baselineJson
-                };
-              });
-            });
-          console.log('[SessionContext] SET_STATE after chunk #' + chunkCount + ' flushed');
-          }
-        }
+                    return {
+                         ...prev,
+                        conversationHistory: historyCopy,
+                          // Use activeJson if updated, otherwise fallback to the absolutely latest prev state
+                        workingJson: activeJson || currentWorkingJson,
+                        baselineJson: baselineJson || prev.baselineJson
+                     };
+                 });
+             });
+            console.log('[SessionContext] SET_STATE after chunk #' + chunkCount + ' flushed');
+         }
+         }
 
         // 4. Stream finalized successfully
       console.log('[SessionContext] Stream loop finished, totalChunks=', chunkCount);
@@ -293,6 +293,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setState(prev => ({
           ...prev,
         workingJson: data.json_data || data.working_json || prev.workingJson,
+        activeVersionId: data.id || prev.activeVersionId,
         versions: [...prev.versions, { id: data.id, label: data.label, json_data: data.json_data }],
         }));
       } catch (err: any) { toast.error(String(err)); }
@@ -354,6 +355,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           ...prev,
         workingJson: (data.working_json as Record<string, any>) || {},
         baselineJson: (data.baseline_json as Record<string, any>) || {},
+        activeVersionId: (data.active_version_id as string) || null,
         versions: (data.versions || []).map((v: any) => ({
           id: v.id, label: v.label, json_data: v.json_data
           })),
@@ -361,15 +363,65 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       } catch (err: any) { toast.error(String(err)); }
     }, [state.sessionId, apiKey]);
 
-  const selectVersion = useCallback(async (version: any) => {
+  const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false);
+  const [pendingVersionId, setPendingVersionId] = useState<string | null>(null);
+
+  function deepEqual(a: any, b: any): boolean {
+    return JSON.stringify(a) === JSON.stringify(b);
+   }
+
+  const callSelectVersion = async (versionId: string) => {
     if (!state.sessionId) return;
     try {
-      const data = await api.selectVersion(state.sessionId, version.id, apiKey);
-      setState((prev) => ({ ...prev, workingJson: data.working_json || {}, activeVersionId: version.id }));
-    } catch (err: any) {
+      const data = await api.selectVersion(state.sessionId, versionId, apiKey);
+      setState({
+          ...state,
+        workingJson: data.working_json || {},
+        baselineJson: data.baseline_json || {},
+        conversationHistory: [],
+        activeVersionId: data.active_version_id,
+        loading: false,
+        error: null,
+        });
+      } catch (err: any) {
       toast.error(String(err));
-    }
-  }, [state.sessionId, apiKey]);
+      setState(prev => ({ ...prev, error: String(err), loading: false }));
+      }
+     };
+
+  const handleSaveAndContinue = async () => {
+    if (!state.sessionId) return;
+    try {
+      await api.createVersion(state.sessionId, 'Auto-save before switch', state.workingJson, apiKey);
+      if (pendingVersionId) {
+        await callSelectVersion(pendingVersionId);
+        }
+      } catch (err: any) {
+      toast.error('Failed to save. Please try again.');
+      } finally {
+      setUnsavedChangesModalOpen(false);
+      setPendingVersionId(null);
+      }
+     };
+
+  const handleDiscardAndContinue = () => {
+    if (pendingVersionId) {
+      callSelectVersion(pendingVersionId).finally(() => {
+        setUnsavedChangesModalOpen(false);
+        setPendingVersionId(null);
+        });
+      }
+     };
+
+  const selectVersion = useCallback(async (versionId: string) => {
+    if (!deepEqual(state.workingJson, state.baselineJson || {})) {
+      setPendingVersionId(versionId);
+      setUnsavedChangesModalOpen(true);
+      return;
+       }
+    await callSelectVersion(versionId);
+     }, [state.sessionId, state.workingJson, state.baselineJson, apiKey]);
+
 
   const exportJson = useCallback(() => {
     if (!state.sessionId) return;

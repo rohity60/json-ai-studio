@@ -6,3 +6,4 @@ apps/api/.idea/*
 apps/web/.idea/
 apps/web/node_modules/
 apps/web/package-lock.json
+apps/api/.env
