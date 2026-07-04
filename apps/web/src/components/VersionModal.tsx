@@ -73,7 +73,7 @@ export default function VersionModal() {
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button
               onClick={() => {
-                selectVersion(version);
+                selectVersion(version.id);
                 hideVersionModal();
               }}
               style={{
