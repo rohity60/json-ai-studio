@@ -506,6 +506,15 @@ async def endpoint_chat(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
+            # If session has no JSON yet, tell user to upload
+            if not working_json:
+                yield "event: thinking\ndata" + json.dumps({"text": "No JSON configured yet."}) + "\n\n"
+                yield "event: complete\ndata" + json.dumps({
+                     "working_json": {},
+                     "explanation": "Please upload a JSON configuration first. Use the Upload tab to provide your initial JSON, then chat to modify it.",
+                 }) + "\n\n"
+                return
+
             merged_json = None
             all_diffs: list[dict[str, Any]] = []
             async for event_text in _stream_llm(working_json, message, _auth):
