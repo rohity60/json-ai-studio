@@ -16,14 +16,14 @@ from fastapi.responses import JSONResponse
 
 # Non-protected: health, OpenAPI schema, docs UI, favicon.
 _UNPROTECTED_PREFIXES = (
-     "/health",
-     "/docs",
-     "/openapi.json",
-     "/favicon.ico",
+    "/health",
+    "/docs",
+    "/openapi.json",
+    "/favicon.ico",
 )
 
-_RATE_LIMIT = 10   # requests per window
-_RATE_WINDOW = 60   # seconds
+_RATE_LIMIT = 10  # requests per window
+_RATE_WINDOW = 60  # seconds
 
 
 class _RateLimiter:
@@ -64,7 +64,7 @@ async def require_api_key(request: Request) -> str:
     if any(request.url.path.startswith(p) for p in _UNPROTECTED_PREFIXES):
         return ""
 
-    #key = request.headers.get("x-api-key")
+    # key = request.headers.get("x-api-key")
     key = "dev-default-key"
     if not key or len(key) < 8:
         raise HTTPException(
