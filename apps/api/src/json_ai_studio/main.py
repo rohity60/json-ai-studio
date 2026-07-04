@@ -34,6 +34,7 @@ from .models import (
     DiffEntry,
     DiffRejectResponse,
     Error,
+    SelectVersionRequest,
     ValidateRequest,
     ValidationErrorItem,
     VersionSnapshot,
@@ -354,6 +355,54 @@ async def endpoint_create_version_snapshot(
     session["updated_at"] = datetime.now(timezone.utc).isoformat()
     save_session(session)
     return version.model_dump()
+
+
+@app.post("/api/sessions/{session_id}/versions/select")
+async def endpoint_select_version(
+    session_id: str,
+    req: SelectVersionRequest,
+    _auth=Depends(require_api_key),
+):
+    """Select a version snapshot as the new working baseline."""
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    version_id = req.versionId
+    versions_list = session.get("versions", [])
+    target = None
+    for v in versions_list:
+        vid = v.id if hasattr(v, "id") else v.get("id")
+        if vid == version_id:
+            target = v
+            break
+
+    if target is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    import copy
+
+    json_data = (
+        target.json_data
+        if hasattr(target, "json_data")
+        else target.get("json_data", {})
+    )
+    session["working_json"] = copy.deepcopy(json_data)
+    session["baseline_json"] = copy.deepcopy(json_data)
+    session["active_version_id"] = version_id
+    session["conversation_history"] = []
+    session["updated_at"] = datetime.now(timezone.utc).isoformat()
+    save_session(session)
+
+    return {
+        "working_json": session["working_json"],
+        "baseline_json": session["baseline_json"],
+        "active_version_id": session["active_version_id"],
+        "versions": [
+            v.model_dump() if hasattr(v, "model_dump") else v for v in versions_list
+        ],
+        "conversation_history": [],
+    }
 
 
 @app.get("/api/sessions/{session_id}/versions")

@@ -41,7 +41,7 @@ export default function VersionSidebar() {
              <p className='text-xs text-muted-foreground text-center py-4'>No versions saved yet</p>
            )}
            {state.versions.map((v) => (
-             <div key={v.id} onClick={() => selectVersion(v)} className={`p-2 rounded-lg cursor-pointer transition-colors ${state.activeVersionId === v.id ? 'bg-purple-50 border-purple-300' : 'hover:bg-gray-50'} border`}>
+             <div key={v.id} onClick={() => selectVersion(v.id)} className={`p-2 rounded-lg cursor-pointer transition-colors ${state.activeVersionId === v.id ? 'bg-purple-50 border-purple-300' : 'hover:bg-gray-50'} border`}>
                <div className='flex items-center gap-2'>
                  <span className={`w-2 h-2 rounded-full ${state.activeVersionId === v.id ? 'bg-purple-600' : 'bg-gray-300'}`} />
                  <span className='text-sm font-medium'>{v.label || 'Unnamed'}</span>

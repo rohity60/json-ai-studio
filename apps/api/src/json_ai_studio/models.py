@@ -95,6 +95,12 @@ class CreateVersionRequest(BaseModel):
     json_data: dict[str, Any]
 
 
+class SelectVersionRequest(BaseModel):
+    """Request body for POST /api/sessions/{id}/versions/select."""
+
+    versionId: str
+
+
 class ChatRequest(BaseModel):
     session_id: str
     conversation_history: list[ChatTurn] = []

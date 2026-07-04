@@ -23,7 +23,7 @@ type SessionContextValue = {
   sendMessage: (message: string) => Promise<void>;
   acceptDiff: (diffId: string) => Promise<void>;
   createVersion: (label: string) => void;
-  selectVersion: (version: any) => void;
+  selectVersion: (versionId: string) => Promise<void>;
   exportJson: () => void;
   removeDiff: (diffId: string) => Promise<void>;
   acceptAllDiffs: () => Promise<void>;
@@ -71,7 +71,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
               id: v.id, label: v.label, json_data: v.json_data
             })),
             conversationHistory: [],
-            activeVersionId: null,
+            activeVersionId: (data.active_version_id as string) || null,
             loading: false,
             error: null,
           });
@@ -294,6 +294,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setState(prev => ({
         ...prev,
         workingJson: data.json_data || data.working_json || prev.workingJson,
+        activeVersionId: data.id || prev.activeVersionId,
         versions: [...prev.versions, { id: data.id, label: data.label, json_data: data.json_data }],
       }));
      } catch (err: any) { toast.error(String(err)); }
@@ -355,6 +356,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         workingJson: (data.working_json as Record<string, any>) || {},
         baselineJson: (data.baseline_json as Record<string, any>) || {},
+        activeVersionId: (data.active_version_id as string) || null,
         versions: (data.versions || []).map((v: any) => ({
           id: v.id, label: v.label, json_data: v.json_data
         })),
@@ -362,9 +364,65 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     } catch (err: any) { toast.error(String(err)); }
   }, [state.sessionId, apiKey]);
 
-  const selectVersion = useCallback((version: any) => {
-      setState((prev) => ({ ...prev, workingJson: version.json_data || {}, activeVersionId: version.id }));
-           }, []);
+  const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false);
+  const [pendingVersionId, setPendingVersionId] = useState<string | null>(null);
+
+  function deepEqual(a: any, b: any): boolean {
+    return JSON.stringify(a) === JSON.stringify(b);
+   }
+
+  const callSelectVersion = async (versionId: string) => {
+    if (!state.sessionId) return;
+    try {
+      const data = await api.selectVersion(state.sessionId, versionId, apiKey);
+      setState({
+          ...state,
+        workingJson: data.working_json || {},
+        baselineJson: data.baseline_json || {},
+        conversationHistory: [],
+        activeVersionId: data.active_version_id,
+        loading: false,
+        error: null,
+        });
+      } catch (err: any) {
+      toast.error(String(err));
+      setState(prev => ({ ...prev, error: String(err), loading: false }));
+      }
+     };
+
+  const handleSaveAndContinue = async () => {
+    if (!state.sessionId) return;
+    try {
+      await api.createVersion(state.sessionId, 'Auto-save before switch', state.workingJson, apiKey);
+      if (pendingVersionId) {
+        await callSelectVersion(pendingVersionId);
+        }
+      } catch (err: any) {
+      toast.error('Failed to save. Please try again.');
+      } finally {
+      setUnsavedChangesModalOpen(false);
+      setPendingVersionId(null);
+      }
+     };
+
+  const handleDiscardAndContinue = () => {
+    if (pendingVersionId) {
+      callSelectVersion(pendingVersionId).finally(() => {
+        setUnsavedChangesModalOpen(false);
+        setPendingVersionId(null);
+        });
+      }
+     };
+
+  const selectVersion = useCallback(async (versionId: string) => {
+    if (!deepEqual(state.workingJson, state.baselineJson || {})) {
+      setPendingVersionId(versionId);
+      setUnsavedChangesModalOpen(true);
+      return;
+       }
+    await callSelectVersion(versionId);
+     }, [state.sessionId, state.workingJson, state.baselineJson, apiKey]);
+
 
   const exportJson = useCallback(() => {
     if (!state.sessionId) return;
@@ -380,7 +438,31 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   return (
             <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession }}>
-              {children}
+               {children}
+                {unsavedChangesModalOpen && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+                      <h2 className="text-lg font-semibold mb-2">Unsaved Changes</h2>
+                      <p className="text-sm text-gray-600 mb-6">
+                        You have unsaved changes. Save before switching to this version?
+                      </p>
+                      <div className="flex gap-3 justify-end">
+                        <button
+                          onClick={handleDiscardAndContinue}
+                          className="px-4 py-2 text-sm border rounded hover:bg-gray-50"
+                        >
+                          Continue Without Saving
+                        </button>
+                        <button
+                          onClick={handleSaveAndContinue}
+                          className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                        >
+                          Save &amp; Continue
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
             </SessionContext.Provider>
            );
 }
