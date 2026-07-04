@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - GOOGLE_AI_STUDIO_API_KEY=${GOOGLE_AI_STUDIO_API_KEY}
+      - HOST=0.0.0.0
+      - PORT=8000
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    environment:
+      - NEXT_PUBLIC_API_BASE=http://api:8000/api
+      - HOST=0.0.0.0
+      - PORT=3000
+    depends_on:
+      - api
+    restart: unless-stopped
