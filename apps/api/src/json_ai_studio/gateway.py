@@ -321,6 +321,7 @@ class GatewayService:
                     {"role": "user", "content": message},
                 ],
                 stream=True,
+                reasoning_effort="none",
                 timeout=120.0,
                 stream_options={"include_usage": True},
                )
