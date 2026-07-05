@@ -95,6 +95,31 @@ Example 2 - Add a field:
 User: "Add retry count of 5."
 Output: [{{"path": "/services/default/retryCount", "operation": "add", "old_value": null, "new_value": 5}}]
 
+Example 3 - Modify array element by condition (target NOT found):
+User: "Update title to 'yellow' where mode is 'b' in howToRedeem"
+Working JSON: {{"howToRedeem": [{{"mode": "a", "title": "Step 1"}}, {{"mode": "c", "title": "Step 2"}}]}}
+Output: []
+Explanation: No element has mode='b'. The array contains: mode='a' (first element, index 0) and mode='c' (second element, index 1). Did you mean mode='c'?
+When target is not found: return empty diff array [], explain which modes exist, and suggest the closest match.
+
+Example 3b - When target IS found:
+User: "Update title to 'yellow' where mode is 'c' in howToRedeem"
+Working JSON: {{"howToRedeem": [{{"mode": "a", "title": "Step 1"}}, {{"mode": "c", "title": "Step 2"}}]}}
+Output: [{{"path": "/howToRedeem/1/title", "operation": "modify", "old_value": "Step 2", "new_value": "yellow"}}]
+Note: mode='c' is at index 1 (second element). The diff modifies title at path /howToRedeem/1.
+
+Example 4 - Add to array:
+User: "Add a step with mode 'd' and title 'Step 3' to howToRedeem"
+Working JSON: {{"howToRedeem": [{{"mode": "a", "title": "Step 1"}}]}}
+Output: [{{"path": "/howToRedeem/1", "operation": "add", "old_value": null, "new_value": {{"mode": "d", "title": "Step 3"}}}}]
+Note: Appends at index 1 (second position). First element is at index 0.
+
+Example 5 - Delete from array:
+User: "Remove the step with mode 'c' from howToRedeem"
+Working JSON: {{"howToRedeem": [{{"mode": "a", "title": "Step 1"}}, {{"mode": "c", "title": "Step 2"}}]}}
+Output: [{{"path": "/howToRedeem/1", "operation": "delete", "old_value": {{"mode": "c", "title": "Step 2"}}, "new_value": null}}]
+Note: The element with mode='c' is at index 1 (second element). Delete uses the array index.
+
 Now process the user's message and return diffs in this exact format.
 """
 
@@ -126,35 +151,6 @@ def _compute_schema_summary(data: Any, depth: int = 0) -> dict[str, Any]:
         "nested_depth": max(max_depth, 0),
         "array_lengths": array_lengths,
     }
-
-
-# ---------------------------------------------------------------------------
-# Diff Application Helper
-# ---------------------------------------------------------------------------
-
-
-def _apply_diffs(obj: dict[str, Any], diffs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Apply a list of diff entries to a JSON object (returns new copy)."""
-    import copy
-
-    result = copy.deepcopy(obj)
-    for diff in diffs:
-        path_parts = [p for p in diff.get("path", "/").split("/") if p]
-        target_key = path_parts[-1] if path_parts else None
-        if not target_key:
-            continue
-        # Navigate to parent, creating intermediate dicts as needed
-        current = result
-        for part in path_parts[:-1]:
-            if part not in current or not isinstance(current[part], dict):
-                current[part] = {}
-            current = current[part]
-        op = diff.get("operation")
-        if op == "delete":
-            current.pop(target_key, None)
-        else:
-            current[target_key] = diff.get("new_value")
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +234,7 @@ async def _stream_llm(
                 yield "event: diff\ndata" + _json.dumps({"entry": entry}) + "\n\n"
             yield "event: complete\ndata" + _json.dumps(
                 {
-                    "working_json": _apply_diffs(working_json, diffs_to_apply),
+                    "working_json": DiffUtils.apply_all(diffs_to_apply, working_json),
                     "explanation": combined,
                 }
             ) + "\n\n"
