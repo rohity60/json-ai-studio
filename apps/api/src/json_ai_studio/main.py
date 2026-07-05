@@ -79,21 +79,28 @@ def _build_system_prompt(working_json: dict[str, Any]) -> str:
 You are a JSON configuration assistant. Given the current working JSON and a user's \
 natural language message, return structured diff proposals as a JSON array of DiffEntry objects.
 
-Working JSON schema: {top_keys}
 
 RULES:
 - Output ONLY the JSON array. Nothing else. No markdown. No code blocks. No backticks.
 - The ENTIRE response must be a valid JSON array starting with '[' and ending with ']'.
 - If the user's request cannot be applied, explain why in plain text.
 - Each DiffEntry has: path (JSON Pointer), operation ("add"|"modify"|"delete"), old_value, new_value.
+- Arrays use zero-based indices. Path `/items/0` = first element, `/items/1` = second element.
+- To delete an element: use operation "delete" at path `/array/N`, where N is the zero-based index.
+- To add to array end: use operation "add" at path `/array/<next_index>`.
+- To target by field value: find the index where the field matches, use that index in the path.
+- When no element matches: return empty array `[]`, list what values exist, suggest closest match.
+- When copying or duplicating existing json object , use same keys from the object to be copied, add the new copied key to same level as that of source, apply same values as source if user did not specify new values. 
 
 Example 1 - Modify a value:
-User: "Increase timeout from 30 to 60 for api service."
-Output: [{{"path": "/services/api/timeout", "operation": "modify", "old_value": 30, "new_value": 60}}]
+User: "Set timeout to 60 for api service."
+Working JSON: {{"services":{{"api":{{"timeout":30}}}}}}
+Output: [{{"path":"/services/api/timeout","operation":"modify","old_value":30,"new_value":60}}]
 
-Example 2 - Add a field:
-User: "Add retry count of 5."
-Output: [{{"path": "/services/default/retryCount", "operation": "add", "old_value": null, "new_value": 5}}]
+Example 2 - Add a new field:
+User: "Add retryCount of 5 to default service."
+Working JSON: {{"services":{{"default":{{}}}}}}
+Output: [{{"path":"/services/default/retryCount","operation":"add","old_value":null,"new_value":5}}]
 
 Example 3 - Modify array element by condition (target NOT found):
 User: "Update title to 'yellow' where mode is 'b' in howToRedeem"
@@ -120,7 +127,12 @@ Working JSON: {{"howToRedeem": [{{"mode": "a", "title": "Step 1"}}, {{"mode": "c
 Output: [{{"path": "/howToRedeem/1", "operation": "delete", "old_value": {{"mode": "c", "title": "Step 2"}}, "new_value": null}}]
 Note: The element with mode='c' is at index 1 (second element). Delete uses the array index.
 
-Now process the user's message and return diffs in this exact format.
+IMPORTANT: The examples above use sample data. Your task uses the real Working JSON provided above the examples.
+Do NOT assume the real data has the same structure, keys, or length as the examples.
+You MUST not use above example data keys or values to generate diff unless same keys present in user provided json while generating diffs, Use User's working json provided below for old and new values and actual json diff creation.
+
+Now process the user's message for below working json and return diffs in above mentioned exact format.
+User provided Working JSON schema: {top_keys}
 """
 
 
@@ -504,11 +516,15 @@ async def endpoint_chat(
         try:
             # If session has no JSON yet, tell user to upload
             if not working_json:
-                yield "event: thinking\ndata" + json.dumps({"text": "No JSON configured yet."}) + "\n\n"
-                yield "event: complete\ndata" + json.dumps({
-                     "working_json": {},
-                     "explanation": "Please upload a JSON configuration first. Use the Upload tab to provide your initial JSON, then chat to modify it.",
-                 }) + "\n\n"
+                yield "event: thinking\ndata" + json.dumps(
+                    {"text": "No JSON configured yet."}
+                ) + "\n\n"
+                yield "event: complete\ndata" + json.dumps(
+                    {
+                        "working_json": {},
+                        "explanation": "Please upload a JSON configuration first. Use the Upload tab to provide your initial JSON, then chat to modify it.",
+                    }
+                ) + "\n\n"
                 return
 
             merged_json = None
