@@ -236,3 +236,17 @@ export async function rejectDiffBatch(sessionId: string, apiKey: string) {
     if (!res.ok) throw new Error('Failed to reject all diffs');
     return await res.json();
 }
+
+export async function explain(
+    sessionId: string,
+    workingJson: Record<string, any>,
+    apiKey: string,
+): Promise<string> {
+    const res = await fetch(`${BASE}/explain`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        body: JSON.stringify({sessionId, workingJson}),
+       });
+    if (!res.ok) throw new Error(`Explain failed: ${await res.text()}`);
+    return await res.text();
+}

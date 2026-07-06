@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from .auth import require_api_key
 from .diff_utils import DiffApplyError, DiffUtils, parse_llm_response
@@ -30,7 +30,7 @@ from .models import (
     SelectVersionRequest,
     VersionSnapshot,
 )
-from .prompting import build_system_prompt
+from .prompting import EXPLAIN_TEMPLATE, build_system_prompt
 from .store import create_session as _new_session
 from .store import get_session, save_session
 
@@ -642,3 +642,30 @@ async def endpoint_reject_single_diff(
         "applied_diffs": session.get("applied_diffs", []),
         "rejected_diffs": session["rejected_diffs"],
     }
+
+
+@app.post("/api/explain")
+async def endpoint_explain(
+    body: dict[str, Any],
+    _auth=Depends(require_api_key),
+):
+    """Explain the JSON in a session. Returns markdown as plain text."""
+    session_id = body.get("sessionId")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="sessionId is required")
+
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    working_json = body.get("workingJson", session.get("working_json", {}))
+    if not isinstance(working_json, dict):
+        working_json = {}
+
+    try:
+        markdown = await GatewayService.explain(session_id, _auth, working_json)
+    except Exception as e:
+        logger.exception("explain failed session=%s", session_id)
+        raise HTTPException(status_code=500, detail=f"Explain failed: {e}")
+
+    return Response(content=markdown, media_type="text/plain")

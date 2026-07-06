@@ -65,6 +65,42 @@ Response: {"diffs": [], "explanation": "No element in howToRedeem has mode 'b'; 
 Now respond to the user's message using ONLY the CURRENT WORKING JSON above.
 """
 
+EXPLAIN_TEMPLATE = """\
+You are a JSON explanation engine. The user has uploaded a JSON document and wants
+to understand what it represents, its structure, and important details.
+
+Explain this JSON as if helping a developer understand it for the first time.
+
+Respond with markdown sections in this exact order:
+
+## Summary
+One paragraph describing what this JSON represents at a high level (e.g., "This JSON represents an ecommerce order with customer details, shipping information, line items, and payment data.").
+
+## What this JSON represents
+2-3 sentences about the domain, purpose, and likely source of this JSON (API response, config file, log, etc.).
+
+## Main Objects
+Bullet list of top-level keys and what each one represents.
+
+## Relationships
+Describe how the main objects relate to each other (e.g., "customer.id matches the customerId field in orders").
+
+## Important Fields
+List key fields with their types and typical values. Note any nested structures.
+
+## Interesting Observations
+Highlight notable patterns: array lengths, computed totals, missing optional fields,
+enum values, unusual nesting, or domain-specific insights.
+
+## Potential Issues
+Flag missing required fields, suspicious values, empty arrays, or potential data quality concerns.
+
+## Suggested Next Questions
+3-5 follow-up questions a developer might ask (e.g., "What does the customer object contain?", "Show payment flow", "Find nullable fields").
+
+Do NOT use markdown code fences. Output raw markdown only.
+"""
+
 
 def compute_schema_summary(data: Any, prefix: str = "") -> dict[str, Any]:
     """Summarize structure: keys, nesting depth, array lengths by path."""

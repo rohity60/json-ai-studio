@@ -14,6 +14,7 @@ type SessionState = {
   activeVersionId: string | null;
   loading: boolean;
   error: string | null;
+  explainMarkdown: string | null;
 };
 
 type SessionContextValue = {
@@ -29,6 +30,7 @@ type SessionContextValue = {
   acceptAllDiffs: () => Promise<void>;
   rejectAllDiffs: () => Promise<void>;
   refreshSession: () => Promise<void>;
+  explainJson: () => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -50,7 +52,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<SessionState>({
     sessionId: null, workingJson: {}, baselineJson: {}, versions: [],
     conversationHistory: [], activeVersionId: null,
-    loading: true, error: null,
+    loading: true, error: null, explainMarkdown: null,
     });
 
     // Hydrate from localStorage + fetch session from backend
@@ -73,6 +75,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             activeVersionId: (data.active_version_id as string) || null,
             loading: false,
             error: null,
+            explainMarkdown: null,
             });
           }).catch(() => {
             // Session load failed -- clear stale data & start fresh
@@ -108,6 +111,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         conversationHistory: [],
         loading: false,
         error: null,
+        explainMarkdown: null,
         });
       } catch (err: any) {
       if (err.message?.includes('401') || err.message?.includes('API key')) {
@@ -137,6 +141,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         baselineJson: data.before || data.parsed_json || {},
         error: null,
         loading: false,
+        explainMarkdown: null,
         }));
       } catch (err: any) {
       if (err.message?.includes('401') || err.message?.includes('API key')) {
@@ -382,6 +387,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         activeVersionId: data.active_version_id,
         loading: false,
         error: null,
+        explainMarkdown: null,
         });
       } catch (err: any) {
       toast.error(String(err));
@@ -423,6 +429,23 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
      }, [state.sessionId, state.workingJson, state.baselineJson, apiKey]);
 
 
+  const explainJson = useCallback(async () => {
+    if (!state.sessionId || !Object.keys(state.workingJson).length) return;
+    setState((prev) => ({ ...prev, loading: true }));
+    try {
+      const markdown = await api.explain(state.sessionId, state.workingJson, apiKey);
+      setState((prev) => ({
+         ...prev,
+        explainMarkdown: markdown,
+        loading: false,
+        error: null,
+         }));
+       } catch (err: any) {
+      toast.error(String(err));
+      setState((prev) => ({ ...prev, error: String(err), loading: false }));
+       }
+     }, [state.sessionId, state.workingJson, apiKey]);
+
   const exportJson = useCallback(() => {
     if (!state.sessionId) return;
       // build a data-URI blob for download
@@ -436,7 +459,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   if (state.loading) return null;
 
   return (
-      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession }}>
+      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson }}>
         {children}
       </SessionContext.Provider>
     );

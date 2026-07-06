@@ -7,13 +7,14 @@ import DiffViewer from '@/components/DiffViewer';
 import JSONTree from '@/components/JSONTree';
 import VersionSidebar from '@/components/VersionSidebar';
 import { useSession } from '@/context/SessionContext';
-import { FileJson2, MessageSquare, Code2, LayoutList } from 'lucide-react';
+import { FileJson2, MessageSquare, Code2, LayoutList, Sparkles } from 'lucide-react';
+import ExplainPanel from '@/components/ExplainPanel';
 
 export default function Home() {
-  const { state, createSession, uploadJson } = useSession();
+  const { state, createSession, uploadJson, explainJson } = useSession();
  
   const [activeTab, setActiveTab] = useState<'chat' | 'upload'>('chat');
-  const [previewTab, setPreviewTab] = useState<'preview' | 'diff'>('preview');
+  const [previewTab, setPreviewTab] = useState<'preview' | 'diff' | 'explain'>('preview');
   const [showSidebar, setShowSidebar] = useState(false);
 
    // Derive displayed json from context workingJson.
@@ -46,7 +47,16 @@ export default function Home() {
             {Object.keys(json).length === 0 && (<button onClick={() => createSession('My Config')}
               className="px-4 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700">
               New Session</button>
-            )}
+               )}
+              {Object.keys(json).length > 0 && (
+                <button onClick={() => explainJson()}
+                 disabled={state.loading}
+                 className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1"
+                >
+                  <Sparkles className="w-4 h-4" />
+                 Explain
+                </button>
+              )}
             <button onClick={() => setShowSidebar(!showSidebar)}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors" title="Toggle sidebar">
               <LayoutList className="w-5 h-5" />
@@ -89,6 +99,11 @@ export default function Home() {
                 className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
                   previewTab === 'diff' ? 'bg-purple-100 text-purple-700' : 'hover:bg-gray-100'}`}>
                  Diff Viewer</button>
+
+               <button onClick={() => setPreviewTab("explain")}
+                 className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                   previewTab === "explain" ? "bg-purple-100 text-purple-700" : "hover:bg-gray-100"}`}>
+                 Explanation</button>
               </div>
               <span className="text-xs text-muted-foreground">
                 {Object.keys(json).length > 0 ? `${Object.keys(json).length} keys` : 'Empty'}
@@ -110,6 +125,16 @@ export default function Home() {
                   ? <DiffViewer before={state.baselineJson} after={json} />
                   : <div className="flex items-center justify-center h-full text-muted-foreground">No diff data available</div>
               )}
+
+                {previewTab === "explain" && (
+                    <ExplainPanel
+                      markdown={state.explainMarkdown || ""}
+                      onBack={() => setPreviewTab("preview")}
+                      onRetry={() => explainJson()}
+                      loading={state.loading}
+                      error={state.error}
+                    />
+                )}
             </div>
           </div>
 

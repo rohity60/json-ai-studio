@@ -169,7 +169,7 @@ class GatewayService:
         if profile and profile in cls.AI_PROFILES:
             return cls.AI_PROFILES[profile]
         return "ollama/gemma4:12b"
-        #return "gemma-4-26b-a4b-it"
+        # return "gemma-4-26b-a4b-it"
 
     @classmethod
     def _make_usage_event(
@@ -288,13 +288,13 @@ class GatewayService:
 
         start_time = time.monotonic()
         try:
-              # Select deployment for this model
+            # Select deployment for this model
             deployment = DeploymentRegistry.pick(resolved_model)
             litellm_model = (
-                 resolved_model
-                 if resolved_model.startswith(deployment.model_prefix)
-                 else f"{deployment.model_prefix}{resolved_model}"
-             )
+                resolved_model
+                if resolved_model.startswith(deployment.model_prefix)
+                else f"{deployment.model_prefix}{resolved_model}"
+            )
 
             logger.info(
                 "invoke session=%s model=%s deployment=%s api_key=%s",
@@ -302,14 +302,16 @@ class GatewayService:
                 resolved_model,
                 deployment.name,
                 api_key[:8] + "...",
-               )
+            )
 
-              # Emit deployment selection event
-            yield 'event: deployment\ndata: ' + json.dumps({
+            # Emit deployment selection event
+            yield "event: deployment\ndata: " + json.dumps(
+                {
                     "model": resolved_model,
                     "deployment": deployment.name,
                     "provider": deployment.model_prefix,
-                }) + "\n\n"
+                }
+            ) + "\n\n"
 
             response = await litellm.acompletion(
                 model=litellm_model,
@@ -323,7 +325,7 @@ class GatewayService:
                 reasoning_effort="none",
                 timeout=120.0,
                 stream_options={"include_usage": True},
-               )
+            )
 
             content_parts: list[str] = []
             last_chunk = None
@@ -470,6 +472,105 @@ class GatewayService:
             yield "event: error\ndata: " + json.dumps(
                 {"error": str(e), "latency_ms": latency_ms}
             ) + "\n\n"
+
+    @classmethod
+    async def explain(
+        cls,
+        session_id: str,
+        api_key: str,
+        working_json: dict[str, Any],
+    ) -> str:
+        """Explain a JSON document. Calls LLM, collects response, returns markdown.
+
+        Thin wrapper around invoke(): streams content, deducts credits,
+        then returns the combined markdown as a plain string.
+        """
+        from .prompting import EXPLAIN_TEMPLATE
+
+        resolved_model = cls._resolve_model(None, None)
+        cls._ensure_credits(api_key)
+        cls._check_credits(api_key)
+
+        deployment = DeploymentRegistry.pick(resolved_model)
+        litellm_model = (
+            resolved_model
+            if resolved_model.startswith(deployment.model_prefix)
+            else f"{deployment.model_prefix}{resolved_model}"
+        )
+
+        system_prompt = EXPLAIN_TEMPLATE
+
+        content_parts: list[str] = []
+        last_chunk = None
+
+        response = await litellm.acompletion(
+            model=litellm_model,
+            base_url=deployment.base_url,
+            api_key=deployment.api_key or None,
+            messages=[
+                {"role": "system", "content": system_prompt},
+{"role": "user", "content": "Here is the JSON to explain:\n" + __import__('json').dumps(working_json, indent=2)},
+            ],
+            stream=True,
+            reasoning_effort="none",
+            timeout=120.0,
+            stream_options={"include_usage": True},
+        )
+        async for chunk in response:
+            last_chunk = chunk
+            if not getattr(chunk, "choices", None):
+                continue
+            delta = chunk.choices[0].delta
+            if isinstance(delta, dict):
+                text = delta.get("content")
+            else:
+                text = getattr(delta, "content", None)
+            if text:
+                content_parts.append(text)
+
+        combined = "".join(content_parts)
+
+        # Usage tracking (same pattern as invoke)
+        prompt_tokens = 0
+        completion_tokens = 0
+        if last_chunk is not None:
+            chunk_usage = getattr(last_chunk, "usage", None)
+            if chunk_usage is not None:
+                if isinstance(chunk_usage, dict):
+                    prompt_tokens = chunk_usage.get("prompt_tokens", 0) or 0
+                    completion_tokens = chunk_usage.get("completion_tokens", 0) or 0
+                else:
+                    try:
+                        usage_dict = vars(chunk_usage)
+                        prompt_tokens = usage_dict.get("prompt_tokens", 0) or 0
+                        completion_tokens = usage_dict.get("completion_tokens", 0) or 0
+                    except Exception:
+                        pass
+
+        cost_usd = cls._calculate_cost(prompt_tokens, completion_tokens, resolved_model)
+        credits_used = cls._calculate_credits(cost_usd)
+        total_tokens = prompt_tokens + completion_tokens
+        cls._deduct_credits(api_key, credits_used, total_tokens)
+        cls._log_usage(
+            session_id,
+            api_key,
+            {
+                "request_id": uuid.uuid4().hex,
+                "api_key": api_key,
+                "session_id": session_id,
+                "model": resolved_model,
+                "provider": "ollama",
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "cost_usd": cost_usd,
+                "credits_used": credits_used,
+                "feature": "explain-json",
+                "status": "success",
+            },
+        )
+
+        return combined
 
     @classmethod
     def get_usage(cls, session_id: str) -> list[dict[str, Any]]:
