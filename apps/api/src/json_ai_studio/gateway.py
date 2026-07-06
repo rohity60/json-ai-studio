@@ -17,7 +17,6 @@ from typing import Any, AsyncGenerator
 
 import litellm
 from fastapi import HTTPException
-from openai.types.responses.responses_client_event_param import StreamOptions
 
 from .deployment import DeploymentConfig, DeploymentRegistry
 
@@ -306,7 +305,7 @@ class GatewayService:
                )
 
               # Emit deployment selection event
-            yield f'event: deployment\ndata' + json.dumps({
+            yield 'event: deployment\ndata: ' + json.dumps({
                     "model": resolved_model,
                     "deployment": deployment.name,
                     "provider": deployment.model_prefix,
@@ -330,10 +329,18 @@ class GatewayService:
             last_chunk = None
             async for chunk in response:
                 last_chunk = chunk
-                text = chunk.choices[0].delta.get("content")
+                if not getattr(chunk, "choices", None):
+                    continue
+                delta = chunk.choices[0].delta
+                if isinstance(delta, dict):
+                    text = delta.get("content")
+                else:
+                    text = getattr(delta, "content", None)
                 if text:
                     content_parts.append(text)
-                    yield "event: thinking\ndata" + json.dumps({"text": text}) + "\n\n"
+                    yield "event: thinking\ndata: " + json.dumps(
+                        {"text": text}
+                    ) + "\n\n"
 
             combined = "".join(content_parts)
             logger.info("invoke session=%s response_len=%d", session_id, len(combined))
@@ -460,7 +467,7 @@ class GatewayService:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            yield "event: error\ndata" + json.dumps(
+            yield "event: error\ndata: " + json.dumps(
                 {"error": str(e), "latency_ms": latency_ms}
             ) + "\n\n"
 

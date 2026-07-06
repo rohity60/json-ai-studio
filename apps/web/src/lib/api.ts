@@ -133,6 +133,36 @@ export async function selectVersion(
     return await res.json();
 }
 
+/** Parse one complete SSE event block into {type, data}, or null.
+ *  Tolerates both "data: {...}" (spec) and legacy "data{...}" payload lines. */
+function parseSseBlock(block: string): {type: string; data: any} | null {
+    let eventType: string | null = null;
+    const dataLines: string[] = [];
+
+    for (const line of block.split('\n')) {
+        const trimmedLine = line.trim();
+        if (!trimmedLine) continue;
+
+        if (trimmedLine.startsWith('event:')) {
+            eventType = trimmedLine.substring(6).trim();
+            dataLines.length = 0; // reset payload on new event start
+        } else if (trimmedLine.startsWith('data')) {
+            // Strip "data:", "data: ", or bare "data" prefix
+            dataLines.push(trimmedLine.replace(/^data:?\s?/, ''));
+        }
+    }
+
+    if (!eventType) return null;
+
+    const rawData = dataLines.join('\n').trim();
+    try {
+        return {type: eventType, data: JSON.parse(rawData)};
+    } catch {
+        // Fallback: treat as raw text payload
+        return {type: eventType, data: {text: rawData}};
+    }
+}
+
 export async function* streamChat(sessionId: string, message: string, workingJson: object | null, apiKey: string) {
     console.log('[api] streamChat ENTRY: sessionId=', sessionId.slice(0, 8), 'msgLen=', message.length, 'wjKeys=', workingJson ? Object.keys(workingJson).length : 'null');
 
@@ -143,93 +173,50 @@ export async function* streamChat(sessionId: string, message: string, workingJso
         formData.append('working_json_str', JSON.stringify(workingJson));
     }
 
-    console.log('[api] streamChat POSTING to /api/chat...');
-    const fetchStart = performance.now();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 120_000); // 2 min timeout to prevent infinite hangs
     try {
         const res = await fetch(`${BASE}/chat`, {method: 'POST', headers: {'X-API-Key': apiKey}, body: formData, signal: controller.signal});
-        console.log('[api] streamChat fetch response: status=' + res.status, 'elapsedMs=' + (performance.now() - fetchStart).toFixed(0));
         if (!res.ok) throw new Error(`Chat failed: ${await res.text()}`);
 
         const reader = res.body!.getReader();
-        console.log('[api] streamChat SSE reader acquired');
         const decoder = new TextDecoder();
-        let chunkIndex = 0;
-        let buffer = ''; // Accumulates raw decoded text chunk by chunk
-        let eventTypeCache: string | null = null; // State tracker for the current event type
-        console.log('[api] streamChat SSE reader acquired');
+        let buffer = ''; // Accumulates raw decoded text across reads
 
         while (true) {
-            chunkIndex++
-            console.log('[api] streamChat calling reader.read() #cycle=' + chunkIndex);
-            const startTimeMs = performance.now();
             const {done, value} = await reader.read();
-            const elapsed = performance.now() - startTimeMs;
-            console.log('[api] streamChat reader.read() returned: done=' + done + ' bytes=' + (value ? value.length : 0) + ' cycleElapsedMs=' + elapsed.toFixed(0));
-            if (done) break;
-
+            if (done) {
+                buffer += decoder.decode(); // flush decoder state
+                break;
+            }
             buffer += decoder.decode(value, {stream: true});
-               // Process the entire accumulated buffer for complete SSE chunks
-            let currentBuffer = buffer;
-            buffer = ''; // Clear buffer for next read cycle
 
-               // Splits by \n\n or handles last line if it's not followed by a blank line
-            const potentialChunks = currentBuffer.split(/\r?\n\r?\n/);
+            // Split on blank lines; the last element may be an incomplete
+            // event still arriving, so keep it in the buffer for the next read.
+            const blocks = buffer.split(/\r?\n\r?\n/);
+            buffer = blocks.pop() ?? '';
 
-            for (const chunk of potentialChunks) {
-                if (!chunk) continue;
+            for (const block of blocks) {
+                if (!block.trim()) continue;
+                const parsed = parseSseBlock(block);
+                if (parsed) yield parsed;
+            }
+        }
 
-                let lines = chunk.split('\n'); // Split the single chunk into raw lines
-                let tempEventType: string | null = null;
-                let dataLines: string[] = [];
-
-                   // Process line-by-line within this complete SSE message block
-                for (const line of lines) {
-                    const trimmedLine = line.trim();
-                    if (!trimmedLine) continue;
-
-                    if (trimmedLine.startsWith('event: ')) {
-                        tempEventType = trimmedLine.substring(7).trim();
-                        dataLines = []; // Reset data payload on new event start
-                        continue;
-                       } else if (trimmedLine.startsWith('data')) {
-                        let dataPayload = trimmedLine.substring(4).trim();
-                           // Handle continuation lines (if payload starts with 'data:' but follows another 'data:')
-                        dataLines.push(dataPayload);
-                       }
-                   }
-
-                if (!tempEventType) continue; // Must have an event type to yield anything
-
-                const combinedData = dataLines.join('\n');
-                let eventType = tempEventType;
-                let rawData = combinedData.trim();
-
-                   // Attempt JSON parse for final payload
-                try {
-                    const dataObject = JSON.parse(rawData);
-                    console.log('[api] streamChat yield chunk (parsed): type=' + eventType + ' keys=' + Object.keys(dataObject).join(','));
-                    yield {type: eventType, data: dataObject};
-
-                   } catch (e) {
-                       // Fallback: Treat as raw text payload
-                    console.log('[api] streamChat yield chunk (raw): type=' + eventType);
-                    yield {type: eventType, data: {text: rawData}};
-                   }
-
-               }
-           } // End while(true) loop
-
-           // Final error handling remains outside the streaming logic
-        } catch (err: any) {
-            clearTimeout(timeoutId);
-            if (err.name === 'AbortError') {
-                throw new Error('LLM request timed out. Server may be slow or unavailable.');
-              }
-            console.error('[api] streamChat error in fetch/reader:', err?.message || String(err));
-            throw err;
-          }
+        // Emit any final event that wasn't followed by a trailing blank line
+        if (buffer.trim()) {
+            const parsed = parseSseBlock(buffer);
+            if (parsed) yield parsed;
+        }
+    } catch (err: any) {
+        if (err.name === 'AbortError') {
+            throw new Error('LLM request timed out. Server may be slow or unavailable.');
+        }
+        console.error('[api] streamChat error in fetch/reader:', err?.message || String(err));
+        throw err;
+    } finally {
+        clearTimeout(timeoutId);
+    }
 }
 
 export async function acceptDiffBatch(sessionId: string, apiKey: string) {
