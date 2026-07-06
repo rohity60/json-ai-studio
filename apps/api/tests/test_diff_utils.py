@@ -453,3 +453,17 @@ class TestNormalizeEntry:
     def test_rejects_non_dict(self):
         assert normalize_entry("nope") is None
         assert normalize_entry(None) is None
+
+
+class TestParseRepair:
+    def test_trailing_comma_in_object_and_array(self):
+        text = '{"diffs": [{"path": "/a", "operation": "modify", "new_value": 1,},], "explanation": "ok",}'
+        diffs, explanation = parse_llm_response(text)
+        assert len(diffs) == 1
+        assert diffs[0]["path"] == "/a"
+        assert explanation == "ok"
+
+    def test_trailing_comma_in_bare_array(self):
+        text = '[{"path": "/a", "operation": "delete"},]'
+        diffs, _ = parse_llm_response(text)
+        assert len(diffs) == 1

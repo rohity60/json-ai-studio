@@ -120,6 +120,7 @@ async def _stream_llm(
 
         combined = "".join(content_parts)
         logger.info("chat stream finished response_len=%d", len(combined))
+        logger.info("llm raw output: %s", combined[:2000])
 
         if error_payload is not None:
             yield _sse(
@@ -136,8 +137,18 @@ async def _stream_llm(
             return
 
         diffs, explanation = parse_llm_response(combined)
+        logger.info(
+            "parsed llm response: diffs=%d explanation=%r",
+            len(diffs),
+            explanation[:300],
+        )
 
         if not diffs:
+            logger.warning(
+                "no diffs parsed from llm output (len=%d); "
+                "returning explanation only",
+                len(combined),
+            )
             yield _sse(
                 "complete",
                 {
@@ -150,6 +161,12 @@ async def _stream_llm(
             return
 
         merged, applied, failed = DiffUtils.apply_all_verbose(diffs, working_json)
+        logger.info(
+            "diff application: applied=%d failed=%d%s",
+            len(applied),
+            len(failed),
+            " reasons=" + "; ".join(r for _, r in failed) if failed else "",
+        )
 
         for diff in applied:
             entry = {**diff, "id": str(uuid4())}

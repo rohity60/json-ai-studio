@@ -267,6 +267,7 @@ class DiffUtils:
 # ---------------------------------------------------------------------------
 
 _FENCE_RE = re.compile(r"^```[\w-]*[ \t]*\r?\n(.*?)\r?\n?```\s*$", re.DOTALL)
+_TRAILING_COMMA_RE = re.compile(r",\s*([\]}])")
 
 
 def normalize_entry(d: Any) -> dict[str, Any] | None:
@@ -334,17 +335,24 @@ def parse_llm_response(text: str | None) -> tuple[list[dict[str, Any]], str]:
     body = fence.group(1).strip() if fence else raw
 
     decoder = json.JSONDecoder()
-    for i, ch in enumerate(body):
-        if ch not in "[{":
-            continue
-        try:
-            value, end = decoder.raw_decode(body[i:])
-        except ValueError:
-            continue
-        coerced = _coerce_diffs(value)
-        if coerced is None:
-            continue
-        diffs, explanation = coerced
-        surrounding = (body[:i] + " " + body[i + end :]).strip()
-        return diffs, explanation or surrounding
+    candidates = [body]
+    # Second pass with trailing commas stripped -- the most common JSON
+    # defect from small local models ({"a": 1,} / [1, 2,]).
+    repaired = _TRAILING_COMMA_RE.sub(r"\1", body)
+    if repaired != body:
+        candidates.append(repaired)
+    for candidate in candidates:
+        for i, ch in enumerate(candidate):
+            if ch not in "[{":
+                continue
+            try:
+                value, end = decoder.raw_decode(candidate[i:])
+            except ValueError:
+                continue
+            coerced = _coerce_diffs(value)
+            if coerced is None:
+                continue
+            diffs, explanation = coerced
+            surrounding = (candidate[:i] + " " + candidate[i + end :]).strip()
+            return diffs, explanation or surrounding
     return [], body
