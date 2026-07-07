@@ -39,6 +39,10 @@ async def endpoint_explain(
 
     try:
         markdown = await GatewayService.explain(session_id, _auth, working_json)
+    except HTTPException:
+        # Rate limit / credit errors (429/402) must reach the client with their
+        # own status, not be swallowed into a generic 500.
+        raise
     except Exception as e:
         logger.exception("explain failed session=%s", session_id)
         raise HTTPException(status_code=500, detail=f"Explain failed: {e}")

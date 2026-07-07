@@ -117,6 +117,7 @@ class GatewayService:
                 raise HTTPException(
                     status_code=429,
                     detail="Per-minute token limit exceeded",
+                    headers={"Retry-After": "60"},
                 )
 
     @classmethod
@@ -284,7 +285,30 @@ class GatewayService:
         """Full LLM pipeline: credit check -> stream -> diff -> cost -> deduct -> log."""
         resolved_model = GatewayService._resolve_model(model, profile)
         GatewayService._ensure_credits(api_key)
-        GatewayService._check_credits(api_key)
+        # Model-level rate limit: surface as a clean SSE "rate_limit" event the
+        # client can turn into a popup, instead of leaking a generic error.
+        try:
+            GatewayService._check_credits(api_key)
+        except HTTPException as exc:
+            if exc.status_code == 429:
+                retry_after = 60
+                if exc.headers:
+                    try:
+                        retry_after = int(exc.headers.get("Retry-After", retry_after))
+                    except (TypeError, ValueError):
+                        pass
+                yield "event: rate_limit\ndata: " + json.dumps(
+                    {
+                        "scope": "model",
+                        "message": (
+                            "You're sending requests too quickly. Please wait a "
+                            "moment and try again."
+                        ),
+                        "retry_after": retry_after,
+                    }
+                ) + "\n\n"
+                return
+            raise
 
         start_time = time.monotonic()
         try:
@@ -516,7 +540,7 @@ class GatewayService:
                 },
             ],
             stream=True,
-            reasoning_effort="default",
+            reasoning_effort="none",
             timeout=120.0,
             stream_options={"include_usage": True},
         )

@@ -4,6 +4,18 @@
 // In prod: /api (relative, served by reverse proxy like nginx)
 const BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
+/** Build an Error from a non-OK response, carrying the HTTP status and the
+ *  Retry-After hint (seconds) so callers can detect 429 rate limits and show
+ *  a popup with a countdown. */
+async function httpError(res: Response, prefix: string): Promise<Error> {
+    const body = await res.text().catch(() => '');
+    const err: any = new Error(`${prefix}: ${body || res.status}`);
+    err.status = res.status;
+    const retryAfter = res.headers.get('Retry-After');
+    if (retryAfter) err.retryAfter = Number(retryAfter);
+    return err;
+}
+
 export async function createSession(name: string, apiKey: string) {
     console.log('[api] createSession ENTRY, name:', name);
     const res = await fetch(`${BASE}/sessions`, {
@@ -11,7 +23,7 @@ export async function createSession(name: string, apiKey: string) {
         headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
         body: JSON.stringify({name}),
     });
-    if (!res.ok) throw new Error(`Failed to create session: ${await res.text()}`);
+    if (!res.ok) throw await httpError(res, 'Failed to create session');
     console.log('[api] createSession OK, status:', res.status);
     return await res.json();
 }
@@ -79,7 +91,7 @@ export async function uploadJson(
     if (sessionId) formData.append('session_id', sessionId);
 
     const res = await fetch(`${BASE}/json/upload`, {method: 'POST', headers: {'X-API-Key': apiKey}, body: formData});
-    if (!res.ok) throw new Error(`Upload failed: ${await res.text()}`);
+    if (!res.ok) throw await httpError(res, 'Upload failed');
     console.log('[api] uploadJson OK, status:', res.status);
     return await res.json();
 }
@@ -208,7 +220,7 @@ export async function* streamChat(sessionId: string, message: string, workingJso
     const timeoutId = setTimeout(() => controller.abort(), 120_000); // 2 min timeout to prevent infinite hangs
     try {
         const res = await fetch(`${BASE}/chat`, {method: 'POST', headers: {'X-API-Key': apiKey}, body: formData, signal: controller.signal});
-        if (!res.ok) throw new Error(`Chat failed: ${await res.text()}`);
+        if (!res.ok) throw await httpError(res, 'Chat failed');
 
         const reader = res.body!.getReader();
         const decoder = new TextDecoder();
@@ -278,6 +290,6 @@ export async function explain(
         headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
         body: JSON.stringify({sessionId, workingJson}),
        });
-    if (!res.ok) throw new Error(`Explain failed: ${await res.text()}`);
+    if (!res.ok) throw await httpError(res, 'Explain failed');
     return await res.text();
 }

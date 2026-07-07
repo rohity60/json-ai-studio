@@ -28,6 +28,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["content-type", "x-api-key"],
+    expose_headers=["Retry-After"],
     max_age=86400,
 )
 

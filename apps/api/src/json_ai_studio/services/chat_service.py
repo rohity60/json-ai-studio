@@ -67,6 +67,7 @@ async def _stream_llm(
 
         content_parts: list[str] = []
         error_payload: dict[str, Any] | None = None
+        rate_limited = False
         async for event_text in GatewayService.invoke(
             "chat-session", message, api_key, system_prompt
         ):
@@ -78,6 +79,13 @@ async def _stream_llm(
                     content_parts.append(text)
             elif event == "error" and payload is not None:
                 error_payload = payload
+            elif event == "rate_limit":
+                rate_limited = True
+
+        # The rate_limit event was already forwarded to the client; stop here
+        # so we don't emit a misleading "complete" with an empty explanation.
+        if rate_limited:
+            return
 
         combined = "".join(content_parts)
         logger.info("chat stream finished response_len=%d", len(combined))

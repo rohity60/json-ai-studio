@@ -75,7 +75,11 @@ async def require_api_key(request: Request) -> str:
     if not _limiter.allow(key):
         raise HTTPException(
             status_code=429,
-            detail=f"Rate limited. {_RATE_LIMIT} requests per {_RATE_WINDOW}s window.",
+            detail=(
+                f"Rate limit reached: {_RATE_LIMIT} requests per "
+                f"{_RATE_WINDOW}s. Please try again in a moment."
+            ),
+            headers={"Retry-After": str(_RATE_WINDOW)},
         )
 
     return key

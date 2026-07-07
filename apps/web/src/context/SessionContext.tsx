@@ -5,6 +5,13 @@ import ReactDOM from 'react-dom';
 import { toast } from 'sonner';
 import * as api from '../lib/api';
 import { saveWorkspace, loadWorkspace, clearWorkspace } from '../lib/versionCache';
+import { showRateLimitModal } from '../components/RateLimitModal';
+
+// A request is rate-limited when the backend answered HTTP 429 (status carried
+// on the error) or the message otherwise mentions 429.
+function isRateLimited(err: any): boolean {
+  return err?.status === 429 || /\b429\b/.test(String(err?.message || ''));
+}
 
 type SessionVersion = {
   id: string;
@@ -209,10 +216,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainError: null,
         });
       } catch (err: any) {
-      if (err.message?.includes('401') || err.message?.includes('API key')) {
+      if (isRateLimited(err)) {
+        showRateLimitModal({ scope: 'api', retryAfter: err.retryAfter });
+        } else if (err.message?.includes('401') || err.message?.includes('API key')) {
         toast.error('Auth required. Refresh the page to get a new key.');
-        } else if (err.message?.includes('429')) {
-        toast.warning('Rate limited. Wait a moment before trying again.');
         } else {
         toast.error(String(err));
         }
@@ -240,10 +247,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainError: null,
         }));
       } catch (err: any) {
-      if (err.message?.includes('401') || err.message?.includes('API key')) {
+      if (isRateLimited(err)) {
+        showRateLimitModal({ scope: 'api', retryAfter: err.retryAfter });
+        } else if (err.message?.includes('401') || err.message?.includes('API key')) {
         toast.error('Auth required. Refresh page to get a new key.');
-        } else if (err.message?.includes('429')) {
-        toast.warning('Rate limited. Wait a moment before trying again.');
         } else {
         toast.error(String(err));
         }
@@ -292,6 +299,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       for await (const chunk of api.streamChat(state.sessionId, message, currentWorkingJson, apiKey)) {
         chunkCount++;
         console.log('[SessionContext] Chunk #' + chunkCount + ':', JSON.stringify(chunk).slice(0, 200));
+
+        // Model-level rate limit: backend streams a `rate_limit` event instead
+        // of a diff/complete. Show the popup and stop consuming the stream.
+        if (chunk.type === 'rate_limit') {
+          showRateLimitModal({
+            scope: chunk.data?.scope || 'model',
+            message: chunk.data?.message,
+            retryAfter: chunk.data?.retry_after,
+          });
+          break;
+          }
+
         let structureChanged = false;
 
         if (chunk.type === 'diff' && chunk.data.entry) {
@@ -359,10 +378,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
       } catch (err: any) {
       console.error('[SessionContext] sendMessage caught exception:', err?.message || String(err));
-      if (err.message?.includes('401') || err.message?.includes('API key')) {
+      if (isRateLimited(err)) {
+        showRateLimitModal({ scope: 'api', retryAfter: err.retryAfter });
+        } else if (err.message?.includes('401') || err.message?.includes('API key')) {
         toast.error('API key rejected. Refresh page.');
-        } else if (err.message?.includes('429')) {
-        toast.warning('Rate limited. Wait before retrying.');
         } else {
         toast.error(String(err));
         }
@@ -541,7 +560,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainError: null,
          }));
        } catch (err: any) {
-      toast.error(String(err));
+      if (isRateLimited(err)) {
+        showRateLimitModal({ scope: 'model', retryAfter: err.retryAfter });
+        } else {
+        toast.error(String(err));
+        }
       setState((prev) => ({ ...prev, explainError: String(err), explaining: false }));
        }
      }, [state.sessionId, state.workingJson, apiKey]);
