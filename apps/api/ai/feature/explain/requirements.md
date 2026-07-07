@@ -54,8 +54,10 @@ This JSON represents...
 |---|-------------|----------|
 | P-01 | New file `prompting_explain.py` (or new section in `prompting.py`) with `EXPLAIN_TEMPLATE` string. | MVP |
 | P-02 | Template instructs LLM to explain JSON as if helping a developer understand it for the first time. | MVP |
-| P-03 | Must include sections: Summary, What this JSON represents, Main Objects, Relationships, Important Fields, Interesting Observations, Potential Issues, Suggested Next Questions. | MVP |
+| P-03 | Must include sections: Summary, What this JSON represents, Domain Concepts, Main Objects, Relationships, Important Fields, Interesting Observations, Potential Issues, Suggested Next Questions. | MVP |
 | P-04 | Output must be valid markdown. No code fences. | MVP |
+| P-05 | Template contains general DOMAIN AWARENESS guidelines: the LLM identifies the domain from the keys/values present in the payload and explains only the domain concepts tied to those keys (lifecycles, naming/unit conventions, enum meanings). No hardcoded per-domain knowledge in code. | MVP |
+| P-06 | Secret-like fields (secret, token, api_key, password): LLM assesses strength and flags weak/placeholder values, but never repeats the value in the explanation. | MVP |
 
 ---
 
