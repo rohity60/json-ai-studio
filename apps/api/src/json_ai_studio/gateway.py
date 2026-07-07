@@ -509,10 +509,14 @@ class GatewayService:
             api_key=deployment.api_key or None,
             messages=[
                 {"role": "system", "content": system_prompt},
-{"role": "user", "content": "Here is the JSON to explain:\n" + __import__('json').dumps(working_json, indent=2)},
+                {
+                    "role": "user",
+                    "content": "Here is the JSON to explain:\n"
+                    + json.dumps(working_json, indent=2),
+                },
             ],
             stream=True,
-            reasoning_effort="none",
+            reasoning_effort="default",
             timeout=120.0,
             stream_options={"include_usage": True},
         )

@@ -14,7 +14,7 @@ export default function Home() {
   const { state, createSession, uploadJson, explainJson } = useSession();
  
   const [activeTab, setActiveTab] = useState<'chat' | 'upload'>('chat');
-  const [previewTab, setPreviewTab] = useState<'preview' | 'diff' | 'explain'>('preview');
+  const [previewTab, setPreviewTab] = useState<'preview' | 'diff'>('preview');
   const [showSidebar, setShowSidebar] = useState(false);
 
    // Derive displayed json from context workingJson.
@@ -48,15 +48,6 @@ export default function Home() {
               className="px-4 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700">
               New Session</button>
                )}
-              {Object.keys(json).length > 0 && (
-                <button onClick={() => explainJson()}
-                 disabled={state.loading}
-                 className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1"
-                >
-                  <Sparkles className="w-4 h-4" />
-                 Explain
-                </button>
-              )}
             <button onClick={() => setShowSidebar(!showSidebar)}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors" title="Toggle sidebar">
               <LayoutList className="w-5 h-5" />
@@ -100,10 +91,6 @@ export default function Home() {
                   previewTab === 'diff' ? 'bg-purple-100 text-purple-700' : 'hover:bg-gray-100'}`}>
                  Diff Viewer</button>
 
-               <button onClick={() => setPreviewTab("explain")}
-                 className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                   previewTab === "explain" ? "bg-purple-100 text-purple-700" : "hover:bg-gray-100"}`}>
-                 Explanation</button>
               </div>
               <span className="text-xs text-muted-foreground">
                 {Object.keys(json).length > 0 ? `${Object.keys(json).length} keys` : 'Empty'}
@@ -114,7 +101,28 @@ export default function Home() {
             <div className="flex-1 p-4 overflow-auto">
               {previewTab === 'preview' && (
               json
-                  ? <JSONTree data={json} name="Working JSON" />
+                  ? <>
+                      <JSONTree data={json} name="Working JSON" />
+                      {Object.keys(json).length > 0 && (
+                        <div className="mt-4 flex justify-center">
+                          <button onClick={() => explainJson()}
+                           disabled={state.explaining}
+                           className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1"
+                          >
+                            <Sparkles className="w-4 h-4" />
+                            {state.explaining ? 'Explaining...' : 'Explain'}
+                          </button>
+                        </div>
+                      )}
+                      {(state.explaining || state.explainError || state.explainMarkdown) && (
+                        <ExplainPanel
+                          markdown={state.explainMarkdown || ''}
+                          onRetry={() => explainJson()}
+                          loading={state.explaining}
+                          error={state.explainError}
+                        />
+                      )}
+                    </>
                   : <div className="flex items-center justify-center h-full text-muted-foreground flex-col gap-4">
                       <FileJson2 className="w-16 h-16 text-gray-300" />
                       <p className="text-sm text-center">Upload a JSON file or use AI chat to start</p>
@@ -126,15 +134,6 @@ export default function Home() {
                   : <div className="flex items-center justify-center h-full text-muted-foreground">No diff data available</div>
               )}
 
-                {previewTab === "explain" && (
-                    <ExplainPanel
-                      markdown={state.explainMarkdown || ""}
-                      onBack={() => setPreviewTab("preview")}
-                      onRetry={() => explainJson()}
-                      loading={state.loading}
-                      error={state.error}
-                    />
-                )}
             </div>
           </div>
 

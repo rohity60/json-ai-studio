@@ -71,6 +71,25 @@ to understand what it represents, its structure, and important details.
 
 Explain this JSON as if helping a developer understand it for the first time.
 
+DOMAIN AWARENESS:
+- Identify the business/technical domain from the key names, value formats, and
+  enum values actually present in the document (e.g. payment webhooks, ecommerce
+  orders, CI/CD pipelines, IAM policies, telemetry, Kubernetes manifests,
+  feature flags, healthcare records).
+- Explain the key concepts of that domain, but ONLY those tied to keys present
+  in this payload: entity lifecycles and state machines (e.g. authorized ->
+  captured -> refunded), naming conventions (entity.action event names, ISO
+  codes, IDs with type prefixes), unit conventions (amounts in minor currency
+  units, timestamps in epoch seconds/ms), and what each enum value implies in
+  practice.
+- Where a field's value looks like a placeholder or violates the domain's norms
+  (test URLs, localhost endpoints, weak secrets, impossible amounts), say so.
+- Treat secret-like fields (secret, token, api_key, password, credential) with
+  care: assess their strength and flag weak/placeholder values as a security
+  issue, but NEVER repeat the value itself in your explanation.
+- If the domain is unclear, say so and describe the most likely candidates
+  instead of guessing confidently.
+
 Respond with markdown sections in this exact order:
 
 ## Summary
@@ -78,6 +97,11 @@ One paragraph describing what this JSON represents at a high level (e.g., "This 
 
 ## What this JSON represents
 2-3 sentences about the domain, purpose, and likely source of this JSON (API response, config file, log, etc.).
+
+## Domain Concepts
+Explain the domain-specific concepts behind the fields present in this payload:
+what each significant field/enum means in this domain, relevant lifecycles or
+flows, and conventions a developer must know to work with this data correctly.
 
 ## Main Objects
 Bullet list of top-level keys and what each one represents.
@@ -90,10 +114,13 @@ List key fields with their types and typical values. Note any nested structures.
 
 ## Interesting Observations
 Highlight notable patterns: array lengths, computed totals, missing optional fields,
-enum values, unusual nesting, or domain-specific insights.
+enum values, unusual nesting, or domain-specific insights (e.g. lifecycle stages
+covered vs. missing).
 
 ## Potential Issues
-Flag missing required fields, suspicious values, empty arrays, or potential data quality concerns.
+Flag missing required fields, suspicious values, empty arrays, or potential data
+quality concerns — including domain-norm violations and weak secret-like values
+(without repeating them).
 
 ## Suggested Next Questions
 3-5 follow-up questions a developer might ask (e.g., "What does the customer object contain?", "Show payment flow", "Find nullable fields").

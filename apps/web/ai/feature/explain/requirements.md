@@ -8,14 +8,13 @@ Derived from PRD `explain-feature.prd`. Only what the **client / UI layer** must
 
 | # | Requirement | Priority |
 |---|-------------|----------|
-| U-01 | Add "Explain" button to the left panel header (next to "New Session" button). | MVP |
-| U-02 | When JSON is empty (`Object.keys(json).length === 0`), "Explain" button is disabled. | MVP |
-| U-03 | Clicking "Explain" calls `POST /api/explain` with current `workingJson` and `sessionId`. | MVP |
-| U-04 | On success, the right panel switches to an "AI Explanation" view showing the markdown response. | MVP |
-| U-05 | A "Back to JSON" button in the explanation view switches the right panel back to the JSON tree. | MVP |
-| U-06 | A "Back to Diff" button also available in the explanation view (for users who were viewing diffs). | MVP |
-| U-07 | While streaming/loading, show a spinner + "Explaining..." text. | MVP |
-| U-08 | On error, show a toast notification + "Retry" button in the right panel. | MVP |
+| U-01 | Add "Explain" button at the bottom of the Working JSON panel, rendered below the JSON tree. | MVP |
+| U-02 | When JSON is empty (`Object.keys(json).length === 0`), "Explain" button is hidden. | MVP |
+| U-03 | Clicking "Explain" calls `POST /api/explain` with current `workingJson` and `sessionId`. Uses a dedicated `explaining` flag — must NOT set the global `loading` flag (the provider unmounts the app while `loading` is true). | MVP |
+| U-04 | The explanation renders inline in a scrollable card (`max-h` + `overflow-y-auto`) below the Working JSON tree — no separate tab or view. Card is hidden until an explain is triggered. | MVP |
+| U-05 | Markdown renders with explicit element styling (headings, `strong` highlight, code chips, tables, blockquotes) via ReactMarkdown `components` — the project has no `@tailwindcss/typography` plugin, so `prose` classes do nothing. | MVP |
+| U-07 | While streaming/loading, show a spinner + "Explaining..." text inside the card. | MVP |
+| U-08 | On error, show a toast notification + "Retry" button inside the card. | MVP |
 | U-09 | The explanation is ephemeral — not saved to session state. Uploading new JSON or creating a new session clears it. | MVP |
 
 ---
@@ -27,17 +26,17 @@ Derived from PRD `explain-feature.prd`. Only what the **client / UI layer** must
 **Location:** `apps/web/src/components/ExplainPanel.tsx`
 
 Props:
-- `sessionId: string | null`
-- `workingJson: Record<string, any>`
-- `apiKey: string`
+- `markdown: string`
+- `onRetry?: () => void`
+- `loading?: boolean`
+- `error?: string | null`
 
 Behavior:
-1. Renders an "Explain" button initially.
-2. On click, calls `api.explain(sessionId, workingJson, apiKey)`.
-3. While loading: shows spinner + "Explaining..." text.
-4. On success: renders the markdown response using `react-markdown`.
-5. On error: shows error message + "Retry" button.
-6. Has a "Back" button to return to JSON/Diff views.
+1. Renders as an inline card with header ("AI Explanation" + Refresh button) and a scrollable body (`max-h-[45vh] overflow-y-auto`).
+2. While loading: shows spinner + "Explaining..." text.
+3. On success: renders the markdown via `react-markdown` with a custom `components` map for styling.
+4. On error: shows error message + "Retry" button.
+5. Parent (`page.tsx`) only mounts it when `explaining || explainError || explainMarkdown`.
 
 ### 2.2 `api.ts` — Add `explain()` Client
 
@@ -73,11 +72,17 @@ Add to `SessionContextValue`:
 explainJson: () => Promise<void>;
 ```
 
+Also add dedicated explain flags (do not reuse the global `loading`/`error`):
+```typescript
+explaining: boolean;
+explainError: string | null;
+```
+
 The `explainJson()` method:
-1. Calls `api.explain(sessionId, workingJson, apiKey)`.
-2. Sets `explainMarkdown` to the returned string.
-3. Sets `loading` to `false` when done.
-4. On error, sets `error` to the error message.
+1. Sets `explaining: true`, clears `explainError`.
+2. Calls `api.explain(sessionId, workingJson, apiKey)`.
+3. Sets `explainMarkdown` to the returned string, `explaining: false`.
+4. On error, sets `explainError` to the error message, `explaining: false`.
 
 ### 2.4 `page.tsx` — Wire Explain Button + Panel
 
@@ -86,9 +91,8 @@ The `explainJson()` method:
 Changes:
 1. Import `ExplainPanel` component.
 2. Import `explainMarkdown` and `explainJson` from `useSession()`.
-3. Add "Explain" button in the header (next to "New Session").
-4. In the right panel tab content, add a third tab: "Explanation".
-5. When "Explanation" tab is active, render `<ExplainPanel />` or show the stored markdown.
+3. Add "Explain" button below the JSON tree in the Working JSON tab (visible only when JSON is non-empty).
+4. Render `<ExplainPanel />` inline below the button, inside the Working JSON tab, only when `state.explaining || state.explainError || state.explainMarkdown`. No extra tab.
 
 ---
 
@@ -103,7 +107,7 @@ Changes:
 4. Frontend calls api.explain(sessionId, workingJson, apiKey)
 5. Backend calls LLM, returns markdown
 6. Frontend sets explainMarkdown state
-7. Right panel switches to "Explanation" tab, renders markdown
+7. Styled markdown renders in the scrollable card below the Working JSON tree
 ```
 
 ### 3.2 Error Path

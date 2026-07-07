@@ -15,6 +15,8 @@ type SessionState = {
   loading: boolean;
   error: string | null;
   explainMarkdown: string | null;
+  explaining: boolean;
+  explainError: string | null;
 };
 
 type SessionContextValue = {
@@ -53,6 +55,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     sessionId: null, workingJson: {}, baselineJson: {}, versions: [],
     conversationHistory: [], activeVersionId: null,
     loading: true, error: null, explainMarkdown: null,
+    explaining: false, explainError: null,
     });
 
     // Hydrate from localStorage + fetch session from backend
@@ -76,6 +79,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             loading: false,
             error: null,
             explainMarkdown: null,
+            explaining: false,
+            explainError: null,
             });
           }).catch(() => {
             // Session load failed -- clear stale data & start fresh
@@ -112,6 +117,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         loading: false,
         error: null,
         explainMarkdown: null,
+        explaining: false,
+        explainError: null,
         });
       } catch (err: any) {
       if (err.message?.includes('401') || err.message?.includes('API key')) {
@@ -142,6 +149,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         error: null,
         loading: false,
         explainMarkdown: null,
+        explainError: null,
         }));
       } catch (err: any) {
       if (err.message?.includes('401') || err.message?.includes('API key')) {
@@ -388,6 +396,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         loading: false,
         error: null,
         explainMarkdown: null,
+        explainError: null,
         });
       } catch (err: any) {
       toast.error(String(err));
@@ -431,18 +440,20 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const explainJson = useCallback(async () => {
     if (!state.sessionId || !Object.keys(state.workingJson).length) return;
-    setState((prev) => ({ ...prev, loading: true }));
+      // Dedicated explain flags -- never touch the global `loading` flag here,
+      // the provider unmounts the whole app while `loading` is true.
+    setState((prev) => ({ ...prev, explaining: true, explainError: null }));
     try {
       const markdown = await api.explain(state.sessionId, state.workingJson, apiKey);
       setState((prev) => ({
          ...prev,
         explainMarkdown: markdown,
-        loading: false,
-        error: null,
+        explaining: false,
+        explainError: null,
          }));
        } catch (err: any) {
       toast.error(String(err));
-      setState((prev) => ({ ...prev, error: String(err), loading: false }));
+      setState((prev) => ({ ...prev, explainError: String(err), explaining: false }));
        }
      }, [state.sessionId, state.workingJson, apiKey]);
 
