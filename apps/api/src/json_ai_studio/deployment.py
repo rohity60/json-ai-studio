@@ -63,7 +63,8 @@ class DeploymentRegistry:
             if api_key_env and api_key_env not in os.environ:
                 _logger.warning(
                     "Missing env var: %s (deployment %s disabled)",
-                    api_key_env, name,
+                    api_key_env,
+                    name,
                 )
                 enabled = False
             else:
@@ -72,15 +73,11 @@ class DeploymentRegistry:
 
             model_prefix = str(cfg["model_prefix"])
             if not model_prefix.endswith("/"):
-                raise ValueError(
-                    f"model_prefix for {name} must end with /"
-                )
+                raise ValueError(f"model_prefix for {name} must end with /")
 
             models = list(cfg["models"])
             if not models:
-                raise ValueError(
-                    f"models list for {name} must not be empty"
-                )
+                raise ValueError(f"models list for {name} must not be empty")
 
             configs.append(
                 DeploymentConfig(
@@ -128,6 +125,7 @@ class DeploymentRegistry:
     @staticmethod
     def _resolve_env(value: str) -> str:
         """Replace ${VAR_NAME} with os.environ[VAR_NAME]."""
+
         def _replacer(match: re.Match) -> str:
             var = match.group(1)
             env_val = os.environ.get(var)
@@ -136,6 +134,7 @@ class DeploymentRegistry:
                     f"Missing env var: {var} (required by deployment config)"
                 )
             return env_val
+
         return _ENV_PATTERN.sub(_replacer, value)
 
     @classmethod
@@ -146,9 +145,7 @@ class DeploymentRegistry:
             for model in cfg.models:
                 lookup.setdefault(model, []).append(cfg.name)
                 # Also store prefixed version: "ollama/" + "gemma4:12b"
-                lookup.setdefault(f"{cfg.model_prefix}{model}", []).append(
-                    cfg.name
-                )
+                lookup.setdefault(f"{cfg.model_prefix}{model}", []).append(cfg.name)
         cls._model_to_deployments = lookup
         cls._deployments = {cfg.name: cfg for cfg in deployments}
 

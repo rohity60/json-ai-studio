@@ -36,9 +36,10 @@ RULES:
 3. For "delete", set "old_value" to the exact value being removed and "new_value" to null.
 4. Array indices are zero-based and must match the CURRENT WORKING JSON above. To append, use an index equal to the array's current length.
 5. To change or remove an array element identified by a field value (e.g. where mode is "c"), find that element's index in the CURRENT WORKING JSON above and use it in the path.
-6. If the request cannot be applied (target not found, ambiguous, or unrelated to this JSON), return {"diffs": [], "explanation": "..."} — say why, list what actually exists, and suggest the closest match.
-7. When duplicating an object, add the copy at the same level as the source with the same keys and values, unless the user specifies new ones.
-8. Multiple requested changes = multiple entries in the "diffs" array of the SAME single object.
+6. For "add", the new key NOT existing in the CURRENT WORKING JSON is expected — never refuse an add because the key is missing. If the user does not say where to put the new key, add it at the TOP LEVEL of the document (path "/<key>"). Strip units or currency words from values ("10 rs" -> 10). Only return empty diffs for an add when the user names a container that does not exist.
+7. If a modify or delete request cannot be applied (target not found, ambiguous, or unrelated to this JSON), return {"diffs": [], "explanation": "..."} — say why, list what actually exists, and suggest the closest match.
+8. When duplicating an object, add the copy at the same level as the source with the same keys and values, unless the user specifies new ones.
+9. Multiple requested changes = multiple entries in the "diffs" array of the SAME single object.
 
 EXAMPLES (illustrative only — real answers must use paths, values, and indices from the CURRENT WORKING JSON above, never from these examples):
 
@@ -49,6 +50,10 @@ Response: {"diffs": [{"path": "/services/api/timeout", "operation": "modify", "o
 User: "Add retryCount of 5 to the default service."
 JSON: {"services": {"default": {}}}
 Response: {"diffs": [{"path": "/services/default/retryCount", "operation": "add", "old_value": null, "new_value": 5}], "explanation": "Added retryCount 5 to the default service."}
+
+User: "add price 10 rs" (no location given — new keys go to the top level; the key not existing yet is normal for an add)
+JSON: {"services": {"api": {"timeout": 30}}}
+Response: {"diffs": [{"path": "/price", "operation": "add", "old_value": null, "new_value": 10}], "explanation": "Added price 10 at the top level."}
 
 User: "Add a step with mode 'd' titled 'Step 3'." (the array currently has 2 elements, indices 0 and 1)
 JSON: {"howToRedeem": [{"mode": "a", "title": "Step 1"}, {"mode": "c", "title": "Step 2"}]}

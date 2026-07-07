@@ -1,12 +1,12 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Plus, History, Download, RefreshCw } from 'lucide-react';
+import { Plus, History, Download, RefreshCw, Trash2 } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
 import { showVersionModal } from './VersionModal';
 
 export default function VersionSidebar() {
-  const { state, createVersion, exportJson, refreshSession } = useSession();
+  const { state, createVersion, exportJson, refreshSession, clearCache } = useSession();
   const [creating, setCreating] = useState(false);
   const [label, setLabel] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -73,6 +73,10 @@ export default function VersionSidebar() {
           <button onClick={() => exportJson()} className='w-full flex items-center justify-center gap-2 px-3 py-1.5 border text-sm rounded-lg hover:bg-gray-50'>
             <Download className='w-4 h-4' />
             <span>Export JSON</span>
+          </button>
+          <button onClick={() => clearCache()} className='w-full flex items-center justify-center gap-2 px-3 py-1.5 border text-sm rounded-lg text-muted-foreground hover:bg-gray-50' title='Remove versions cached in this browser (IndexedDB)'>
+            <Trash2 className='w-4 h-4' />
+            <span>Clear cached data</span>
           </button>
         </div>
       </div>

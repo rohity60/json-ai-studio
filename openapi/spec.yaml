@@ -48,8 +48,8 @@ paths:
         Create an empty session and return its ID. The frontend stores this
         ID in localStorage for session recovery across page refreshes.
       operationId: createSession
-       security:
-                  - simpleApiKey: []
+      security:
+         - simpleApiKey: []
       requestBody:
         required: true
         content:
@@ -95,9 +95,9 @@ paths:
         Retrieve the full session state including working JSON, conversation
         history, and version list. Used by the frontend to restore the UI on
         page load or after a client-side refresh.
-       security:
-                  - simpleApiKey: []
       operationId: getSession
+      security:
+         - simpleApiKey: []
       parameters:
          - name: sessionId
            in: path
@@ -125,10 +125,10 @@ paths:
       summary: List all versions for a session
       description: |-
         Return all version snapshots (original, working, approved) with their
-       security:
-                  - simpleApiKey: []
         timestamps. Used to populate the version sidebar in the frontend.
       operationId: listVersions
+      security:
+         - simpleApiKey: []
       parameters:
          - name: sessionId
            in: path
@@ -170,6 +170,8 @@ paths:
         Take a named snapshot of the current working JSON. Each snapshot is an
         immutable point-in-time state that can be restored later.
       operationId: createVersionSnapshot
+      security:
+         - simpleApiKey: []
       parameters:
          - name: sessionId
            in: path
@@ -209,6 +211,118 @@ paths:
          '429':
            $ref: '#/components/responses/Error429'
 
+   /api/sessions/{sessionId}/versions/select:
+    post:
+      tags: [sessions]
+      summary: Select a version snapshot as the working baseline
+      description: |-
+        Load a version snapshot into the session: both working_json and
+        baseline_json are reset to the snapshot's json_data (deep copies)
+        and the conversation history is cleared.
+      operationId: selectVersion
+      security:
+         - simpleApiKey: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           description: UUID of the session
+           schema:
+             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/SelectVersionRequest'
+            example:
+              versionId: "v2"
+      responses:
+         '200':
+          description: Version selected; session state reset to the snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  working_json:
+                    type: object
+                    additionalProperties: true
+                  baseline_json:
+                    type: object
+                    additionalProperties: true
+                  active_version_id:
+                    type: string
+                    nullable: true
+                  versions:
+                    type: array
+                    items:
+                       $ref: '#/components/schemas/VersionSnapshot'
+                  conversation_history:
+                    type: array
+                    items:
+                       $ref: '#/components/schemas/ChatTurn'
+                required: [working_json, baseline_json, versions]
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   /api/sessions/{sessionId}/versions/restore:
+    post:
+      tags: [sessions]
+      summary: Bulk-restore version snapshots into an empty session
+      description: |-
+        Restore previously saved version snapshots (e.g. from the browser's
+        IndexedDB cache) into a freshly created session after a backend
+        restart. Snapshot ids, labels, parent chains, and timestamps are
+        preserved verbatim. Only allowed when the session has no versions
+        yet — otherwise responds 409 so client retries are safe.
+      operationId: restoreVersions
+      security:
+         - simpleApiKey: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           description: UUID of the session to restore into
+           schema:
+             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/RestoreVersionsRequest'
+            example:
+              versions:
+                 - id: "v1"
+                   parent_id: null
+                   json_data: {"services": {"api": {"timeout": 30}}}
+                   label: "original"
+                   created_at: "2026-07-01T00:00:00Z"
+              working_json: {"services": {"api": {"timeout": 60}}}
+              active_version_id: "v1"
+      responses:
+         '200':
+          description: Versions restored; full session state returned
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/SessionResponse'
+         '400':
+           $ref: '#/components/responses/Error400'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+           $ref: '#/components/responses/Error409'
+         '429':
+           $ref: '#/components/responses/Error429'
+
    /api/sessions/{sessionId}/diffs/{diffId}/accept:
     post:
       tags: [sessions]
@@ -217,11 +331,11 @@ paths:
         Merge the specified diff into the session's working_json. The diff is
         marked as accepted and the updated state becomes the new baseline for
         subsequent chat turns. An automatic validation run is triggered after
-       security:
-                  - simpleApiKey: []
         acceptance; if validation fails, a warning toast is shown to the user
         but the diff remains applied.
       operationId: acceptDiff
+      security:
+         - simpleApiKey: []
       parameters:
          - name: sessionId
            in: path
@@ -257,12 +371,12 @@ paths:
     post:
       tags: [sessions]
       summary: Revert a rejected diff from the working JSON
-       security:
-                  - simpleApiKey: []
       description: |-
         Remove the specified diff from the working JSON. The diff is marked as
         rejected and does not affect the baseline state.
       operationId: rejectDiff
+      security:
+         - simpleApiKey: []
       parameters:
          - name: sessionId
            in: path
@@ -303,13 +417,13 @@ paths:
       summary: Upload or paste JSON for parsing
       description: |-
         Accept a .json file upload or raw JSON body. Parse the input, validate
-       security:
-                  - simpleApiKey: []
         syntax, generate a schema summary (top-level keys, nested depth, array
         lengths), and return the structured tree along with session metadata.
         The response includes a sessionId that the frontend uses for all
         subsequent chat operations.
       operationId: uploadJson
+      security:
+         - simpleApiKey: []
       requestBody:
         required: true
         content:
@@ -379,14 +493,14 @@ paths:
       summary: Send a chat turn; stream SSE response
       description: |-
         Process a natural language message against the current working JSON.
-       security:
-                  - simpleApiKey: []
         Returns an SSE stream with three event types in sequence: (1) thinking
           — LLM reasoning text shown inline in the chat, (2) diff(s) — individual
         change entries from the LLM, and (3) complete — final applied state with
         a summary explanation. The frontend accumulates all events and updates
         the working JSON preview panel on the complete event.
       operationId: sendChatTurn
+      security:
+         - simpleApiKey: []
       requestBody:
         required: true
         content:
@@ -410,7 +524,7 @@ paths:
                   session_id: "abc123"
                   conversation_history:
                      - role: user
-                      content: "Add retry count of 5"
+                       content: "Add retry count of 5"
                   working_json:
                     services:
                       api:
@@ -456,8 +570,6 @@ paths:
       tags: [validate]
       summary: Validate a JSON document
       description: |-
-       security:
-                  - simpleApiKey: []
         Run syntax and business rule validation on the provided JSON. Syntax
         validation ensures the input parses as valid JSON. Business rule
         validation checks constraints like timeout > 0, retryCount <= 10, and
@@ -465,6 +577,8 @@ paths:
         is deferred to a future phase. Validation runs automatically after each
         approved diff before marking it as final.
       operationId: validateJson
+      security:
+         - simpleApiKey: []
       requestBody:
         required: true
         content:
@@ -520,8 +634,6 @@ paths:
 
    /api/diff:
     post:
-       security:
-                  - simpleApiKey: []
       tags: [diff]
       summary: Compute diff between two JSON documents
       description: |-
@@ -530,6 +642,8 @@ paths:
         to render the before/after side-by-side comparison view with color-coded
         diff indicators (green for added, orange for modified, red for deleted).
       operationId: computeDiff
+      security:
+         - simpleApiKey: []
       requestBody:
         required: true
         content:
@@ -609,8 +723,6 @@ paths:
    # EXPORT
    # =====================================================================
 
-       security:
-                  - simpleApiKey: []
    /api/sessions/{sessionId}/export:
     get:
       tags: [export]
@@ -620,6 +732,8 @@ paths:
         is pretty-printed; add ?format=minified for compact output. Used by the
         frontend's export button to save the final approved configuration.
       operationId: exportSessionJson
+      security:
+         - simpleApiKey: []
       parameters:
          - name: sessionId
            in: path
@@ -814,6 +928,39 @@ components:
           description: JSON state to snapshot
       required: [label, json_data]
 
+    SelectVersionRequest:
+      type: object
+      properties:
+        versionId:
+          type: string
+          description: ID of the version snapshot to load
+      required: [versionId]
+
+    RestoreVersionsRequest:
+      type: object
+      properties:
+        versions:
+          type: array
+          items:
+             $ref: '#/components/schemas/VersionSnapshot'
+          maxItems: 100
+          description: Snapshots to restore verbatim (ids/labels/timestamps preserved)
+        working_json:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Working JSON to restore (unsaved work from the browser cache)
+        baseline_json:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Baseline JSON to restore; defaults to working_json when omitted
+        active_version_id:
+          type: string
+          nullable: true
+          description: Previously active version id; ignored if not among restored versions
+      required: [versions]
+
     ChatRequest:
       type: object
       properties:
@@ -864,7 +1011,7 @@ components:
           type: object
           additionalProperties:
             type: integer
-          description: Array lengths keyed by path (e.g., "/services": 3)
+          description: 'Array lengths keyed by path (e.g., "/services": 3)'
       required: [top_level_keys, nested_depth]
 
     ValidateRequest:
@@ -944,6 +1091,16 @@ components:
           example:
             error: "Session not found"
             hint: "Check the session ID and try again."
+
+    Error409:
+      description: Conflict — session already contains version snapshots
+      content:
+        application/json:
+          schema:
+             $ref: '#/components/schemas/Error'
+          example:
+            error: "Session already has versions"
+            hint: "Restore is only allowed into a session with no versions."
 
     Error429:
       description: Too many requests — rate limit exceeded (10 requests per 60s window per API key)

@@ -141,3 +141,16 @@ class DiffRejectResponse(BaseModel):
     success: bool
     working_json: dict[str, Any]
     baseline_json: dict[str, Any] = {}
+
+
+class RestoreVersionsRequest(BaseModel):
+    """Request body for POST /api/sessions/{id}/versions/restore.
+
+    Snapshots come from the browser's IndexedDB cache after a backend
+    restart; ids, labels, parent chains, and timestamps are preserved.
+    """
+
+    versions: list[VersionSnapshot]
+    working_json: dict[str, Any] | None = None
+    baseline_json: dict[str, Any] | None = None
+    active_version_id: str | None = None

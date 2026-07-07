@@ -1,15 +1,24 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { toast } from 'sonner';
 import * as api from '../lib/api';
+import { saveWorkspace, loadWorkspace, clearWorkspace } from '../lib/versionCache';
+
+type SessionVersion = {
+  id: string;
+  label: string;
+  json_data: any;
+  parent_id?: string | null;
+  created_at?: string | null;
+};
 
 type SessionState = {
   sessionId: string | null;
   workingJson: Record<string, any>;
   baselineJson: Record<string, any>;
-  versions: Array<{ id: string; label: string; json_data: any }>;
+  versions: SessionVersion[];
   conversationHistory: Array<{ role: string; content: string; diffs?: any[]; explanation?: string }>;
   activeVersionId: string | null;
   loading: boolean;
@@ -33,9 +42,17 @@ type SessionContextValue = {
   rejectAllDiffs: () => Promise<void>;
   refreshSession: () => Promise<void>;
   explainJson: () => Promise<void>;
+  clearCache: () => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
+
+// Keep parent_id/created_at so IndexedDB snapshots restore with full fidelity
+const mapVersions = (versions: any[] | undefined): SessionVersion[] =>
+  (versions || []).map((v: any) => ({
+    id: v.id, label: v.label, json_data: v.json_data,
+    parent_id: v.parent_id ?? null, created_at: v.created_at ?? null,
+  }));
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
     // API key read via useEffect -- never during SSR render
@@ -58,44 +75,117 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     explaining: false, explainError: null,
     });
 
-    // Hydrate from localStorage + fetch session from backend
+    // Hydrate: backend session if alive, else restore from IndexedDB cache.
+    // Ref guard: StrictMode double-mount must not create two backend sessions.
+  const restoreStartedRef = useRef(false);
+
   useEffect(() => {
     if (!apiKey) return;
-    const saved = localStorage.getItem('json-ai-studio-session');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-          // Fetch full session state from backend
-        api.getSession(parsed.sessionId, apiKey).then((data) => {
-          setState({
-            sessionId: parsed.sessionId,
-            workingJson: (data.working_json as Record<string, any>) || {},
-            baselineJson: (data.baseline_json as Record<string, any>) || {},
-            versions: (data.versions || []).map((v: any) => ({
-              id: v.id, label: v.label, json_data: v.json_data
-              })),
-            conversationHistory: [],
-            activeVersionId: (data.active_version_id as string) || null,
-            loading: false,
-            error: null,
-            explainMarkdown: null,
-            explaining: false,
-            explainError: null,
-            });
-          }).catch(() => {
-            // Session load failed -- clear stale data & start fresh
+    if (restoreStartedRef.current) return;
+    restoreStartedRef.current = true;
+
+    const hydrated = (sessionId: string, data: any) => setState({
+      sessionId,
+      workingJson: (data.working_json as Record<string, any>) || {},
+      baselineJson: (data.baseline_json as Record<string, any>) || {},
+      versions: mapVersions(data.versions),
+      conversationHistory: [],
+      activeVersionId: (data.active_version_id as string) || null,
+      loading: false,
+      error: null,
+      explainMarkdown: null,
+      explaining: false,
+      explainError: null,
+      });
+
+    const hydrate = async () => {
+      let savedSessionId: string | null = null;
+      const saved = localStorage.getItem('json-ai-studio-session');
+      if (saved) {
+        try {
+          savedSessionId = JSON.parse(saved).sessionId ?? null;
+          } catch {
           localStorage.removeItem('json-ai-studio-session');
-          toast.warning('Session expired. Starting fresh.');
-          setState((prev) => ({ ...prev, loading: false }));
-          });
-        } catch {
-        localStorage.removeItem('json-ai-studio-session');
+          }
         }
-      } else {
-        // No saved session -- start fresh
+
+      const cached = await loadWorkspace();
+
+      if (savedSessionId) {
+        try {
+          const data = await api.getSession(savedSessionId, apiKey);
+          hydrated(savedSessionId, data);
+          return;
+          } catch (err: any) {
+          if (err?.status !== 404) {
+              // Backend down/unreachable -- keep localStorage + cache so the
+              // next reload can retry; do NOT create a new session.
+            toast.error('Backend unreachable. Your cached data is kept for the next reload.');
+            setState((prev) => ({ ...prev, loading: false }));
+            return;
+            }
+            // 404: backend lost the session (restart) -- fall through to restore
+          }
+        }
+
+      const hasCache = !!cached && (
+        (cached.versions?.length ?? 0) > 0 ||
+        Object.keys(cached.workingJson || {}).length > 0
+        );
+      if (hasCache) {
+        try {
+          const sess = await api.createSession('Restored', apiKey);
+          const data = await api.restoreVersions(sess.id, {
+            versions: cached!.versions,
+            working_json: cached!.workingJson,
+            baseline_json: cached!.baselineJson,
+            active_version_id: cached!.activeVersionId,
+            }, apiKey);
+          localStorage.setItem('json-ai-studio-session', JSON.stringify({ sessionId: sess.id }));
+          hydrated(sess.id, data);
+          toast.success(`Restored ${cached!.versions.length} version(s) from browser cache.`);
+          return;
+          } catch {
+            // Keep IndexedDB intact so the next reload can retry the restore
+          localStorage.removeItem('json-ai-studio-session');
+          toast.warning('Session expired. Cached versions could not be restored — will retry on next reload.');
+          setState((prev) => ({ ...prev, loading: false }));
+          return;
+          }
+        }
+
+      if (savedSessionId) {
+        localStorage.removeItem('json-ai-studio-session');
+        toast.warning('Session expired. Starting fresh.');
+        }
       setState((prev) => ({ ...prev, loading: false }));
-      }
+      };
+
+    hydrate();
     }, [apiKey]);
+
+    // Mirror workspace to IndexedDB (debounced) so versions + unsaved work
+    // survive backend restarts. One effect covers every state mutation path.
+  useEffect(() => {
+    if (state.loading || !state.sessionId) return;
+    const t = setTimeout(() => {
+      saveWorkspace({
+        sessionId: state.sessionId,
+        versions: state.versions.map((v) => ({
+          id: v.id,
+          parent_id: v.parent_id ?? null,
+          json_data: v.json_data,
+          label: v.label,
+          created_at: v.created_at ?? new Date().toISOString(),
+          })),
+        workingJson: state.workingJson,
+        baselineJson: state.baselineJson,
+        activeVersionId: state.activeVersionId,
+        updatedAt: new Date().toISOString(),
+        });
+      }, 500);
+    return () => clearTimeout(t);
+    }, [state.sessionId, state.versions, state.workingJson, state.baselineJson, state.activeVersionId, state.loading]);
 
   const updateSessionStorage = (sessionId: string) => {
     localStorage.setItem('json-ai-studio-session', JSON.stringify({ sessionId }));
@@ -110,9 +200,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           ...state,
         sessionId: data.id,
         workingJson: (data.working_json as Record<string, any>) || {},
-        versions: (data.versions || []).map((v: any) => ({
-          id: v.id, label: v.label, json_data: v.json_data
-          })),
+        versions: mapVersions(data.versions),
         conversationHistory: [],
         loading: false,
         error: null,
@@ -307,7 +395,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           ...prev,
         workingJson: data.json_data || data.working_json || prev.workingJson,
         activeVersionId: data.id || prev.activeVersionId,
-        versions: [...prev.versions, { id: data.id, label: data.label, json_data: data.json_data }],
+        versions: [...prev.versions, {
+          id: data.id, label: data.label, json_data: data.json_data,
+          parent_id: data.parent_id ?? null, created_at: data.created_at ?? null,
+          }],
         }));
       } catch (err: any) { toast.error(String(err)); }
     }, [state.sessionId, state.workingJson, apiKey]);
@@ -369,9 +460,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         workingJson: (data.working_json as Record<string, any>) || {},
         baselineJson: (data.baseline_json as Record<string, any>) || {},
         activeVersionId: (data.active_version_id as string) || null,
-        versions: (data.versions || []).map((v: any) => ({
-          id: v.id, label: v.label, json_data: v.json_data
-          })),
+        versions: mapVersions(data.versions),
         }));
       } catch (err: any) { toast.error(String(err)); }
     }, [state.sessionId, apiKey]);
@@ -466,11 +555,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     window.open(url, '_blank');
     }, [state]);
 
+  const clearCache = useCallback(async () => {
+    await clearWorkspace();
+    toast.success('Cached versions cleared from this browser.');
+    }, []);
+
     // Block UI until initial session data loaded from backend
   if (state.loading) return null;
 
   return (
-      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson }}>
+      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson, clearCache }}>
         {children}
       </SessionContext.Provider>
     );

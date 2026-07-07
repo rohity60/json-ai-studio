@@ -21,8 +21,39 @@ export async function getSession(sessionId: string, apiKey: string) {
     const res = await fetch(`${BASE}/sessions/${sessionId}`, {
         headers: {'X-API-Key': apiKey},
     });
-    if (!res.ok) throw new Error('Failed to load session');
+    if (!res.ok) {
+        // Carry the HTTP status: 404 (session gone → restorable from cache)
+        // must be distinguishable from network/5xx (backend down → retry later)
+        const err: any = new Error(`Failed to load session: ${res.status}`);
+        err.status = res.status;
+        throw err;
+    }
     console.log('[api] getSession OK, status:', res.status);
+    return await res.json();
+}
+
+export async function restoreVersions(
+    sessionId: string,
+    payload: {
+        versions: Array<{
+            id: string;
+            parent_id: string | null;
+            json_data: Record<string, any>;
+            label: string;
+            created_at: string;
+        }>;
+        working_json?: Record<string, any>;
+        baseline_json?: Record<string, any>;
+        active_version_id?: string | null;
+    },
+    apiKey: string,
+) {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/versions/restore`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`Failed to restore versions: ${await res.text()}`);
     return await res.json();
 }
 
