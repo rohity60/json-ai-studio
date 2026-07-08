@@ -49,7 +49,7 @@ def parse_sse(event_text: str) -> tuple[str | None, dict[str, Any] | None]:
 
 
 async def _stream_llm(
-    working_json: dict[str, Any], message: str, api_key: str
+    session_id: str, working_json: dict[str, Any], message: str, principal
 ) -> AsyncGenerator[str, None]:
     """Stream LLM response as SSE events via GatewayService.
 
@@ -67,9 +67,9 @@ async def _stream_llm(
 
         content_parts: list[str] = []
         error_payload: dict[str, Any] | None = None
-        rate_limited = False
+        quota_hit = False
         async for event_text in GatewayService.invoke(
-            "chat-session", message, api_key, system_prompt
+            session_id, message, principal, system_prompt
         ):
             yield event_text
             event, payload = parse_sse(event_text)
@@ -79,12 +79,13 @@ async def _stream_llm(
                     content_parts.append(text)
             elif event == "error" and payload is not None:
                 error_payload = payload
-            elif event == "rate_limit":
-                rate_limited = True
+            elif event in ("rate_limit", "credit_limit"):
+                quota_hit = True
 
-        # The rate_limit event was already forwarded to the client; stop here
-        # so we don't emit a misleading "complete" with an empty explanation.
-        if rate_limited:
+        # The rate_limit/credit_limit event was already forwarded to the
+        # client; stop here so we don't emit a misleading "complete" with an
+        # empty explanation.
+        if quota_hit:
             return
 
         combined = "".join(content_parts)
@@ -175,7 +176,7 @@ async def chat_event_stream(
     session: dict[str, Any],
     working_json: dict[str, Any],
     message: str,
-    api_key: str,
+    principal,
 ) -> AsyncGenerator[str, None]:
     """Full chat turn: stream LLM events, then persist the merged JSON."""
     try:
@@ -197,7 +198,9 @@ async def chat_event_stream(
 
         merged_json = None
         all_diffs: list[dict[str, Any]] = []
-        async for event_text in _stream_llm(working_json, message, api_key):
+        async for event_text in _stream_llm(
+            session.get("id", "chat-session"), working_json, message, principal
+        ):
             yield event_text
             event, payload = parse_sse(event_text)
             if event == "complete" and payload is not None:

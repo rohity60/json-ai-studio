@@ -16,6 +16,42 @@ npm run dev
 - API: `http://localhost:8000`
 - API Docs: `http://localhost:8000/docs`
 
+Without any extra setup the app runs **anonymous-only** (shared free quota,
+no login). Login/signup needs Postgres + Auth0 below.
+
+## Optional Login (Auth0 + Postgres, ADR-0015)
+
+```bash
+# 1. Start Postgres (host port 5433 to avoid clashing with a local install)
+docker compose up -d db
+#    …or standalone:
+# docker run -d --name jsonai-pg -e POSTGRES_USER=json_ai \
+#   -e POSTGRES_PASSWORD=json_ai -e POSTGRES_DB=json_ai_studio \
+#   -p 5433:5432 postgres:16-alpine
+
+# 2. Run database migrations (Alembic)
+cd apps/api
+cp .env.example .env      # fill in AUTH0_DOMAIN / AUTH0_AUDIENCE
+uv run alembic upgrade head
+
+# 3. Frontend Auth0 config
+cd ../web
+cp .env.example .env.local   # fill in AUTH0_* (AUTH0_SECRET: openssl rand -hex 32)
+```
+
+Auth0 dashboard requirements:
+- A **Regular Web Application** with callback URL `<APP_BASE_URL>/auth/callback`
+  (e.g. `http://localhost:3002/auth/callback`) and matching logout URL.
+- An **API** whose identifier equals `AUTH0_AUDIENCE` — without it access
+  tokens are opaque and backend validation fails.
+
+Anonymous users keep working unchanged; when they hit a rate/credit limit
+the popup offers "Log in for higher free limits". Logged-in users get their
+own DB-persisted monthly quota (see `GET /api/me`).
+
+New schema changes: `uv run alembic revision --autogenerate -m "..."` then
+`uv run alembic upgrade head`.
+
 ## Docker (Local)
 
 ```bash

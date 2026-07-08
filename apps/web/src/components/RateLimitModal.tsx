@@ -9,6 +9,8 @@ export type RateLimitInfo = {
   message?: string;
   retryAfter?: number; // seconds until the caller may retry
   scope?: string; // "api" | "model"
+  kind?: 'rate' | 'credits'; // credits = monthly quota exhausted (402), no countdown
+  loginAvailable?: boolean; // anonymous caller — logging in raises free limits
 };
 
 let _info: RateLimitInfo | null = null;
@@ -59,9 +61,13 @@ export default function RateLimitModal() {
 
   if (!info) return null;
 
+  const isCredits = info.kind === 'credits';
+  const title = isCredits ? 'Free credits used up' : 'Rate limit reached';
   const message =
     info.message ||
-    "You've hit the rate limit. Please wait a moment before trying again.";
+    (isCredits
+      ? "You've used up the free credits for this month."
+      : "You've hit the rate limit. Please wait a moment before trying again.");
 
   return (
     <div
@@ -106,29 +112,53 @@ export default function RateLimitModal() {
           >
             <Clock style={{ width: '1.125rem', height: '1.125rem' }} />
           </span>
-          <h3 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Rate limit reached</h3>
+          <h3 style={{ fontSize: '1.125rem', fontWeight: 600 }}>{title}</h3>
         </div>
 
         <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>{message}</p>
 
-        <p style={{ fontSize: '0.875rem', color: '#374151', marginBottom: '1rem' }}>
-          {remaining > 0 ? (
-            <>
-              You can try again in{' '}
-              <span style={{ fontWeight: 600, color: '#7c3aed' }}>{remaining}s</span>.
-            </>
-          ) : (
-            <span style={{ fontWeight: 600, color: '#16a34a' }}>You can try again now.</span>
-          )}
-        </p>
+        {!isCredits && (
+          <p style={{ fontSize: '0.875rem', color: '#374151', marginBottom: '1rem' }}>
+            {remaining > 0 ? (
+              <>
+                You can try again in{' '}
+                <span style={{ fontWeight: 600, color: '#7c3aed' }}>{remaining}s</span>.
+              </>
+            ) : (
+              <span style={{ fontWeight: 600, color: '#16a34a' }}>You can try again now.</span>
+            )}
+          </p>
+        )}
+
+        {info.loginAvailable && (
+          <button
+            onClick={() => {
+              window.location.href = '/auth/login?returnTo=/studio';
+            }}
+            style={{
+              width: '100%',
+              padding: '0.5rem 0.75rem',
+              backgroundColor: '#7c3aed',
+              color: 'white',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              borderRadius: '0.5rem',
+              border: 'none',
+              cursor: 'pointer',
+              marginBottom: '0.5rem',
+            }}
+          >
+            Log in for higher free limits
+          </button>
+        )}
 
         <button
           onClick={() => hideRateLimitModal()}
           style={{
             width: '100%',
             padding: '0.5rem 0.75rem',
-            backgroundColor: '#7c3aed',
-            color: 'white',
+            backgroundColor: info.loginAvailable ? '#f3f4f6' : '#7c3aed',
+            color: info.loginAvailable ? '#374151' : 'white',
             fontSize: '0.875rem',
             fontWeight: 500,
             borderRadius: '0.5rem',

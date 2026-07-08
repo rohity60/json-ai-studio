@@ -7,7 +7,7 @@ import json as _json
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import StreamingResponse
 
-from ..auth import require_api_key
+from ..auth import Principal, get_principal
 from ..services import chat_service, session_service
 from ..services.errors import NotFoundError
 
@@ -19,7 +19,7 @@ async def endpoint_chat(
     session_id: str = Form(...),
     message: str = Form(...),
     working_json_str: str | None = Form(default=None),
-    _auth=Depends(require_api_key),
+    principal: Principal = Depends(get_principal),
 ):
     """Send a chat turn; stream SSE response (ADR-0004)."""
     try:
@@ -37,6 +37,6 @@ async def endpoint_chat(
         raise HTTPException(status_code=400, detail="Invalid working_json in request")
 
     return StreamingResponse(
-        chat_service.chat_event_stream(session, working_json, message, _auth),
+        chat_service.chat_event_stream(session, working_json, message, principal),
         media_type="text/event-stream",
     )

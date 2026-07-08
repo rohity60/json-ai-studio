@@ -1,8 +1,13 @@
 """AI Gateway — cost calculation, credit tracking, usage logging.
 
 Centralized LiteLLM integration. All LLM calls flow through GatewayService.
-Calculates cost from token counts, deducts credits, logs usage.
-Emits SSE events: thinking -> diff(s) -> usage -> complete.
+Calculates cost from token counts, deducts credits via credit_service
+(principal-aware, ADR-0015), logs usage.
+Emits SSE events: deployment -> thinking -> usage -> complete.
+
+Quota errors are never raised after the stream has started: pre-stream
+429/402 become SSE `rate_limit` / `credit_limit` events carrying
+`login_available` so the frontend can offer login as the fix.
 """
 
 from __future__ import annotations
@@ -11,14 +16,15 @@ import json
 import logging
 import time
 import uuid
-from collections import deque
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
 import litellm
 from fastapi import HTTPException
 
+from .auth import Principal
 from .deployment import DeploymentConfig, DeploymentRegistry
+from .services import credit_service
 
 logger = logging.getLogger("json_ai_studio.gateway")
 
@@ -40,85 +46,50 @@ AI_PROFILES: dict[str, str] = {
     "premium": "gpt-4.1",
 }
 
-# In-memory state
-_user_credits: dict[str, dict[str, Any]] = {}  # api_key -> credit record
-_usage_history: dict[str, list] = {}  # session_id -> usage records
-_per_minute_credits: dict[str, deque] = (
-    {}
-)  # api_key -> deque of (timestamp, token_count)
+# In-memory usage log (session_id -> records). Persisting this is the
+# natural next migration (ADR-0015).
+_usage_history: dict[str, list] = {}
+
+
+def _quota_sse_event(exc: HTTPException) -> str:
+    """Convert a 402/429 HTTPException into an SSE event string."""
+    detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+    login_available = bool(detail.get("login_available"))
+    if exc.status_code == 402:
+        event = "credit_limit"
+        message = "You've used up the free credits." + (
+            " Log in to get your own free monthly quota." if login_available else ""
+        )
+    else:
+        event = "rate_limit"
+        message = (
+            "You're sending requests too quickly. Please wait a moment "
+            "and try again."
+            + (" Or log in for higher free limits." if login_available else "")
+        )
+    retry_after = detail.get("retry_after")
+    if exc.status_code == 429 and retry_after is None:
+        retry_after = 60
+    return (
+        f"event: {event}\ndata: "
+        + json.dumps(
+            {
+                "scope": "model",
+                "message": message,
+                "retry_after": retry_after,
+                "login_available": login_available,
+            }
+        )
+        + "\n\n"
+    )
 
 
 class GatewayService:
     """Single gateway class. All LLM calls flow through invoke()."""
 
-    _per_minute_credits = _per_minute_credits
     MODEL_PRICING = MODEL_PRICING
     AI_PROFILES = AI_PROFILES
-    _user_credits = _user_credits
     _usage_history = _usage_history
-
-    @classmethod
-    def _ensure_credits(cls, api_key: str) -> dict[str, Any]:
-        """Create default credit record for unknown API key."""
-        if api_key not in cls._user_credits:
-            if api_key == "dev-default-key":
-                cls._user_credits[api_key] = {
-                    "plan": "free",
-                    "monthly_limit": 10000,
-                    "per_min_credits": 40,
-                    "credits_used": 0,
-                    "billing_cycle_start": datetime.now(timezone.utc).isoformat(),
-                }
-            else:
-                cls._user_credits[api_key] = {
-                    "plan": "free",
-                    "monthly_limit": 100,
-                    "credits_used": 0,
-                    "billing_cycle_start": datetime.now(timezone.utc).isoformat(),
-                }
-
-    @classmethod
-    def _check_credits(cls, api_key: str) -> None:
-        """Raise HTTPException(402) if credits exhausted."""
-        credits: dict[str, Any] | None = cls._user_credits.get(api_key)
-        if credits is None:
-            return
-        # Monthly check
-        if (
-            credits["monthly_limit"] != -1
-            and credits["credits_used"] >= credits["monthly_limit"]
-        ):
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "Insufficient credits",
-                    "hint": "Upgrade your plan. Current balance: 0 credits.",
-                    "required": 0,
-                    "current_balance": 0,
-                },
-            )
-        # Per-minute token-sum check (sliding window)
-        now = time.monotonic()
-        window_start = now - 60
-        tokens_q = cls._per_minute_credits.get(api_key)
-        if tokens_q is None:
-            tokens_q = deque()
-            cls._per_minute_credits[api_key] = tokens_q
-        # Prune old entries outside 60s window
-        while tokens_q and tokens_q[0][0] < window_start:
-            tokens_q.popleft()
-        # Sum tokens in window
-        total_tokens = sum(tc for _, tc in tokens_q)
-        # Log current window token usage
-        logger.error("per_minute_tokens key=%s tokens=%d limit", api_key, total_tokens)
-        # Cap: 10000 tokens per minute for default key
-        if api_key == "dev-default-key":
-            if total_tokens >= credits.get("per_min_credits", 0):
-                raise HTTPException(
-                    status_code=429,
-                    detail="Per-minute token limit exceeded",
-                    headers={"Retry-After": "60"},
-                )
 
     @classmethod
     def _calculate_cost(
@@ -136,29 +107,9 @@ class GatewayService:
         return round(cost_usd / 0.001, 3)
 
     @classmethod
-    def _deduct_credits(cls, api_key: str, credits: float, tokens: int = 0) -> None:
-        """Subtract credits from API key's monthly balance."""
-        record = cls._user_credits.get(api_key)
-        if record is None:
-            return
-        now = datetime.now(timezone.utc)
-        cycle_start_str = record.get("billing_cycle_start", "")
-        try:
-            cycle_start = datetime.fromisoformat(cycle_start_str)
-            if (now - cycle_start).total_seconds() > 30 * 86400:
-                record["credits_used"] = 0
-                record["billing_cycle_start"] = now.isoformat()
-        except (ValueError, TypeError):
-            pass
-        record["credits_used"] = record.get("credits_used", 0) + credits
-        # Track tokens for per-minute sliding window
-        if api_key == "dev-default-key" and tokens > 0:
-            cls._per_minute_credits.setdefault(api_key, deque()).append(
-                (time.monotonic(), credits)
-            )
-
-    @classmethod
-    def _log_usage(cls, session_id: str, api_key: str, record: dict[str, Any]) -> None:
+    def _log_usage(
+        cls, session_id: str, quota_key: str, record: dict[str, Any]
+    ) -> None:
         """Append usage record to session's usage history."""
         cls._usage_history.setdefault(session_id, []).append(record)
 
@@ -170,7 +121,6 @@ class GatewayService:
         if profile and profile in cls.AI_PROFILES:
             return cls.AI_PROFILES[profile]
         return "ollama/gemma4:12b"
-        # return "gemma-4-26b-a4b-it"
 
     @classmethod
     def _make_usage_event(
@@ -277,36 +227,21 @@ class GatewayService:
     async def invoke(
         session_id: str,
         message: str,
-        api_key: str,
+        principal: Principal,
         system_prompt: str,
         model: str | None = None,
         profile: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Full LLM pipeline: credit check -> stream -> diff -> cost -> deduct -> log."""
         resolved_model = GatewayService._resolve_model(model, profile)
-        GatewayService._ensure_credits(api_key)
-        # Model-level rate limit: surface as a clean SSE "rate_limit" event the
-        # client can turn into a popup, instead of leaking a generic error.
+        # Quota errors surface as clean SSE events the client can turn into
+        # a popup (with a login CTA for anonymous users), instead of leaking
+        # a broken stream.
         try:
-            GatewayService._check_credits(api_key)
+            await credit_service.check(principal)
         except HTTPException as exc:
-            if exc.status_code == 429:
-                retry_after = 60
-                if exc.headers:
-                    try:
-                        retry_after = int(exc.headers.get("Retry-After", retry_after))
-                    except (TypeError, ValueError):
-                        pass
-                yield "event: rate_limit\ndata: " + json.dumps(
-                    {
-                        "scope": "model",
-                        "message": (
-                            "You're sending requests too quickly. Please wait a "
-                            "moment and try again."
-                        ),
-                        "retry_after": retry_after,
-                    }
-                ) + "\n\n"
+            if exc.status_code in (402, 429):
+                yield _quota_sse_event(exc)
                 return
             raise
 
@@ -321,11 +256,11 @@ class GatewayService:
             )
 
             logger.info(
-                "invoke session=%s model=%s deployment=%s api_key=%s",
+                "invoke session=%s model=%s deployment=%s principal=%s",
                 session_id,
                 resolved_model,
                 deployment.name,
-                api_key[:8] + "...",
+                principal.quota_key[:24],
             )
 
             # Emit deployment selection event
@@ -441,13 +376,13 @@ class GatewayService:
 
             # Deduct credits and log
             total_tokens = prompt_tokens + completion_tokens
-            GatewayService._deduct_credits(api_key, credits_used, total_tokens)
+            await credit_service.deduct(principal, credits_used, total_tokens)
             GatewayService._log_usage(
                 session_id,
-                api_key,
+                principal.quota_key,
                 {
                     "request_id": uuid.uuid4().hex,
-                    "api_key": api_key,
+                    "quota_key": principal.quota_key,
                     "session_id": session_id,
                     "model": resolved_model,
                     "provider": "ollama",
@@ -475,10 +410,10 @@ class GatewayService:
             # Log failed usage record
             GatewayService._log_usage(
                 session_id,
-                api_key,
+                principal.quota_key,
                 {
                     "request_id": uuid.uuid4().hex,
-                    "api_key": api_key,
+                    "quota_key": principal.quota_key,
                     "session_id": session_id,
                     "model": resolved_model,
                     "provider": "ollama",
@@ -501,19 +436,18 @@ class GatewayService:
     async def explain(
         cls,
         session_id: str,
-        api_key: str,
+        principal: Principal,
         working_json: dict[str, Any],
     ) -> str:
         """Explain a JSON document. Calls LLM, collects response, returns markdown.
 
-        Thin wrapper around invoke(): streams content, deducts credits,
-        then returns the combined markdown as a plain string.
+        Non-streaming path: quota errors propagate as HTTPException 402/429
+        with a structured detail dict (login_available, retry_after).
         """
         from .prompting import EXPLAIN_TEMPLATE
 
         resolved_model = cls._resolve_model(None, None)
-        cls._ensure_credits(api_key)
-        cls._check_credits(api_key)
+        await credit_service.check(principal)
 
         deployment = DeploymentRegistry.pick(resolved_model)
         litellm_model = (
@@ -578,13 +512,13 @@ class GatewayService:
         cost_usd = cls._calculate_cost(prompt_tokens, completion_tokens, resolved_model)
         credits_used = cls._calculate_credits(cost_usd)
         total_tokens = prompt_tokens + completion_tokens
-        cls._deduct_credits(api_key, credits_used, total_tokens)
+        await credit_service.deduct(principal, credits_used, total_tokens)
         cls._log_usage(
             session_id,
-            api_key,
+            principal.quota_key,
             {
                 "request_id": uuid.uuid4().hex,
-                "api_key": api_key,
+                "quota_key": principal.quota_key,
                 "session_id": session_id,
                 "model": resolved_model,
                 "provider": "ollama",
@@ -604,8 +538,3 @@ class GatewayService:
     def get_usage(cls, session_id: str) -> list[dict[str, Any]]:
         """Return usage records for a session. For future GET /api/usage."""
         return cls._usage_history.get(session_id, [])
-
-    @classmethod
-    def get_user_credits(cls, api_key: str) -> dict[str, Any]:
-        """Return credit record for an API key. For future GET /api/credits."""
-        return cls._user_credits.get(api_key, {})

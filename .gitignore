@@ -7,3 +7,5 @@ apps/web/.idea/
 apps/web/node_modules/
 apps/web/package-lock.json
 apps/api/.env
+apps/web/.env.local
+apps/web/.env.production

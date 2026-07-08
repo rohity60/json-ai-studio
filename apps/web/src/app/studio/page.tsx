@@ -10,6 +10,7 @@ import { useSession } from '@/context/SessionContext';
 import { FileJson2, MessageSquare, Code2, LayoutList, Sparkles } from 'lucide-react';
 import ExplainPanel from '@/components/ExplainPanel';
 import Logo from '@/components/Logo';
+import UserChip from '@/components/UserChip';
 
 export default function Home() {
   const { state, createSession, uploadJson, explainJson } = useSession();
@@ -46,6 +47,7 @@ export default function Home() {
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors" title="Toggle sidebar">
               <LayoutList className="w-5 h-5" />
             </button>
+            <UserChip />
           </div>
         </header>
 

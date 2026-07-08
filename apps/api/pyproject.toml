@@ -11,6 +11,12 @@ dependencies = [
     "litellm",
     "deepdiff",
     "python-multipart>=0.0.32",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.31.0",
+    "alembic>=1.18.5",
+    "pydantic-settings>=2.14.2",
+    "pyjwt[crypto]>=2.13.0",
+    "httpx>=0.28.1",
 ]
 
 [tool.uv]
@@ -18,4 +24,8 @@ dev-dependencies = [
     "pytest",
     "httpx",
     "black>=26.5.1",
+    "pytest-asyncio>=1.4.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -154,3 +154,31 @@ class RestoreVersionsRequest(BaseModel):
     working_json: dict[str, Any] | None = None
     baseline_json: dict[str, Any] | None = None
     active_version_id: str | None = None
+
+
+class QuotaErrorDetail(BaseModel):
+    """Structured 402/429 detail body (spec: QuotaError, ADR-0015)."""
+
+    error: str
+    hint: str | None = None
+    login_available: bool
+    retry_after: int | None = None
+
+
+class CreditsInfo(BaseModel):
+    monthly_limit: int
+    used: float
+    remaining: float
+    billing_cycle_start: str
+
+
+class UserProfile(BaseModel):
+    """Response body for GET /api/me (spec: UserProfile, ADR-0015)."""
+
+    id: str
+    email: str | None = None
+    name: str | None = None
+    picture: str | None = None
+    plan: str
+    credits: CreditsInfo
+    per_minute_token_limit: int

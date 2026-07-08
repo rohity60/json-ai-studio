@@ -1,6 +1,23 @@
 version: "3.8"
 
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: json_ai
+      POSTGRES_PASSWORD: json_ai
+      POSTGRES_DB: json_ai_studio
+    ports:
+      # 5433 on the host: leaves any locally-installed Postgres on 5432 alone.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U json_ai"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
+
   api:
     build:
       context: ./apps/api
@@ -9,8 +26,15 @@ services:
       - "8000:8000"
     environment:
       - GOOGLE_AI_STUDIO_API_KEY=${GOOGLE_AI_STUDIO_API_KEY}
+      - DATABASE_URL=postgresql+asyncpg://json_ai:json_ai@db:5432/json_ai_studio
+      - AUTH0_DOMAIN=${AUTH0_DOMAIN}
+      - AUTH0_AUDIENCE=${AUTH0_AUDIENCE}
+      - GENERAL_API_KEY=${GENERAL_API_KEY:-dev-default-key}
       - HOST=0.0.0.0
       - PORT=8000
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   web:
@@ -26,3 +50,6 @@ services:
     depends_on:
       - api
     restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -17,6 +17,14 @@ securitySchemes:
     type: apiKey
     in: header
     name: X-API-Key
+  bearerAuth:
+    type: http
+    scheme: bearer
+    bearerFormat: JWT
+    description: |-
+      Auth0 access token (RS256). Optional: anonymous callers use
+      simpleApiKey with the shared free quota; logged-in callers get a
+      per-user quota persisted in the database (ADR-0015).
 servers:
    - url: http://localhost:8000
      description: Local development server
@@ -34,6 +42,8 @@ tags:
      description: Diff generation between JSON documents
    - name: export
      description: Export downloaded JSON files
+   - name: users
+     description: Signed-up user profile + quota (optional Auth0 login)
 
 paths:
    # =====================================================================
@@ -50,6 +60,7 @@ paths:
       operationId: createSession
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -98,6 +109,7 @@ paths:
       operationId: getSession
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       parameters:
          - name: sessionId
            in: path
@@ -129,6 +141,7 @@ paths:
       operationId: listVersions
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       parameters:
          - name: sessionId
            in: path
@@ -172,6 +185,7 @@ paths:
       operationId: createVersionSnapshot
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       parameters:
          - name: sessionId
            in: path
@@ -222,6 +236,7 @@ paths:
       operationId: selectVersion
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       parameters:
          - name: sessionId
            in: path
@@ -283,6 +298,7 @@ paths:
       operationId: restoreVersions
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       parameters:
          - name: sessionId
            in: path
@@ -336,6 +352,7 @@ paths:
       operationId: acceptDiff
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       parameters:
          - name: sessionId
            in: path
@@ -377,6 +394,7 @@ paths:
       operationId: rejectDiff
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       parameters:
          - name: sessionId
            in: path
@@ -424,6 +442,7 @@ paths:
       operationId: uploadJson
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -498,9 +517,19 @@ paths:
         change entries from the LLM, and (3) complete — final applied state with
         a summary explanation. The frontend accumulates all events and updates
         the working JSON preview panel on the complete event.
+
+        Quota errors never break the stream. When the caller is over a limit
+        the stream emits a single terminal event instead:
+          - "rate_limit"  — per-minute token cap hit.
+            data: {"scope":"model","message":"...","retry_after":60,"login_available":true}
+          - "credit_limit" — monthly credits exhausted.
+            data: {"scope":"model","message":"...","retry_after":null,"login_available":true}
+        login_available is true only for anonymous callers (logging in raises
+        the free-tier limits, ADR-0015).
       operationId: sendChatTurn
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -579,6 +608,7 @@ paths:
       operationId: validateJson
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -644,6 +674,7 @@ paths:
       operationId: computeDiff
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -734,6 +765,7 @@ paths:
       operationId: exportSessionJson
       security:
          - simpleApiKey: []
+         - bearerAuth: []
       parameters:
          - name: sessionId
            in: path
@@ -774,6 +806,52 @@ paths:
            $ref: '#/components/responses/Error404'
          '429':
            $ref: '#/components/responses/Error429'
+
+   # =====================================================================
+   # USERS (optional Auth0 login, ADR-0015)
+   # =====================================================================
+
+   /api/me:
+    get:
+      tags: [users]
+      summary: Get the logged-in user's profile and credit quota
+      description: |-
+        Requires an Auth0 bearer token. Anonymous callers (X-API-Key only)
+        receive 401. The user row is provisioned automatically on the first
+        authenticated request; email/name/picture are backfilled from the
+        Auth0 /userinfo endpoint.
+      operationId: getMe
+      security:
+         - bearerAuth: []
+      responses:
+         '200':
+          description: Profile + credit quota for the logged-in user
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/UserProfile'
+              example:
+                id: "7f9b0d2c-3f60-4f9e-9a5b-2f1e8c7d6a54"
+                email: "dev@example.com"
+                name: "Dev Example"
+                picture: "https://s.gravatar.com/avatar/x.png"
+                plan: "free"
+                credits:
+                  monthly_limit: 2000
+                  used: 12.5
+                  remaining: 1987.5
+                  billing_cycle_start: "2026-07-08T00:00:00"
+                per_minute_token_limit: 30000
+         '401':
+           $ref: '#/components/responses/Error401'
+         '429':
+           $ref: '#/components/responses/Error429'
+         '503':
+          description: Login temporarily unavailable (auth/database not configured)
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/Error'
 
 # =======================================================================
 # COMPONENTS — SHARED TYPES, RESPONSES, EXAMPLES
@@ -900,6 +978,64 @@ components:
           nullable: true
           description: Suggestion for how to resolve the error; null if not applicable
       required: [error]
+
+    QuotaError:
+      description: |-
+        Structured detail body for 402/429 quota errors. login_available is
+        true when the caller is anonymous and logging in would raise their
+        free-tier limits (ADR-0015).
+      type: object
+      properties:
+        error:
+          type: string
+        hint:
+          type: string
+          nullable: true
+        login_available:
+          type: boolean
+        retry_after:
+          type: integer
+          nullable: true
+          description: Seconds until retry is sensible; null for monthly credit exhaustion
+      required: [error, login_available]
+
+    CreditsInfo:
+      type: object
+      properties:
+        monthly_limit:
+          type: integer
+        used:
+          type: number
+        remaining:
+          type: number
+        billing_cycle_start:
+          type: string
+          format: date-time
+      required: [monthly_limit, used, remaining, billing_cycle_start]
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Internal user UUID
+        email:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        picture:
+          type: string
+          nullable: true
+        plan:
+          type: string
+          description: Billing plan (free at MVP)
+        credits:
+           $ref: '#/components/schemas/CreditsInfo'
+        per_minute_token_limit:
+          type: integer
+      required: [id, plan, credits, per_minute_token_limit]
 
      # -- Request/Response Wrappers --
 
@@ -1102,15 +1238,34 @@ components:
             error: "Session already has versions"
             hint: "Restore is only allowed into a session with no versions."
 
-    Error429:
-      description: Too many requests — rate limit exceeded (10 requests per 60s window per API key)
+    Error402:
+      description: |-
+        Payment required — monthly credit quota exhausted. Anonymous callers
+        can log in for their own free-tier quota (login_available true).
       content:
         application/json:
           schema:
-             $ref: '#/components/schemas/Error'
+             $ref: '#/components/schemas/QuotaError'
           example:
-            error: "Rate limited. 10 requests per 60s window."
+            error: "Insufficient credits"
+            hint: "Log in to get your own free monthly quota."
+            login_available: true
+            retry_after: null
+
+    Error429:
+      description: |-
+        Too many requests — request-rate or per-minute token limit exceeded.
+        Anonymous: 10 req/min per browser key. Logged-in: 30 req/min.
+        Carries Retry-After header.
+      content:
+        application/json:
+          schema:
+             $ref: '#/components/schemas/QuotaError'
+          example:
+            error: "Rate limit reached: 10 requests per 60s. Please try again in a moment."
             hint: null
+            login_available: true
+            retry_after: 60
 
     Error500:
       description: Internal server error — LLM call failed or unexpected error

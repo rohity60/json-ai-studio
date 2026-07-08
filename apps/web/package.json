@@ -8,6 +8,7 @@
     "start": "next start --port 3000"
   },
   "dependencies": {
+    "@auth0/nextjs-auth0": "^4.25.0",
     "autoprefixer": "^10.5.0",
     "deep-diff": "^1.0.2",
     "idb": "^8.0.3",

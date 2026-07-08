@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
-from ..auth import require_api_key
+from ..auth import Principal, get_principal
 from ..gateway import GatewayService
 from ..services import session_service
 from ..services.errors import NotFoundError
@@ -21,7 +21,7 @@ logger = logging.getLogger("json_ai_studio.explain")
 @router.post("/explain")
 async def endpoint_explain(
     body: dict[str, Any],
-    _auth=Depends(require_api_key),
+    principal: Principal = Depends(get_principal),
 ):
     """Explain the JSON in a session. Returns markdown as plain text."""
     session_id = body.get("sessionId")
@@ -38,7 +38,7 @@ async def endpoint_explain(
         working_json = {}
 
     try:
-        markdown = await GatewayService.explain(session_id, _auth, working_json)
+        markdown = await GatewayService.explain(session_id, principal, working_json)
     except HTTPException:
         # Rate limit / credit errors (429/402) must reach the client with their
         # own status, not be swallowed into a generic 500.

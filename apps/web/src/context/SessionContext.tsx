@@ -13,6 +13,35 @@ function isRateLimited(err: any): boolean {
   return err?.status === 429 || /\b429\b/.test(String(err?.message || ''));
 }
 
+// Monthly credits exhausted (HTTP 402). Anonymous callers can log in for
+// their own free quota (err.loginAvailable, parsed from the response body).
+function isCreditExhausted(err: any): boolean {
+  return err?.status === 402;
+}
+
+// Shared quota-error handling for catch blocks: shows the popup with the
+// login CTA when applicable. Returns true when the error was a quota error.
+function handleQuotaError(err: any): boolean {
+  if (isCreditExhausted(err)) {
+    showRateLimitModal({
+      scope: 'api',
+      kind: 'credits',
+      loginAvailable: err.loginAvailable === true,
+    });
+    return true;
+  }
+  if (isRateLimited(err)) {
+    showRateLimitModal({
+      scope: 'api',
+      kind: 'rate',
+      retryAfter: err.retryAfter,
+      loginAvailable: err.loginAvailable === true,
+    });
+    return true;
+  }
+  return false;
+}
+
 type SessionVersion = {
   id: string;
   label: string;
@@ -33,6 +62,7 @@ type SessionState = {
   explainMarkdown: string | null;
   explaining: boolean;
   explainError: string | null;
+  profile: Record<string, any> | null; // logged-in user profile + credits (GET /api/me)
 };
 
 type SessionContextValue = {
@@ -79,8 +109,17 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     sessionId: null, workingJson: {}, baselineJson: {}, versions: [],
     conversationHistory: [], activeVersionId: null,
     loading: true, error: null, explainMarkdown: null,
-    explaining: false, explainError: null,
+    explaining: false, explainError: null, profile: null,
     });
+
+    // Fetch the logged-in user's profile + quota (null when anonymous).
+  useEffect(() => {
+    api.getMe()
+      .then((profile) => {
+        if (profile) setState((prev) => ({ ...prev, profile }));
+        })
+      .catch(() => {});
+    }, []);
 
     // Hydrate: backend session if alive, else restore from IndexedDB cache.
     // Ref guard: StrictMode double-mount must not create two backend sessions.
@@ -91,7 +130,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (restoreStartedRef.current) return;
     restoreStartedRef.current = true;
 
-    const hydrated = (sessionId: string, data: any) => setState({
+    const hydrated = (sessionId: string, data: any) => setState((prev) => ({
+      ...prev,
       sessionId,
       workingJson: (data.working_json as Record<string, any>) || {},
       baselineJson: (data.baseline_json as Record<string, any>) || {},
@@ -103,7 +143,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       explainMarkdown: null,
       explaining: false,
       explainError: null,
-      });
+      }));
 
     const hydrate = async () => {
       let savedSessionId: string | null = null;
@@ -216,8 +256,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainError: null,
         });
       } catch (err: any) {
-      if (isRateLimited(err)) {
-        showRateLimitModal({ scope: 'api', retryAfter: err.retryAfter });
+      if (handleQuotaError(err)) {
+        // popup shown
         } else if (err.message?.includes('401') || err.message?.includes('API key')) {
         toast.error('Auth required. Refresh the page to get a new key.');
         } else {
@@ -247,8 +287,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainError: null,
         }));
       } catch (err: any) {
-      if (isRateLimited(err)) {
-        showRateLimitModal({ scope: 'api', retryAfter: err.retryAfter });
+      if (handleQuotaError(err)) {
+        // popup shown
         } else if (err.message?.includes('401') || err.message?.includes('API key')) {
         toast.error('Auth required. Refresh page to get a new key.');
         } else {
@@ -300,13 +340,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         chunkCount++;
         console.log('[SessionContext] Chunk #' + chunkCount + ':', JSON.stringify(chunk).slice(0, 200));
 
-        // Model-level rate limit: backend streams a `rate_limit` event instead
-        // of a diff/complete. Show the popup and stop consuming the stream.
-        if (chunk.type === 'rate_limit') {
+        // Model-level quota events: backend streams a `rate_limit` or
+        // `credit_limit` event instead of a diff/complete. Show the popup
+        // (with a login CTA for anonymous users) and stop consuming.
+        if (chunk.type === 'rate_limit' || chunk.type === 'credit_limit') {
           showRateLimitModal({
             scope: chunk.data?.scope || 'model',
+            kind: chunk.type === 'credit_limit' ? 'credits' : 'rate',
             message: chunk.data?.message,
             retryAfter: chunk.data?.retry_after,
+            loginAvailable: chunk.data?.login_available === true,
           });
           break;
           }
@@ -378,8 +421,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
       } catch (err: any) {
       console.error('[SessionContext] sendMessage caught exception:', err?.message || String(err));
-      if (isRateLimited(err)) {
-        showRateLimitModal({ scope: 'api', retryAfter: err.retryAfter });
+      if (handleQuotaError(err)) {
+        // popup shown
         } else if (err.message?.includes('401') || err.message?.includes('API key')) {
         toast.error('API key rejected. Refresh page.');
         } else {
@@ -560,9 +603,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainError: null,
          }));
        } catch (err: any) {
-      if (isRateLimited(err)) {
-        showRateLimitModal({ scope: 'model', retryAfter: err.retryAfter });
-        } else {
+      if (!handleQuotaError(err)) {
         toast.error(String(err));
         }
       setState((prev) => ({ ...prev, explainError: String(err), explaining: false }));

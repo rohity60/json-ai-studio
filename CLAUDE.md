@@ -28,13 +28,18 @@ json-ai-studio/
 ├── openapi/spec.yaml            ← Single source of truth. 13 endpoints, 18 schemas. OpenAPI 3.1 YAML.
 ├── apps/api/                    ← FastAPI backend, layered per ADR-0013
 │     └── src/json_ai_studio/
-│           ├── main.py              ← Thin app factory: FastAPI init, CORS, include_router per controller.
-│           ├── controllers/         ← APIRouters (health, sessions, versions, uploads, chat, diffs, explain). Map domain errors → HTTP codes.
-│           ├── services/            ← Business logic (session, version, chat SSE, diff). Only layer touching the store. errors.py = domain exceptions.
+│           ├── main.py              ← Thin app factory: FastAPI init, lifespan (DB engine), CORS, include_router per controller.
+│           ├── controllers/         ← APIRouters (health, sessions, versions, uploads, chat, diffs, explain, users). Map domain errors → HTTP codes.
+│           ├── services/            ← Business logic (session, version, chat SSE, diff, user provisioning, credit quota). Only layer touching stores. errors.py = domain exceptions.
 │           ├── db/session_store.py  ← SessionStore ABC + InMemorySessionStore singleton (ADR-0013, amends ADR-0006). Async interface, DB-ready seam.
+│           ├── db/database.py       ← Async SQLAlchemy engine + session factory (ADR-0015). None when DATABASE_URL unset → anonymous-only mode.
+│           ├── db/models_orm.py     ← SQLAlchemy ORM models (users table). Schema changes go through Alembic.
 │           ├── models.py            ← Pydantic schemas (canonical wire format per ADR-0011).
-│           ├── auth.py              ← Per-session API key auth + sliding-window rate limiter (10 req/min per key).
+│           ├── settings.py          ← pydantic-settings config: Auth0, DATABASE_URL, quota limits (env vars / .env).
+│           ├── auth.py              ← Principal resolution: anonymous X-API-Key or Auth0 bearer (ADR-0015) + sliding-window rate limiter.
+│           ├── auth0_jwt.py         ← PyJWT + PyJWKClient RS256 token verification (JWKS cached 1h).
 │           └── utils.py             ← deepdiff-based diff engine + business-rule validation (V-04: timeout > 0, retryCount <= 10).
+│     └── alembic/                 ← Alembic migrations (async env.py). Run: uv run alembic upgrade head.
 ├── apps/web/                    ← Next.js 15 app router frontend
 │     ├── src/
 │     │    ├── app/
@@ -52,7 +57,8 @@ json-ai-studio/
 │     │         ├── api.ts            ← Minimal fetch-based API client (no retry, no interceptor).
 │     │         └── versionCache.ts   ← IndexedDB workspace mirror (idb pkg). Versions + working JSON survive backend restarts; restored via POST .../versions/restore.
 │     └── tailwind.config.ts   ← Tailwind config.
-├── docs/adr/                  ← 14 Architecture Decision Records. All tech decisions numbered & dated.
+├── docs/adr/                  ← 15 Architecture Decision Records. All tech decisions numbered & dated.
+├── docker-compose.yml         ← api + web + db (postgres:16, host port 5433).
 └── openapi/README.md           ← OpenAPI spec conventions.
 ```
 
@@ -63,7 +69,8 @@ json-ai-studio/
 - **Chat flow**: User NL message → LiteLLM call → field-level diffs → SSE stream: thinking → diff(s) → complete (ADR-0002, ADR-0004). The system prompt in `main.py` embeds the current working JSON as few-shot examples (ADR-0005).
 - **Diff engine**: `deepdiff` for backend (ADR-0003); client-side `deep-diff` for DiffViewer. Business rules only (timeout > 0, retryCount <= 10). No JSON Schema validation yet.
 - **Error handling**: Fail-fast with 500 + hint string (ADR-0007). No retry logic at MVP.
-- **Tech stack decisions**: litellm over direct OpenAI SDK (ADR-0002), react-json-view-lite over alternatives (ADR-0008), sonner for toasts (ADR-0009), lucide-react for icons (ADR-0010).
+- **Auth & quotas (ADR-0015)**: Login is optional. Anonymous → shared `GENERAL_API_KEY` credit pool (in-memory) + per-browser X-API-Key request rate. Logged-in (Auth0 bearer, PyJWT/JWKS) → per-user quota persisted in Postgres `users` table (SQLAlchemy 2.0 async + asyncpg, Alembic migrations). Quota errors (402/429, SSE `rate_limit`/`credit_limit`) carry `login_available` → frontend popup shows login CTA. Without DATABASE_URL/AUTH0_* env the API runs anonymous-only (bearer → 503). Frontend: @auth0/nextjs-auth0 v4, routes at `/auth/*` via middleware.ts.
+- **Tech stack decisions**: litellm over direct OpenAI SDK (ADR-0002), react-json-view-lite over alternatives (ADR-0008), sonner for toasts (ADR-0009), lucide-react for icons (ADR-0010), SQLAlchemy+Alembic+Auth0 (ADR-0015).
 
 ## API endpoints
 
@@ -83,6 +90,7 @@ From `openapi/spec.yaml`, implemented in `controllers/`:
 | POST   | `/api/sessions/{id}/diffs/accept-all` | Accept all diffs |
 | POST   | `/api/sessions/{id}/diffs/reject-all` | Reject all diffs |
 | POST   | `/api/explain` | LLM markdown explanation of working JSON |
+| GET    | `/api/me` | Logged-in user profile + credit quota (Auth0 bearer only) |
 
 Routers live in `controllers/` (one file per resource); auth via `Depends(require_api_key)` per route.
 

@@ -1,18 +1,46 @@
 /** API client helpers for the JSON AI Studio backend. */
 
+import { getBearerToken } from './authToken';
+
 // In dev: NEXT_PUBLIC_API_BASE=http://localhost:8000/api
 // In prod: /api (relative, served by reverse proxy like nginx)
 const BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
-/** Build an Error from a non-OK response, carrying the HTTP status and the
- *  Retry-After hint (seconds) so callers can detect 429 rate limits and show
- *  a popup with a countdown. */
+/** Auth headers for every backend call: logged-in users send the Auth0
+ *  bearer token (per-user quota); anonymous users send X-API-Key against
+ *  the shared free pool (ADR-0015). */
+async function authHeaders(
+    apiKey: string,
+    extra: Record<string, string> = {},
+): Promise<Record<string, string>> {
+    const token = await getBearerToken();
+    return token
+        ? {...extra, Authorization: `Bearer ${token}`}
+        : {...extra, 'X-API-Key': apiKey};
+}
+
+/** Build an Error from a non-OK response, carrying the HTTP status, the
+ *  Retry-After hint (seconds), and the parsed JSON detail (loginAvailable)
+ *  so callers can detect 402/429 quota errors and show the popup. */
 async function httpError(res: Response, prefix: string): Promise<Error> {
     const body = await res.text().catch(() => '');
     const err: any = new Error(`${prefix}: ${body || res.status}`);
     err.status = res.status;
     const retryAfter = res.headers.get('Retry-After');
     if (retryAfter) err.retryAfter = Number(retryAfter);
+    try {
+        const parsed = JSON.parse(body);
+        const detail = parsed?.detail ?? parsed;
+        err.detail = detail;
+        if (detail && typeof detail === 'object') {
+            err.loginAvailable = detail.login_available === true;
+            if (err.retryAfter == null && detail.retry_after != null) {
+                err.retryAfter = Number(detail.retry_after);
+            }
+        }
+    } catch {
+        // non-JSON body — keep the raw text message
+    }
     return err;
 }
 
@@ -20,7 +48,7 @@ export async function createSession(name: string, apiKey: string) {
     console.log('[api] createSession ENTRY, name:', name);
     const res = await fetch(`${BASE}/sessions`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
         body: JSON.stringify({name}),
     });
     if (!res.ok) throw await httpError(res, 'Failed to create session');
@@ -31,7 +59,7 @@ export async function createSession(name: string, apiKey: string) {
 export async function getSession(sessionId: string, apiKey: string) {
     console.log('[api] getSession ENTRY, sessionId:', sessionId.slice(0, 8));
     const res = await fetch(`${BASE}/sessions/${sessionId}`, {
-        headers: {'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey),
     });
     if (!res.ok) {
         // Carry the HTTP status: 404 (session gone → restorable from cache)
@@ -62,7 +90,7 @@ export async function restoreVersions(
 ) {
     const res = await fetch(`${BASE}/sessions/${sessionId}/versions/restore`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
         body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error(`Failed to restore versions: ${await res.text()}`);
@@ -74,7 +102,7 @@ export async function createVersion(
 ) {
     const res = await fetch(`${BASE}/sessions/${sessionId}/versions`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
         body: JSON.stringify({label, json_data: workingJson}),
     });
     if (!res.ok) throw new Error('Failed to create version');
@@ -90,7 +118,11 @@ export async function uploadJson(
     if (jsonBody) formData.append('json_body', jsonBody);
     if (sessionId) formData.append('session_id', sessionId);
 
-    const res = await fetch(`${BASE}/json/upload`, {method: 'POST', headers: {'X-API-Key': apiKey}, body: formData});
+    const res = await fetch(`${BASE}/json/upload`, {
+        method: 'POST',
+        headers: await authHeaders(apiKey),
+        body: formData,
+    });
     if (!res.ok) throw await httpError(res, 'Upload failed');
     console.log('[api] uploadJson OK, status:', res.status);
     return await res.json();
@@ -99,7 +131,7 @@ export async function uploadJson(
 export async function validateJson(jsonData: object, apiKey: string) {
     const res = await fetch(`${BASE}/validate`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
         body: JSON.stringify({json_data: jsonData}),
     });
     if (!res.ok) throw new Error('Validation failed');
@@ -109,7 +141,7 @@ export async function validateJson(jsonData: object, apiKey: string) {
 export async function computeDiff(oldJson: object, newJson: object, apiKey: string) {
     const res = await fetch(`${BASE}/diff`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
         body: JSON.stringify({old_json: oldJson, new_json: newJson}),
     });
     if (!res.ok) throw new Error('Diff computation failed');
@@ -120,7 +152,7 @@ export async function acceptDiff(sessionId: string, diffId: string, apiKey: stri
     console.log('[api] acceptDiff ENTRY, sessionId:', sessionId.slice(0, 8), 'diffId:', diffId);
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/${diffId}/accept`, {
         method: 'POST',
-        headers: {'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey),
     });
     if (!res.ok) throw new Error('Failed to accept diff');
     console.log('[api] acceptDiff OK, status:', res.status);
@@ -131,7 +163,7 @@ export async function rejectDiff(sessionId: string, diffId: string, apiKey: stri
     console.log('[api] rejectDiff ENTRY, sessionId:', sessionId.slice(0, 8), 'diffId:', diffId);
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/${diffId}/reject`, {
         method: 'POST',
-        headers: {'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey),
     });
     if (!res.ok) throw new Error('Failed to reject diff');
     console.log('[api] rejectDiff OK, status:', res.status);
@@ -140,14 +172,14 @@ export async function rejectDiff(sessionId: string, diffId: string, apiKey: stri
 
 export async function exportSession(sessionId: string, format = 'pretty', apiKey: string) {
     const url = `${BASE}/sessions/${sessionId}/export?format=${format}`;
-    const res = await fetch(url, {headers: {'X-API-Key': apiKey}});
+    const res = await fetch(url, {headers: await authHeaders(apiKey)});
     if (!res.ok) throw new Error('Export failed');
     return await res.blob();
 }
 
 export async function getVersions(sessionId: string, apiKey: string) {
     const res = await fetch(`${BASE}/sessions/${sessionId}/versions`, {
-        headers: {'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey),
     });
     if (!res.ok) throw new Error('Failed to fetch versions');
     return await res.json();
@@ -166,13 +198,25 @@ export async function selectVersion(
 }> {
     const res = await fetch(`${BASE}/sessions/${sessionId}/versions/select`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
         body: JSON.stringify({ versionId }),
       });
     if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         throw new Error(err.error || `Failed to select version: ${res.status}`);
        }
+    return await res.json();
+}
+
+/** Fetch the logged-in user's profile + credit quota. Returns null when
+ *  anonymous (no bearer token) or when the backend has no user DB. */
+export async function getMe(): Promise<Record<string, any> | null> {
+    const token = await getBearerToken();
+    if (!token) return null;
+    const res = await fetch(`${BASE}/me`, {
+        headers: {Authorization: `Bearer ${token}`},
+    });
+    if (!res.ok) return null;
     return await res.json();
 }
 
@@ -219,7 +263,12 @@ export async function* streamChat(sessionId: string, message: string, workingJso
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 120_000); // 2 min timeout to prevent infinite hangs
     try {
-        const res = await fetch(`${BASE}/chat`, {method: 'POST', headers: {'X-API-Key': apiKey}, body: formData, signal: controller.signal});
+        const res = await fetch(`${BASE}/chat`, {
+            method: 'POST',
+            headers: await authHeaders(apiKey),
+            body: formData,
+            signal: controller.signal,
+        });
         if (!res.ok) throw await httpError(res, 'Chat failed');
 
         const reader = res.body!.getReader();
@@ -265,7 +314,7 @@ export async function* streamChat(sessionId: string, message: string, workingJso
 export async function acceptDiffBatch(sessionId: string, apiKey: string) {
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/accept-all`, {
         method: 'POST',
-        headers: {'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey),
     });
     if (!res.ok) throw new Error('Failed to accept all diffs');
     return await res.json();
@@ -274,7 +323,7 @@ export async function acceptDiffBatch(sessionId: string, apiKey: string) {
 export async function rejectDiffBatch(sessionId: string, apiKey: string) {
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/reject-all`, {
         method: 'POST',
-        headers: {'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey),
     });
     if (!res.ok) throw new Error('Failed to reject all diffs');
     return await res.json();
@@ -287,7 +336,7 @@ export async function explain(
 ): Promise<string> {
     const res = await fetch(`${BASE}/explain`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey},
+        headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
         body: JSON.stringify({sessionId, workingJson}),
        });
     if (!res.ok) throw await httpError(res, 'Explain failed');

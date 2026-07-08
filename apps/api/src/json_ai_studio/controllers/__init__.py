@@ -1,6 +1,6 @@
 """HTTP layer: thin FastAPI routers that delegate to services."""
 
-from . import chat, diffs, explain, health, sessions, uploads, versions
+from . import chat, diffs, explain, health, sessions, uploads, users, versions
 
 routers = [
     health.router,
@@ -10,4 +10,5 @@ routers = [
     chat.router,
     diffs.router,
     explain.router,
+    users.router,
 ]
