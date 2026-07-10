@@ -5,6 +5,12 @@ Calculates cost from token counts, deducts credits via credit_service
 (principal-aware, ADR-0015), logs usage.
 Emits SSE events: deployment -> thinking -> usage -> complete.
 
+Model selection (ADR-0016): explicit model > profile mapping > config
+default — DeploymentRegistry.pick_default() round-robins enabled
+deployments, each serving its own base_model from deployments.yaml.
+Pricing lives on the provider classes; MODEL_PRICING is only a legacy
+fallback for models no deployment serves.
+
 Quota errors are never raised after the stream has started: pre-stream
 429/402 become SSE `rate_limit` / `credit_limit` events carrying
 `login_available` so the frontend can offer login as the fix.
@@ -23,20 +29,20 @@ import litellm
 from fastapi import HTTPException
 
 from .auth import Principal
-from .deployment import DeploymentConfig, DeploymentRegistry
+from .deployment import DeploymentRegistry
+from .providers import DeploymentProvider
 from .services import credit_service
 
 logger = logging.getLogger("json_ai_studio.gateway")
 
-# Pricing: model -> (prompt_per_1k, completion_per_1k) in USD
+# Legacy fallback pricing: model -> (prompt_per_1k, completion_per_1k) in
+# USD, for models not served by any deployment. Deployment-served models
+# price via their provider class (providers/<name>.py, ADR-0016).
 MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "ollama/qwen3.6:35b-mlx": (0.0, 0.0),
-    "ollama/gemma4:12b": (0.001, 0.003),
     "gpt-4.1": (0.001, 0.004),
     "gpt-4.1-mini": (0.0001, 0.0004),
     "claude-sonnet-4-20250514": (0.003, 0.015),
     "claude-haiku-4-20250514": (0.00025, 0.00125),
-    "gemini-2.0-flash": (0.0001, 0.0003),
 }
 
 # Profile -> model mapping
@@ -93,10 +99,17 @@ class GatewayService:
 
     @classmethod
     def _calculate_cost(
-        cls, prompt_tokens: int, completion_tokens: int, model: str
+        cls,
+        prompt_tokens: int,
+        completion_tokens: int,
+        model: str,
+        deployment: DeploymentProvider | None = None,
     ) -> float:
-        """Calculate cost_usd from tokens + pricing table."""
-        pricing = cls.MODEL_PRICING.get(model, (0.0, 0.0))
+        """Calculate cost_usd from tokens + provider pricing (or fallback)."""
+        if deployment is not None:
+            pricing = deployment.pricing(model)
+        else:
+            pricing = cls.MODEL_PRICING.get(model, (0.0, 0.0))
         prompt_cost = (prompt_tokens * pricing[0]) / 1000
         completion_cost = (completion_tokens * pricing[1]) / 1000
         return round(prompt_cost + completion_cost, 6)
@@ -114,13 +127,17 @@ class GatewayService:
         cls._usage_history.setdefault(session_id, []).append(record)
 
     @classmethod
-    def _resolve_model(cls, model: str | None, profile: str | None) -> str:
-        """Resolve model from explicit param or profile mapping."""
+    def _resolve_model(cls, model: str | None, profile: str | None) -> str | None:
+        """Explicit model, else profile mapping, else None (config default).
+
+        None means: let DeploymentRegistry.pick_default() choose an enabled
+        deployment and use its base_model.
+        """
         if model:
             return model
         if profile and profile in cls.AI_PROFILES:
             return cls.AI_PROFILES[profile]
-        return "ollama/gemma4:12b"
+        return None
 
     @classmethod
     def _make_usage_event(
@@ -234,6 +251,7 @@ class GatewayService:
     ) -> AsyncGenerator[str, None]:
         """Full LLM pipeline: credit check -> stream -> diff -> cost -> deduct -> log."""
         resolved_model = GatewayService._resolve_model(model, profile)
+        deployment: DeploymentProvider | None = None
         # Quota errors surface as clean SSE events the client can turn into
         # a popup (with a login CTA for anonymous users), instead of leaking
         # a broken stream.
@@ -247,13 +265,15 @@ class GatewayService:
 
         start_time = time.monotonic()
         try:
-            # Select deployment for this model
-            deployment = DeploymentRegistry.pick(resolved_model)
-            litellm_model = (
-                resolved_model
-                if resolved_model.startswith(deployment.model_prefix)
-                else f"{deployment.model_prefix}{resolved_model}"
-            )
+            # Select deployment: explicit/profile model routes via pick();
+            # no model means the config default — round-robin over enabled
+            # deployments, each serving its own base_model.
+            if resolved_model is None:
+                deployment = DeploymentRegistry.pick_default()
+                resolved_model = f"{deployment.model_prefix}{deployment.base_model}"
+            else:
+                deployment = DeploymentRegistry.pick(resolved_model)
+            litellm_model = deployment.litellm_model(resolved_model)
 
             logger.info(
                 "invoke session=%s model=%s deployment=%s principal=%s",
@@ -281,9 +301,9 @@ class GatewayService:
                     {"role": "user", "content": message},
                 ],
                 stream=True,
-                reasoning_effort="none",
                 timeout=120.0,
                 stream_options={"include_usage": True},
+                **deployment.completion_params(resolved_model),
             )
 
             content_parts: list[str] = []
@@ -344,11 +364,16 @@ class GatewayService:
 
                 if cost_usd is None or cost_usd == 0:
                     cost_usd = GatewayService._calculate_cost(
-                        prompt_tokens, completion_tokens, model_name or resolved_model
+                        prompt_tokens,
+                        completion_tokens,
+                        model_name or resolved_model,
+                        deployment,
                     )
             else:
                 # No chunks received — fallback to zero
-                cost_usd = GatewayService._calculate_cost(0, 0, resolved_model)
+                cost_usd = GatewayService._calculate_cost(
+                    0, 0, resolved_model, deployment
+                )
 
             credits_used = GatewayService._calculate_credits(cost_usd)
             latency_ms = int((time.monotonic() - start_time) * 1000)
@@ -369,7 +394,7 @@ class GatewayService:
                 cost_usd,
                 credits_used,
                 resolved_model,
-                "ollama",
+                deployment.name,
                 prompt_tokens,
                 completion_tokens,
             )
@@ -385,7 +410,7 @@ class GatewayService:
                     "quota_key": principal.quota_key,
                     "session_id": session_id,
                     "model": resolved_model,
-                    "provider": "ollama",
+                    "provider": deployment.name,
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
                     "total_tokens": prompt_tokens + completion_tokens,
@@ -403,7 +428,7 @@ class GatewayService:
             logger.error(
                 "invoke session=%s model=%s error=%s latency_ms=%d",
                 session_id,
-                resolved_model,
+                resolved_model or "auto",
                 str(e),
                 latency_ms,
             )
@@ -415,8 +440,8 @@ class GatewayService:
                     "request_id": uuid.uuid4().hex,
                     "quota_key": principal.quota_key,
                     "session_id": session_id,
-                    "model": resolved_model,
-                    "provider": "ollama",
+                    "model": resolved_model or "auto",
+                    "provider": deployment.name if deployment else "unknown",
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
                     "total_tokens": 0,
@@ -446,15 +471,12 @@ class GatewayService:
         """
         from .prompting import EXPLAIN_TEMPLATE
 
-        resolved_model = cls._resolve_model(None, None)
         await credit_service.check(principal)
 
-        deployment = DeploymentRegistry.pick(resolved_model)
-        litellm_model = (
-            resolved_model
-            if resolved_model.startswith(deployment.model_prefix)
-            else f"{deployment.model_prefix}{resolved_model}"
-        )
+        # No explicit model on this path: use the config default.
+        deployment = DeploymentRegistry.pick_default()
+        resolved_model = f"{deployment.model_prefix}{deployment.base_model}"
+        litellm_model = deployment.litellm_model(resolved_model)
 
         system_prompt = EXPLAIN_TEMPLATE
 
@@ -474,9 +496,9 @@ class GatewayService:
                 },
             ],
             stream=True,
-            reasoning_effort="none",
             timeout=120.0,
             stream_options={"include_usage": True},
+            **deployment.completion_params(resolved_model),
         )
         async for chunk in response:
             last_chunk = chunk
@@ -509,7 +531,9 @@ class GatewayService:
                     except Exception:
                         pass
 
-        cost_usd = cls._calculate_cost(prompt_tokens, completion_tokens, resolved_model)
+        cost_usd = cls._calculate_cost(
+            prompt_tokens, completion_tokens, resolved_model, deployment
+        )
         credits_used = cls._calculate_credits(cost_usd)
         total_tokens = prompt_tokens + completion_tokens
         await credit_service.deduct(principal, credits_used, total_tokens)
@@ -521,7 +545,7 @@ class GatewayService:
                 "quota_key": principal.quota_key,
                 "session_id": session_id,
                 "model": resolved_model,
-                "provider": "ollama",
+                "provider": deployment.name,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,

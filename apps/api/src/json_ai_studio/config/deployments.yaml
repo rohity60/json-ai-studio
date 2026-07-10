@@ -1,41 +1,48 @@
-# Deployment registry — multi-provider LLM backend configuration.
-# Environment variable placeholders: ${ENV_VAR_NAME}
-# Resolved at startup from os.environ. Fails if missing.
+# Deployment registry — per-deployment tunables only (ADR-0016).
+# Endpoints, credentials, litellm prefixes, and pricing live in the
+# matching provider class: src/json_ai_studio/providers/<name>.py.
+# Secrets/endpoint overrides resolve via pydantic Settings (settings.py):
+#   google_ai_studio -> GOOGLE_AI_STUDIO_API_KEY  (missing key disables)
+#   nvidia_nim       -> NVIDIA_NIM_API_KEY        (missing key disables)
+#   openrouter       -> OPENROUTER_API_KEY        (missing key disables)
+#   ollama_local     -> OLLAMA_BASE_URL (required; unset disables the
+#                       deployment), e.g. http://localhost:11434
+#
+# base_model: model used when a request names no model (default traffic);
+# enabled deployments' base models are round-robined per request.
+#
+# reasoning: generic level ("none" | "minimal" | "low" | "medium" | "high").
+# Each provider translates it to its backend's params — OpenAI-style
+# reasoning_effort by default; Google maps it to
+# generationConfig.thinkingConfig.thinkingLevel (Gemma 4 requires one).
+# Omit the key to send no reasoning params at all.
 
 deployments:
-    # Google AI Studio — Gemini family
   google_ai_studio:
     enabled: true
-    base_url: "https://generativelanguage.googleapis.com/v1beta"
-    api_key_env: "GOOGLE_AI_STUDIO_API_KEY"
-    model_prefix: "gemini/"
+    base_model: "gemma-4-26b-a4b-it"
+    reasoning: "minimal"
     models:
         - "gemma-4-26b-a4b-it"
 
-    # NVIDIA NIM API — GPU-accelerated inference
   nvidia_nim:
     enabled: true
-    base_url: "https://integrate.api.nvidia.com/v1"
-    api_key_env: "NVIDIA_NIM_API_KEY"
-    model_prefix: "nvidia/"
+    base_model: "gemma-4-26b-a4b-it"
+    reasoning: "none"
     models:
         - "gemma-4-26b-a4b-it"
 
-    # OpenRouter — aggregated multi-provider API
   openrouter:
     enabled: true
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
-    model_prefix: "openrouter/"
+    base_model: "gemma-4-26b-a4b-it"
+    reasoning: "none"
     models:
         - "gemma-4-26b-a4b-it"
 
-    # Local Ollama — development / offline
   ollama_local:
     enabled: true
-    base_url: "http://localhost:11434"
-    api_key_env: ""
-    model_prefix: "ollama/"
+    base_model: "gemma4:12b"
+    reasoning: "none"
     models:
         - "qwen3.6:35b-mlx"
         - "gemma4:12b"

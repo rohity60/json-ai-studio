@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +29,15 @@ class Settings(BaseSettings):
     # Auth0 dashboard or access tokens come back opaque and fail validation.
     auth0_audience: str | None = None
 
+    # LLM deployment registry (config/deployments.yaml). Provider API keys:
+    # a missing/empty key auto-disables that deployment at load time.
+    google_ai_studio_api_key: str | None = None
+    nvidia_nim_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    # Ollama endpoint (env: OLLAMA_BASE_URL), e.g. http://localhost:11434
+    # or a tunnel/hosted URL. Unset disables the ollama deployment.
+    ollama_base_url: str | None = None
+
     # Anonymous (shared pool) quota defaults — match pre-login behavior.
     anon_monthly_credit_limit: int = 10_000
     anon_per_minute_token_limit: int = 10_000
@@ -37,6 +47,18 @@ class Settings(BaseSettings):
     user_monthly_credit_limit: int = 2_000
     user_per_minute_token_limit: int = 30_000
     user_requests_per_minute: int = 30
+
+    @field_validator(
+        "google_ai_studio_api_key",
+        "nvidia_nim_api_key",
+        "openrouter_api_key",
+        "ollama_base_url",
+        mode="before",
+    )
+    @classmethod
+    def _empty_is_none(cls, v: str | None) -> str | None:
+        # docker-compose passthrough of an unset var arrives as "".
+        return v or None
 
     @property
     def auth_enabled(self) -> bool:

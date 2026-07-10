@@ -20,7 +20,9 @@ Deploy via Dokploy web UI (port 3001):
 - **Dockerfile path**: `apps/api/Dockerfile`
 - **Port mapping**: `8000:8000`
 - **Environment variables**:
-   - `GOOGLE_AI_STUDIO_API_KEY` = your Google AI Studio key
+   - `GOOGLE_AI_STUDIO_API_KEY` = your Google AI Studio key (required to enable the `google_ai_studio` deployment — missing key auto-disables it)
+   - `OLLAMA_BASE_URL` = Ollama endpoint (required to enable the `ollama_local` deployment — unset disables it). E.g. `http://host.docker.internal:11434` for local-host Ollama, or your tunnel/hosted Ollama URL in production.
+   - `NVIDIA_NIM_API_KEY` / `OPENROUTER_API_KEY` = optional; enable those deployments
    - `HOST` = `0.0.0.0`
    - `PORT` = `8000`
 

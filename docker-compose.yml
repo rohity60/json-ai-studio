@@ -26,6 +26,12 @@ services:
       - "8000:8000"
     environment:
       - GOOGLE_AI_STUDIO_API_KEY=${GOOGLE_AI_STUDIO_API_KEY}
+      - NVIDIA_NIM_API_KEY=${NVIDIA_NIM_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      # Ollama endpoint (Settings.ollama_base_url). Unset disables the
+      # ollama deployment. Local dev from a container:
+      # http://host.docker.internal:11434.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
       - DATABASE_URL=postgresql+asyncpg://json_ai:json_ai@db:5432/json_ai_studio
       - AUTH0_DOMAIN=${AUTH0_DOMAIN}
       - AUTH0_AUDIENCE=${AUTH0_AUDIENCE}

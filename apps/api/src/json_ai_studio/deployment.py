@@ -1,100 +1,69 @@
 """Deployment Registry — multi-provider LLM backend selection.
 
-Loads YAML config with ${ENV_VAR} placeholders. Resolves env vars at startup.
-Round-robin per model across eligible deployments. Skip disabled / model-mismatched.
+Thin orchestrator over DeploymentProvider classes (providers/, ADR-0016).
+deployments.yaml holds per-deployment tunables (enabled, models,
+base_model); provider classes own endpoints, credentials (via pydantic
+Settings), litellm prefixes, and pricing.
+
+pick(model): round-robin per model across eligible deployments.
+pick_default(): round-robin across enabled deployments — each serves its
+own base_model; used when a request names no model (default traffic).
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import re
-from dataclasses import dataclass
 from typing import Any
 
 import yaml
 
-_ENV_PATTERN = re.compile(r"\$\{(\w+)\}")
+from .providers import PROVIDER_CLASSES, DeploymentProvider
+from .settings import get_settings
+
 _MODULE_DIR = os.path.dirname(__file__)
 _logger = logging.getLogger("json_ai_studio.deployment")
 
-
-@dataclass
-class DeploymentConfig:
-    """Single deployment configuration."""
-
-    name: str
-    enabled: bool
-    base_url: str
-    api_key: str
-    model_prefix: str
-    models: list[str]
+# Reserved round-robin counter key for default (no explicit model) picks.
+_DEFAULT_RR_KEY = "__default__"
 
 
 class DeploymentRegistry:
     """Load, validate, and select backend deployments by model.
 
-    Round-robin per model. Skip disabled or model-mismatched deployments.
-    Config loaded from YAML at module import time.
+    Deployment order follows deployments.yaml. Skip disabled or
+    model-mismatched deployments. Config loaded at module import time.
     """
 
-    _deployments: dict[str, DeploymentConfig] = {}
+    _deployments: dict[str, DeploymentProvider] = {}
     _model_to_deployments: dict[str, list[str]] = {}
     _rr_counters: dict[str, int] = {}
 
     @classmethod
     def load(cls) -> None:
-        """Load YAML, resolve env vars, build lookup tables."""
+        """Load YAML tunables, instantiate providers, build lookup tables."""
         yaml_path = os.path.join(_MODULE_DIR, "config", "deployments.yaml")
         with open(yaml_path, "r") as f:
             data = yaml.safe_load(f)
 
+        settings = get_settings()
         raw_deployments: dict[str, dict[str, Any]] = data.get("deployments", {})
-        configs: list[DeploymentConfig] = []
+        providers: list[DeploymentProvider] = []
 
         for name, cfg in raw_deployments.items():
-            base_url = str(cfg["base_url"])
-            if not base_url.startswith(("http://", "https://")):
+            provider_cls = PROVIDER_CLASSES.get(name)
+            if provider_cls is None:
                 raise ValueError(
-                    f"Invalid base_url for {name}: must start with http:// or https://"
+                    f"Unknown deployment provider: {name}. "
+                    f"Known providers: {sorted(PROVIDER_CLASSES)}"
                 )
+            providers.append(provider_cls(cfg, settings))
 
-            api_key_env = str(cfg.get("api_key_env", ""))
-            if api_key_env and api_key_env not in os.environ:
-                _logger.warning(
-                    "Missing env var: %s (deployment %s disabled)",
-                    api_key_env,
-                    name,
-                )
-                enabled = False
-            else:
-                enabled = bool(cfg.get("enabled", False))
-            api_key = os.environ.get(api_key_env, "") if api_key_env else ""
-
-            model_prefix = str(cfg["model_prefix"])
-            if not model_prefix.endswith("/"):
-                raise ValueError(f"model_prefix for {name} must end with /")
-
-            models = list(cfg["models"])
-            if not models:
-                raise ValueError(f"models list for {name} must not be empty")
-
-            configs.append(
-                DeploymentConfig(
-                    name=name,
-                    enabled=enabled,
-                    base_url=base_url,
-                    api_key=api_key,
-                    model_prefix=model_prefix,
-                    models=models,
-                )
-            )
-
-        cls._build_lookup(configs)
+        cls._build_lookup(providers)
 
     @classmethod
-    def pick(cls, model: str) -> DeploymentConfig:
-        """Return next eligible deployment via round-robin."""
+    def pick(cls, model: str) -> DeploymentProvider:
+        """Return next eligible deployment for a model via round-robin."""
         names = cls._model_to_deployments.get(model, [])
         if not names:
             raise ValueError(f"No deployment supports model: {model}")
@@ -110,6 +79,23 @@ class DeploymentRegistry:
         raise RuntimeError(f"All deployments disabled for model: {model}")
 
     @classmethod
+    def pick_default(cls) -> DeploymentProvider:
+        """Round-robin enabled deployments; caller uses its base_model."""
+        names = list(cls._deployments)
+        if not names:
+            raise RuntimeError("No deployments configured")
+
+        counter = cls._rr_counters.get(_DEFAULT_RR_KEY, 0)
+        for i in range(len(names)):
+            idx = (counter + i) % len(names)
+            name = names[idx]
+            if cls._deployments[name].enabled:
+                cls._rr_counters[_DEFAULT_RR_KEY] = (idx + 1) % len(names)
+                return cls._deployments[name]
+
+        raise RuntimeError("All deployments disabled: cannot pick a default")
+
+    @classmethod
     def reload(cls) -> None:
         """Re-load YAML from disk."""
         cls._deployments = {}
@@ -118,27 +104,12 @@ class DeploymentRegistry:
         cls.load()
 
     @classmethod
-    def list_deployments(cls) -> list[DeploymentConfig]:
-        """Return all deployment configs."""
+    def list_deployments(cls) -> list[DeploymentProvider]:
+        """Return all deployment providers in yaml order."""
         return list(cls._deployments.values())
 
-    @staticmethod
-    def _resolve_env(value: str) -> str:
-        """Replace ${VAR_NAME} with os.environ[VAR_NAME]."""
-
-        def _replacer(match: re.Match) -> str:
-            var = match.group(1)
-            env_val = os.environ.get(var)
-            if env_val is None:
-                raise ValueError(
-                    f"Missing env var: {var} (required by deployment config)"
-                )
-            return env_val
-
-        return _ENV_PATTERN.sub(_replacer, value)
-
     @classmethod
-    def _build_lookup(cls, deployments: list[DeploymentConfig]) -> None:
+    def _build_lookup(cls, deployments: list[DeploymentProvider]) -> None:
         """Build model -> deployment name mapping."""
         lookup: dict[str, list[str]] = {}
         for cfg in deployments:
