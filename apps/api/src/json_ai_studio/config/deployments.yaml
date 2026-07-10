@@ -40,7 +40,7 @@ deployments:
         - "gemma-4-26b-a4b-it"
 
   ollama_local:
-    enabled: true
+    enabled: false
     base_model: "gemma4:12b"
     reasoning: "none"
     models:
