@@ -1,11 +1,21 @@
-apps/api/src/json_ai_studio/__pycache__/*
-apps/web/.next/*
-apps/api/.idea/*
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+apps/web/.next/
+
+# IDE / tooling
+.idea/
 .claude/
 .mdc
-apps/web/.idea/
-apps/web/node_modules/
-apps/web/package-lock.json
-apps/api/.env
-apps/web/.env.local
-apps/web/.env.production
+
+# Env files — real credentials never committed; examples stay tracked
+.env
+.env.*
+!.env.example

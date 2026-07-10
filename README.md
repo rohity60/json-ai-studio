@@ -73,3 +73,7 @@ npm install && npm run dev      # starts on :3000
 | [ADR README](./docs/adr/README.md) | All architectural decisions, one per file, numbered & dated |
 | [Backend Requirements](./apps/api/ai/feature/mvp/requirements.md) | WHAT the backend API must implement (derived from PRD v1.0) |
 | [Frontend Requirements](./apps/web/ai/feature/mvp/requirements.md) | WHAT the frontend UI must implement (derived from PRD v1.0) |
+
+## License
+
+Licensed under the Apache License, Version 2.0 — see [LICENSE](./LICENSE).

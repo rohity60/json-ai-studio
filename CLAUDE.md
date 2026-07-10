@@ -123,43 +123,6 @@ Routers live in `controllers/` (one file per resource); auth via `Depends(requir
 3. Write ADR for architectural decisions (>10 already exist).
 4. Validate locally: API at `:8000/docs`, Web at `:3000`.
 
-## Editing rules
-
-**Rule: Do not use string matching or single-line replacements.
-When making edits, you MUST output code modifications using the following strict Search & Replace block format:
-
-<<<<<<< SEARCH
-[Exact unique lines of original code to replace]
-=======
-[New code to insert]
->>>>>>> REPLACE
-
-Include enough surrounding context lines in the SEARCH block to make it completely unique.
-
-
-**Rule: # CRITICAL WORKFLOW FOR INDENTATION ISSUES:
-1. "The code below has indentation mismatches and irregular docstring spacing. I want you to behave exactly like the black code formatter tool.Apply a strict, uncompromising 4-space indentation rule to every line. Do not try to preserve the original irregular spacing. Output the entire file as if it were processed by running black -l 88."
-2. When you read Python files, note the exact indentation rule used (e.g., 4 spaces).
-2. When editing, do not attempt large string matches if you suspect the linter modified whitespace.
-3. Immediately after any edit, run your `lint-and-validate` tool.
-4. If the linter fixes indentation, you MUST completely reread the file before making your next edit to update your memory cache.
-
-**Rule: # CRITICAL WORKFLOW FOR PYTHON EDITS:
-1. Every time you read a file, always use line numbers. Before reading First Always format Python files with `black .` and then read he file . Install via `uv add --dev black` 
-2. When making an edit, use line-based patching tools instead of full-string replacement.
-3. Immediately after editing a file, run the project linter/formatter.
-4. IMPORTANT: Do not assume you know the state of the file after the linter runs. You MUST run the file-reading tool again to refresh your memory cache with the linter's auto-fixes before attempting a secondary edit.
-5. do not use default string matching tool for python files edits at all !!
-
-Claude Code's `Edit` tool does byte-level exact-string matching on the surrounding file. It fails when whitespace differs even by one character. This project's Python files use non-standard indentation depths (tabs, 5-space docstrings, 9-space nested dicts). Edit is fragile here.
-
-**Rule: Use Edit for <10 lines only. Use Write for everything else.**
-- `Edit` — typos, single-line changes, adding one function at end of file.
-- `Write` — replacing any function body (>5 lines), multi-function rewrites, or when Edit fails twice on the same file.
-- Never interleave Bash reads between a Read and Write on the same file.
-- When Edit fails twice: abort, read the full file fresh, then use Write to overwrite.
--  Always format Python files with `black .` after editing. Install via `uv add --dev black`.
-
 ## Notes
 
 - MVP scaffold only. No tests,  no CI/CD, no persistence (beyond localStorage sessionId).
