@@ -19,9 +19,24 @@ function isCreditExhausted(err: any): boolean {
   return err?.status === 402;
 }
 
+// Deployment/provider failure (HTTP 503 with a structured detail). The
+// backend hides raw provider errors and asks the user to retry shortly.
+function isServiceBusy(err: any): boolean {
+  return err?.status === 503 || err?.detail?.error === 'service_unavailable';
+}
+
 // Shared quota-error handling for catch blocks: shows the popup with the
 // login CTA when applicable. Returns true when the error was a quota error.
 function handleQuotaError(err: any): boolean {
+  if (isServiceBusy(err)) {
+    showRateLimitModal({
+      scope: 'model',
+      kind: 'busy',
+      message: err.detail?.message,
+      retryAfter: err.retryAfter,
+    });
+    return true;
+  }
   if (isCreditExhausted(err)) {
     showRateLimitModal({
       scope: 'api',
@@ -340,13 +355,23 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         chunkCount++;
         console.log('[SessionContext] Chunk #' + chunkCount + ':', JSON.stringify(chunk).slice(0, 200));
 
-        // Model-level quota events: backend streams a `rate_limit` or
-        // `credit_limit` event instead of a diff/complete. Show the popup
-        // (with a login CTA for anonymous users) and stop consuming.
-        if (chunk.type === 'rate_limit' || chunk.type === 'credit_limit') {
+        // Model-level quota/availability events: backend streams a
+        // `rate_limit`, `credit_limit` or `service_unavailable` event
+        // instead of a diff/complete. Show the popup (with a login CTA for
+        // anonymous users on quota errors) and stop consuming.
+        if (
+          chunk.type === 'rate_limit' ||
+          chunk.type === 'credit_limit' ||
+          chunk.type === 'service_unavailable'
+        ) {
           showRateLimitModal({
             scope: chunk.data?.scope || 'model',
-            kind: chunk.type === 'credit_limit' ? 'credits' : 'rate',
+            kind:
+              chunk.type === 'credit_limit'
+                ? 'credits'
+                : chunk.type === 'service_unavailable'
+                  ? 'busy'
+                  : 'rate',
             message: chunk.data?.message,
             retryAfter: chunk.data?.retry_after,
             loginAvailable: chunk.data?.login_available === true,
@@ -603,10 +628,19 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainError: null,
          }));
        } catch (err: any) {
-      if (!handleQuotaError(err)) {
+      const popupShown = handleQuotaError(err);
+      if (!popupShown) {
         toast.error(String(err));
         }
-      setState((prev) => ({ ...prev, explainError: String(err), explaining: false }));
+      setState((prev) => ({
+        ...prev,
+        // Popup already explains quota/busy errors; keep the panel text
+        // short instead of dumping the raw response body.
+        explainError: popupShown
+          ? 'Service temporarily unavailable. Please try again shortly.'
+          : String(err),
+        explaining: false,
+      }));
        }
      }, [state.sessionId, state.workingJson, apiKey]);
 

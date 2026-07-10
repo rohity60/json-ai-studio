@@ -9,7 +9,7 @@ export type RateLimitInfo = {
   message?: string;
   retryAfter?: number; // seconds until the caller may retry
   scope?: string; // "api" | "model"
-  kind?: 'rate' | 'credits'; // credits = monthly quota exhausted (402), no countdown
+  kind?: 'rate' | 'credits' | 'busy'; // credits = monthly quota exhausted (402), no countdown; busy = deployment/provider failure (503)
   loginAvailable?: boolean; // anonymous caller — logging in raises free limits
 };
 
@@ -62,12 +62,19 @@ export default function RateLimitModal() {
   if (!info) return null;
 
   const isCredits = info.kind === 'credits';
-  const title = isCredits ? 'Free credits used up' : 'Rate limit reached';
+  const isBusy = info.kind === 'busy';
+  const title = isCredits
+    ? 'Free credits used up'
+    : isBusy
+      ? 'Service busy'
+      : 'Rate limit reached';
   const message =
     info.message ||
     (isCredits
       ? "You've used up the free credits for this month."
-      : "You've hit the rate limit. Please wait a moment before trying again.");
+      : isBusy
+        ? 'The service is experiencing flaky behavior due to high load. Please try again in a few moments.'
+        : "You've hit the rate limit. Please wait a moment before trying again.");
 
   return (
     <div

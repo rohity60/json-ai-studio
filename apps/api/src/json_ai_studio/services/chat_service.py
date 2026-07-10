@@ -79,12 +79,12 @@ async def _stream_llm(
                     content_parts.append(text)
             elif event == "error" and payload is not None:
                 error_payload = payload
-            elif event in ("rate_limit", "credit_limit"):
+            elif event in ("rate_limit", "credit_limit", "service_unavailable"):
                 quota_hit = True
 
-        # The rate_limit/credit_limit event was already forwarded to the
-        # client; stop here so we don't emit a misleading "complete" with an
-        # empty explanation.
+        # The rate_limit/credit_limit/service_unavailable event was already
+        # forwarded to the client (it becomes a popup); stop here so we don't
+        # emit a misleading "complete" with an empty explanation.
         if quota_hit:
             return
 

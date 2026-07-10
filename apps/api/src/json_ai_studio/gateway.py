@@ -35,6 +35,14 @@ from .services import credit_service
 
 logger = logging.getLogger("json_ai_studio.gateway")
 
+# Shown to users when a deployment/provider call fails (any cause). Raw
+# provider errors go to server logs only — never to the client.
+SERVICE_BUSY_MESSAGE = (
+    "The service is experiencing flaky behavior due to high load. "
+    "Please try again in a few moments."
+)
+SERVICE_BUSY_RETRY_AFTER = 30
+
 # Legacy fallback pricing: model -> (prompt_per_1k, completion_per_1k) in
 # USD, for models not served by any deployment. Deployment-served models
 # price via their provider class (providers/<name>.py, ADR-0016).
@@ -453,8 +461,14 @@ class GatewayService:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            yield "event: error\ndata: " + json.dumps(
-                {"error": str(e), "latency_ms": latency_ms}
+            # Deployment/provider failure -> friendly popup event; raw error
+            # stays in the logs above.
+            yield "event: service_unavailable\ndata: " + json.dumps(
+                {
+                    "scope": "model",
+                    "message": SERVICE_BUSY_MESSAGE,
+                    "retry_after": SERVICE_BUSY_RETRY_AFTER,
+                }
             ) + "\n\n"
 
     @classmethod
