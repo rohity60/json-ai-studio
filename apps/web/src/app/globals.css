@@ -6,6 +6,16 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
 }
 
+/* Landing entrance animation (opt-in via .animate-fade-up) */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up { animation: fadeUp 0.5s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up { animation: none; }
+}
+
 /* JSON Tree coloring */
 .json-key { color: #d73a49; font-weight: 500; }
 .json-string { color: #032f62; }

@@ -7,7 +7,7 @@ import DiffViewer from '@/components/DiffViewer';
 import JSONTree from '@/components/JSONTree';
 import VersionSidebar from '@/components/VersionSidebar';
 import { useSession } from '@/context/SessionContext';
-import { FileJson2, MessageSquare, Code2, LayoutList, Sparkles } from 'lucide-react';
+import { FileJson2, MessageSquare, Code2, History, Sparkles } from 'lucide-react';
 import ExplainPanel from '@/components/ExplainPanel';
 import Logo from '@/components/Logo';
 import UserChip from '@/components/UserChip';
@@ -43,10 +43,6 @@ export default function Home() {
               className="px-4 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700">
               New Session</button>
                )}
-            <button onClick={() => setShowSidebar(!showSidebar)}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors" title="Toggle sidebar">
-              <LayoutList className="w-5 h-5" />
-            </button>
             <UserChip />
           </div>
         </header>
@@ -88,9 +84,21 @@ export default function Home() {
                  Diff Viewer</button>
 
               </div>
-              <span className="text-xs text-muted-foreground">
-                {Object.keys(json).length > 0 ? `${Object.keys(json).length} keys` : 'Empty'}
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground">
+                  {Object.keys(json).length > 0 ? `${Object.keys(json).length} keys` : 'Empty'}
+                </span>
+                {!showSidebar && (
+                  <button
+                    onClick={() => setShowSidebar(true)}
+                    className="px-3 py-1.5 text-sm font-medium rounded-lg flex items-center gap-1.5 transition-colors border border-purple-600 text-purple-600 hover:bg-purple-50"
+                    title="Version history"
+                  >
+                    <History className="w-4 h-4" />
+                    Versions
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Tab Content */}
@@ -136,7 +144,7 @@ export default function Home() {
           {/* Right Sidebar - Version History (collapsible) */}
           {showSidebar && (
             <aside className="w-[280px] border-l hidden lg:block bg-gray-50">
-              <VersionSidebar />
+              <VersionSidebar onClose={() => setShowSidebar(false)} />
             </aside>
           )}
         </main>
