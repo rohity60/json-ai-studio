@@ -16,6 +16,7 @@ Raised HTTPExceptions carry a structured `detail` dict with
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -24,10 +25,12 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import select, update
 
-from ..auth import Principal
+from ..auth import Principal, mask_secret
 from ..db.database import session_factory
 from ..db.models_orm import User
 from ..settings import get_settings
+
+logger = logging.getLogger("json_ai_studio.credit_service")
 
 _CYCLE_SECONDS = 30 * 86400
 _WINDOW_SECONDS = 60
@@ -107,6 +110,12 @@ def _ensure_anon_record(quota_key: str) -> dict[str, Any]:
 async def check(principal: Principal) -> None:
     """Raise HTTPException 402 (credits) or 429 (token rate) if over quota."""
     settings = get_settings()
+    logger.debug(
+        "quota check kind=%s quota_key=%s window_tokens=%d",
+        principal.kind,
+        mask_secret(principal.quota_key),
+        _window_tokens(principal.quota_key),
+    )
 
     if principal.kind == "user":
         factory = session_factory()
@@ -131,28 +140,67 @@ async def check(principal: Principal) -> None:
                 )
                 await db.commit()
                 user.credits_used = 0.0
+            logger.debug(
+                "user quota credits_used=%.3f limit=%s",
+                user.credits_used,
+                user.monthly_credit_limit,
+            )
             if (
                 user.monthly_credit_limit != -1
                 and user.credits_used >= user.monthly_credit_limit
             ):
+                logger.info(
+                    "credit limit hit user_id=%s used=%.3f limit=%s",
+                    principal.user_id,
+                    user.credits_used,
+                    user.monthly_credit_limit,
+                )
                 raise _credit_error(login_available=False)
             if _window_tokens(principal.quota_key) >= user.per_minute_token_limit:
+                logger.info(
+                    "token-rate limit hit user_id=%s limit=%d",
+                    principal.user_id,
+                    user.per_minute_token_limit,
+                )
                 raise _token_rate_error(login_available=False)
         return
 
     # Anonymous: shared pool.
     record = _ensure_anon_record(principal.quota_key)
+    logger.debug(
+        "anon quota credits_used=%.3f limit=%s",
+        record["credits_used"],
+        record["monthly_limit"],
+    )
     if (
         record["monthly_limit"] != -1
         and record["credits_used"] >= record["monthly_limit"]
     ):
+        logger.info(
+            "anon credit limit hit quota_key=%s used=%.3f limit=%s",
+            mask_secret(principal.quota_key),
+            record["credits_used"],
+            record["monthly_limit"],
+        )
         raise _credit_error(login_available=True)
     if _window_tokens(principal.quota_key) >= settings.anon_per_minute_token_limit:
+        logger.info(
+            "anon token-rate limit hit quota_key=%s limit=%d",
+            mask_secret(principal.quota_key),
+            settings.anon_per_minute_token_limit,
+        )
         raise _token_rate_error(login_available=True)
 
 
 async def deduct(principal: Principal, credits: float, tokens: int = 0) -> None:
     """Record spend: monthly credits + per-minute token window."""
+    logger.debug(
+        "quota deduct kind=%s quota_key=%s credits=%.6f tokens=%d",
+        principal.kind,
+        mask_secret(principal.quota_key),
+        credits,
+        tokens,
+    )
     if principal.kind == "user":
         factory = session_factory()
         if factory is not None:

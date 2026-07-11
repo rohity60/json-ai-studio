@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import require_api_key
@@ -13,6 +15,8 @@ from ..models import (
 from ..services import version_service
 from ..services.errors import ConflictError, NotFoundError
 
+logger = logging.getLogger("json_ai_studio.controllers.versions")
+
 router = APIRouter(prefix="/api", tags=["sessions"])
 
 
@@ -23,6 +27,12 @@ async def endpoint_create_version_snapshot(
     _auth=Depends(require_api_key),
 ):
     """Create a named snapshot of the current working JSON."""
+    logger.info(
+        "POST /api/sessions/%s/versions principal=%s label=%r",
+        session_id,
+        _auth.kind,
+        req.label,
+    )
     try:
         return await version_service.create_snapshot(
             session_id, req.label, req.json_data
@@ -38,6 +48,12 @@ async def endpoint_select_version(
     _auth=Depends(require_api_key),
 ):
     """Select a version snapshot as the new working baseline."""
+    logger.info(
+        "POST /api/sessions/%s/versions/select principal=%s version_id=%s",
+        session_id,
+        _auth.kind,
+        req.versionId,
+    )
     try:
         return await version_service.select_version(session_id, req.versionId)
     except NotFoundError as exc:
@@ -50,6 +66,7 @@ async def endpoint_list_versions(
     _auth=Depends(require_api_key),
 ):
     """List all version snapshots for a session (V-10)."""
+    logger.info("GET /api/sessions/%s/versions principal=%s", session_id, _auth.kind)
     try:
         return await version_service.list_versions(session_id)
     except NotFoundError as exc:
@@ -67,6 +84,12 @@ async def endpoint_restore_versions(
     Used by the frontend to rehydrate a fresh session from the browser's
     IndexedDB cache after a backend restart.
     """
+    logger.info(
+        "POST /api/sessions/%s/versions/restore principal=%s count=%d",
+        session_id,
+        _auth.kind,
+        len(req.versions),
+    )
     try:
         return await version_service.restore_versions(session_id, req)
     except NotFoundError as exc:

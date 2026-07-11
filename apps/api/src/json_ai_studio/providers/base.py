@@ -94,6 +94,19 @@ class DeploymentProvider(ABC):
             )
             self.enabled = False
 
+        # base_url and model list are safe to log; the API key never is.
+        _logger.debug(
+            "provider initialized name=%s base_url=%s enabled=%s base_model=%s "
+            "models=%s reasoning=%s api_key_present=%s",
+            self.name,
+            self.base_url or "<none>",
+            self.enabled,
+            self.base_model,
+            self.models,
+            self.reasoning,
+            bool(self.api_key),
+        )
+
     # --- overridable resolution seams ---------------------------------------
 
     def _resolve_base_url(self, cfg: dict[str, Any], settings: Settings) -> str:

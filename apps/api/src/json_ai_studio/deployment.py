@@ -60,6 +60,15 @@ class DeploymentRegistry:
             providers.append(provider_cls(cfg, settings))
 
         cls._build_lookup(providers)
+        enabled = [p.name for p in providers if p.enabled]
+        _logger.info(
+            "deployment registry loaded total=%d enabled=%s",
+            len(providers),
+            enabled,
+        )
+        _logger.debug(
+            "deployment registry models=%s", sorted(cls._model_to_deployments)
+        )
 
     @classmethod
     def pick(cls, model: str) -> DeploymentProvider:
@@ -124,5 +133,7 @@ class DeploymentRegistry:
 # Auto-load at module import time
 try:
     DeploymentRegistry.load()
-except Exception as e:
-    print(f"WARNING: DeploymentRegistry failed to load: {e}")
+except Exception:
+    # Logging may not be configured yet at import time; logger.exception still
+    # routes to the root handler (stderr) so the traceback is never lost.
+    _logger.exception("DeploymentRegistry failed to load")

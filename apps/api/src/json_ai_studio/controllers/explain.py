@@ -29,6 +29,7 @@ async def endpoint_explain(
 ):
     """Explain the JSON in a session. Returns markdown as plain text."""
     session_id = body.get("sessionId")
+    logger.info("POST /api/explain principal=%s session=%s", principal.kind, session_id)
     if not session_id:
         raise HTTPException(status_code=400, detail="sessionId is required")
 

@@ -61,9 +61,24 @@ async def _stream_llm(
     parsed successfully).
     """
     try:
+        logger.info(
+            "chat turn start session=%s message_len=%d working_keys=%d",
+            session_id,
+            len(message),
+            len(working_json),
+        )
+        logger.debug(
+            "chat turn full session=%s message=%r working_json=%s",
+            session_id,
+            message,
+            working_json,
+        )
         yield sse("thinking", {"text": "Analyzing your request..."})
 
         system_prompt = build_system_prompt(working_json)
+        logger.debug(
+            "chat system_prompt session=%s prompt=%s", session_id, system_prompt
+        )
 
         content_parts: list[str] = []
         error_payload: dict[str, Any] | None = None
@@ -90,7 +105,7 @@ async def _stream_llm(
 
         combined = "".join(content_parts)
         logger.info("chat stream finished response_len=%d", len(combined))
-        logger.info("llm raw output: %s", combined[:2000])
+        logger.debug("llm raw output (full) session=%s: %s", session_id, combined)
 
         if error_payload is not None:
             yield sse(
@@ -111,6 +126,12 @@ async def _stream_llm(
             "parsed llm response: diffs=%d explanation=%r",
             len(diffs),
             explanation[:300],
+        )
+        logger.debug(
+            "parsed llm response (full) session=%s diffs=%s explanation=%r",
+            session_id,
+            diffs,
+            explanation,
         )
 
         if not diffs:
@@ -136,6 +157,13 @@ async def _stream_llm(
             len(applied),
             len(failed),
             " reasons=" + "; ".join(r for _, r in failed) if failed else "",
+        )
+        logger.debug(
+            "diff application (full) session=%s applied=%s failed=%s merged=%s",
+            session_id,
+            applied,
+            failed,
+            merged,
         )
 
         for diff in applied:
@@ -232,6 +260,16 @@ async def chat_event_stream(
                 )
             session["updated_at"] = now_iso()
             await store.save_session(session)
+            logger.info(
+                "chat turn persisted session=%s diffs=%d",
+                session.get("id"),
+                len(all_diffs),
+            )
+            logger.debug(
+                "chat turn merged_json session=%s json=%s",
+                session.get("id"),
+                merged_json,
+            )
 
     except Exception as e:
         logger.exception("chat endpoint stream failed")

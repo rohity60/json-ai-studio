@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
+
+logger = logging.getLogger("json_ai_studio.controllers.health")
 
 router = APIRouter()
 
@@ -10,6 +14,7 @@ router = APIRouter()
 @router.get("/health")
 def health_check():
     """Health check endpoint. No auth required."""
+    logger.debug("GET /health")
     return {"status": "ok", "version": "0.1.0"}
 
 

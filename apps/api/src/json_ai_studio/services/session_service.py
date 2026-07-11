@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from ..db.session_store import store
 from .errors import NotFoundError
+
+logger = logging.getLogger("json_ai_studio.session_service")
 
 
 def now_iso() -> str:
@@ -14,19 +17,31 @@ def now_iso() -> str:
 
 
 async def create_session(name: str | None = None) -> dict[str, Any]:
-    return await store.create_session(name=name)
+    session = await store.create_session(name=name)
+    logger.info("session created id=%s name=%r", session["id"], name)
+    logger.debug("session created full=%s", session)
+    return session
 
 
 async def get_session(session_id: str) -> dict[str, Any]:
     """Return the session dict or raise NotFoundError."""
     session = await store.get_session(session_id)
     if session is None:
+        logger.info("session lookup miss id=%s", session_id)
         raise NotFoundError("Session not found")
+    logger.debug("session lookup hit id=%s full=%s", session_id, session)
     return session
 
 
 async def upload_json(data: Any, session_id: str | None) -> dict[str, Any]:
     """Store an uploaded JSON document; reuse the session if one is given."""
+    logger.info(
+        "upload_json session_id=%s type=%s top_keys=%s",
+        session_id,
+        type(data).__name__,
+        list(data.keys()) if isinstance(data, dict) else None,
+    )
+    logger.debug("upload_json payload=%s", data)
     session = await store.get_session(session_id) if session_id else None
     if session is None:
         name = data.get("name", "Uploaded") if isinstance(data, dict) else "Uploaded"
@@ -40,6 +55,11 @@ async def upload_json(data: Any, session_id: str | None) -> dict[str, Any]:
     session["baseline_json"] = data if isinstance(data, dict) else {}
     session["updated_at"] = now_iso()
     await store.save_session(session)
+    logger.info(
+        "upload stored session_id=%s top_keys=%d",
+        session["id"],
+        len(session["working_json"]),
+    )
 
     return {
         "session_id": session["id"],

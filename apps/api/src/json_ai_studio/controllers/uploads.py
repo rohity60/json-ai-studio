@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json as _json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..auth import require_api_key
 from ..services import session_service
+
+logger = logging.getLogger("json_ai_studio.controllers.uploads")
 
 router = APIRouter(prefix="/api", tags=["upload"])
 
@@ -19,6 +22,11 @@ async def endpoint_upload_json(
 ):
     """Accept a JSON body. Use existing session if provided."""
     content_type = request.headers.get("content-type", "")
+    logger.info(
+        "POST /api/json/upload principal=%s content_type=%s",
+        _auth.kind,
+        content_type,
+    )
 
     sid = None
     if "multipart/form-data" in content_type:

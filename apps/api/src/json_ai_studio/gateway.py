@@ -28,7 +28,7 @@ from typing import Any, AsyncGenerator
 import litellm
 from fastapi import HTTPException
 
-from .auth import Principal
+from .auth import Principal, mask_secret
 from .deployment import DeploymentRegistry
 from .providers import DeploymentProvider
 from .services import credit_service
@@ -288,7 +288,16 @@ class GatewayService:
                 session_id,
                 resolved_model,
                 deployment.name,
-                principal.quota_key[:24],
+                mask_secret(principal.quota_key),
+            )
+            logger.debug(
+                "invoke request session=%s litellm_model=%s base_url=%s "
+                "system_prompt=%s user_message=%r",
+                session_id,
+                litellm_model,
+                deployment.base_url,
+                system_prompt,
+                message,
             )
 
             # Emit deployment selection event
@@ -333,6 +342,7 @@ class GatewayService:
 
             combined = "".join(content_parts)
             logger.info("invoke session=%s response_len=%d", session_id, len(combined))
+            logger.debug("invoke response (full) session=%s: %s", session_id, combined)
 
             # Extract usage from last streaming chunk.
             # litellm streaming: usage is on each chunk (Usage pydantic model),
@@ -493,6 +503,17 @@ class GatewayService:
         litellm_model = deployment.litellm_model(resolved_model)
 
         system_prompt = EXPLAIN_TEMPLATE
+        logger.info(
+            "explain invoke session=%s model=%s deployment=%s principal=%s working_keys=%d",
+            session_id,
+            resolved_model,
+            deployment.name,
+            mask_secret(principal.quota_key),
+            len(working_json),
+        )
+        logger.debug(
+            "explain request session=%s working_json=%s", session_id, working_json
+        )
 
         content_parts: list[str] = []
         last_chunk = None
@@ -544,6 +565,15 @@ class GatewayService:
                         completion_tokens = usage_dict.get("completion_tokens", 0) or 0
                     except Exception:
                         pass
+
+        logger.info(
+            "explain finished session=%s response_len=%d prompt_tokens=%d completion_tokens=%d",
+            session_id,
+            len(combined),
+            prompt_tokens,
+            completion_tokens,
+        )
+        logger.debug("explain response (full) session=%s: %s", session_id, combined)
 
         cost_usd = cls._calculate_cost(
             prompt_tokens, completion_tokens, resolved_model, deployment

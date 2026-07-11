@@ -15,6 +15,12 @@ apps/web/.next/
 .claude/
 .mdc
 
+# Logs (ADR-0017) — rotating log files, never committed
+logs/
+apps/api/logs/
+*.log
+*.log.[0-9]*
+
 # Env files — real credentials never committed; examples stay tracked
 .env
 .env.*

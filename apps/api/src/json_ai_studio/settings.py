@@ -48,6 +48,20 @@ class Settings(BaseSettings):
     user_per_minute_token_limit: int = 30_000
     user_requests_per_minute: int = 30
 
+    # Logging (ADR-0017). Env-driven so level/dir/rotation are tunable without
+    # code changes. Applies to root, the json_ai_studio namespace, and (when
+    # log_capture_uvicorn) uvicorn's own loggers.
+    log_level: str = "INFO"  # DEBUG|INFO|WARNING|ERROR|CRITICAL
+    # Relative dir resolves against CWD: apps/api/logs locally, /app/logs in
+    # the container (see docker-compose bind mount).
+    log_dir: str = "logs"
+    log_file_name: str = "app.log"
+    log_to_file: bool = True
+    log_to_console: bool = True  # keep stderr so `docker logs` still works
+    log_max_bytes: int = 10_485_760  # 10 MiB per file before rollover
+    log_backup_count: int = 5  # keep app.log.1 .. app.log.5
+    log_capture_uvicorn: bool = True  # route uvicorn/access logs to same sinks
+
     @field_validator(
         "google_ai_studio_api_key",
         "nvidia_nim_api_key",
@@ -59,6 +73,14 @@ class Settings(BaseSettings):
     def _empty_is_none(cls, v: str | None) -> str | None:
         # docker-compose passthrough of an unset var arrives as "".
         return v or None
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, v: str | None) -> str:
+        # Accept lowercase / whitespace; empty (compose passthrough) -> INFO.
+        if not v or not str(v).strip():
+            return "INFO"
+        return str(v).strip().upper()
 
     @property
     def auth_enabled(self) -> bool:

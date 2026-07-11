@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,6 +11,8 @@ from ..db.session_store import store
 from ..models import RestoreVersionsRequest, VersionSnapshot
 from .errors import ConflictError, NotFoundError
 from .session_service import get_session, now_iso
+
+logger = logging.getLogger("json_ai_studio.version_service")
 
 
 async def create_snapshot(
@@ -36,6 +39,14 @@ async def create_snapshot(
     session["versions"] = versions
     session["updated_at"] = now_iso()
     await store.save_session(session)
+    logger.info(
+        "version snapshot created session_id=%s version_id=%s label=%r total=%d",
+        session_id,
+        version.id,
+        label,
+        len(versions),
+    )
+    logger.debug("version snapshot json=%s", json_data)
     return version.model_dump()
 
 
@@ -52,6 +63,9 @@ async def select_version(session_id: str, version_id: str) -> dict[str, Any]:
             break
 
     if target is None:
+        logger.info(
+            "select_version miss session_id=%s version_id=%s", session_id, version_id
+        )
         raise NotFoundError("Version not found")
 
     json_data = (
@@ -65,6 +79,8 @@ async def select_version(session_id: str, version_id: str) -> dict[str, Any]:
     session["conversation_history"] = []
     session["updated_at"] = now_iso()
     await store.save_session(session)
+    logger.info("version selected session_id=%s version_id=%s", session_id, version_id)
+    logger.debug("version selected json=%s", json_data)
 
     return {
         "working_json": session["working_json"],
@@ -80,6 +96,7 @@ async def select_version(session_id: str, version_id: str) -> dict[str, Any]:
 async def list_versions(session_id: str) -> dict[str, Any]:
     session = await get_session(session_id)
     versions = session.get("versions", [])
+    logger.info("list_versions session_id=%s count=%d", session_id, len(versions))
     return {
         "versions": [
             v.model_dump() if hasattr(v, "model_dump") else v for v in versions
@@ -101,8 +118,21 @@ async def restore_versions(
     session = await get_session(session_id)
 
     if session.get("versions"):
+        logger.info("restore_versions conflict session_id=%s", session_id)
         raise ConflictError("Session already has versions")
 
+    logger.info(
+        "restore_versions session_id=%s count=%d active=%s",
+        session_id,
+        len(req.versions),
+        req.active_version_id,
+    )
+    logger.debug(
+        "restore_versions working_json=%s baseline_json=%s versions=%s",
+        req.working_json,
+        req.baseline_json,
+        [v.model_dump(mode="json") for v in req.versions],
+    )
     session["versions"] = [v.model_dump(mode="json") for v in req.versions]
 
     if req.working_json is not None:

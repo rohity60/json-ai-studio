@@ -18,6 +18,7 @@ Returns 429 (with login_available flag) when exceeded.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections import defaultdict
@@ -31,6 +32,8 @@ from fastapi.concurrency import run_in_threadpool
 from .auth0_jwt import verify_token
 from .settings import get_settings
 
+logger = logging.getLogger("json_ai_studio.auth")
+
 # Non-protected: health, OpenAPI schema, docs UI, favicon.
 _UNPROTECTED_PREFIXES = (
     "/health",
@@ -40,6 +43,19 @@ _UNPROTECTED_PREFIXES = (
 )
 
 _RATE_WINDOW = 60  # seconds
+
+
+def mask_secret(value: str | None) -> str:
+    """Redact a credential for logging: keep last 4 chars, mask the rest.
+
+    Never log raw API keys or the shared pool key at full length. Bearer
+    tokens are never passed here -- they are simply not logged at all.
+    """
+    if not value:
+        return "<empty>"
+    if len(value) <= 4:
+        return "*" * len(value)
+    return f"...{value[-4:]} (len={len(value)})"
 
 
 @dataclass
@@ -100,8 +116,20 @@ async def get_principal(request: Request) -> Principal:
     settings = get_settings()
     authorization = request.headers.get("authorization", "")
 
-    if authorization.lower().startswith("bearer "):
+    has_bearer = authorization.lower().startswith("bearer ")
+    logger.debug(
+        "auth resolve path=%s method=%s bearer=%s",
+        request.url.path,
+        request.method,
+        has_bearer,
+    )
+
+    if has_bearer:
         if not settings.auth_enabled:
+            logger.warning(
+                "bearer rejected 503 path=%s (auth/database not configured)",
+                request.url.path,
+            )
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -113,7 +141,11 @@ async def get_principal(request: Request) -> Principal:
         try:
             # JWKS fetch on cache miss is blocking urllib I/O.
             claims = await run_in_threadpool(verify_token, token)
-        except jwt.PyJWTError:
+        except jwt.PyJWTError as exc:
+            # Never log the token itself -- only the failure reason.
+            logger.warning(
+                "bearer verify failed 401 path=%s err=%s", request.url.path, exc
+            )
             raise HTTPException(
                 status_code=401,
                 detail="Invalid or expired token. Please log in again.",
@@ -130,9 +162,20 @@ async def get_principal(request: Request) -> Principal:
             email=user.email,
         )
         limit = settings.user_requests_per_minute
+        logger.info(
+            "principal resolved kind=user sub=%s user_id=%s email=%s",
+            claims["sub"],
+            user.id,
+            user.email,
+        )
     else:
         client_key = request.headers.get("x-api-key") or settings.general_api_key
         if len(client_key) < 8:
+            logger.warning(
+                "api-key rejected 401 path=%s key=%s",
+                request.url.path,
+                mask_secret(client_key),
+            )
             raise HTTPException(
                 status_code=401,
                 detail="Missing or invalid API key. Send valid X-API-Key header.",
@@ -143,8 +186,18 @@ async def get_principal(request: Request) -> Principal:
             rate_key=client_key,
         )
         limit = settings.anon_requests_per_minute
+        logger.info(
+            "principal resolved kind=anonymous rate_key=%s", mask_secret(client_key)
+        )
 
     if not _limiter.allow(principal.rate_key, limit):
+        logger.info(
+            "rate limit hit 429 kind=%s rate_key=%s limit=%d window=%ds",
+            principal.kind,
+            mask_secret(principal.rate_key),
+            limit,
+            _RATE_WINDOW,
+        )
         raise HTTPException(
             status_code=429,
             detail={

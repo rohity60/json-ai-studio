@@ -13,10 +13,13 @@ skipping ``save_session`` would silently lose writes there.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
+
+logger = logging.getLogger("json_ai_studio.session_store")
 
 
 class SessionStore(ABC):
@@ -66,19 +69,27 @@ class InMemorySessionStore(SessionStore):
             "updated_at": now,
         }
         self._sessions[sid] = session
+        logger.debug(
+            "store create id=%s total=%d full=%s", sid, len(self._sessions), session
+        )
         return session
 
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
-        return self._sessions.get(session_id)
+        session = self._sessions.get(session_id)
+        logger.debug("store get id=%s hit=%s", session_id, session is not None)
+        return session
 
     async def save_session(self, session: dict[str, Any]) -> None:
         self._sessions[session["id"]] = session
+        logger.debug("store save id=%s full=%s", session["id"], session)
 
     async def list_sessions(self) -> list[str]:
         return list(self._sessions.keys())
 
     async def delete_session(self, session_id: str) -> bool:
-        return self._sessions.pop(session_id, None) is not None
+        existed = self._sessions.pop(session_id, None) is not None
+        logger.debug("store delete id=%s existed=%s", session_id, existed)
+        return existed
 
 
 store: SessionStore = InMemorySessionStore()

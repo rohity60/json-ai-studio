@@ -41,6 +41,13 @@ async def upsert_from_claims(claims: dict[str, Any], token: str) -> User:
     settings = get_settings()
     factory = _require_db()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Log claims only -- never the raw bearer token.
+    logger.debug(
+        "upsert_from_claims sub=%s email=%s name=%s",
+        claims.get("sub"),
+        claims.get("email"),
+        claims.get("name"),
+    )
 
     async with factory() as db:
         stmt = (
@@ -62,8 +69,12 @@ async def upsert_from_claims(claims: dict[str, Any], token: str) -> User:
         )
         user = (await db.execute(stmt)).scalar_one()
         await db.commit()
+        logger.info(
+            "user upserted id=%s sub=%s email=%s", user.id, user.auth0_sub, user.email
+        )
 
         if user.email is None:
+            logger.debug("user email NULL id=%s -> userinfo backfill", user.id)
             profile = await _fetch_userinfo(token)
             if profile:
                 await db.execute(
@@ -122,6 +133,13 @@ async def get_profile(user_id) -> dict[str, Any]:
             user.billing_cycle_start = now
 
         remaining = max(0.0, user.monthly_credit_limit - user.credits_used)
+        logger.info(
+            "profile fetched id=%s plan=%s used=%.3f remaining=%.3f",
+            user.id,
+            user.plan,
+            user.credits_used,
+            remaining,
+        )
         return {
             "id": str(user.id),
             "email": user.email,
