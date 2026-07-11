@@ -164,18 +164,16 @@ export default async function LandingV2() {
   return (
     <div className="min-h-screen bg-white text-[#2c3e50]">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <Logo />
-          <div className="flex items-center gap-2 sm:gap-3">
-            <StarPill stars={stars} />
-            <Link
-              href="/studio"
-              className="rounded-lg bg-purple-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-purple-700"
-            >
-              Start Free
-            </Link>
-          </div>
+      <header className="sticky top-0 z-50 flex items-center justify-between border-b border-gray-200 bg-white/80 px-4 py-3 backdrop-blur">
+        <Logo />
+        <div className="flex items-center gap-2 sm:gap-3">
+          <StarPill stars={stars} />
+          <Link
+            href="/studio"
+            className="rounded-lg bg-purple-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-purple-700"
+          >
+            Start Free
+          </Link>
         </div>
       </header>
 

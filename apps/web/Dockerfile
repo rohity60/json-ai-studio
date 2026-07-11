@@ -17,6 +17,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=base /app/package.json ./
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/.next ./.next
+COPY --from=base /app/public ./public
 
 EXPOSE 3000
 
