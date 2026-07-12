@@ -27,17 +27,17 @@ deployments:
 
   nvidia_nim:
     enabled: true
-    base_model: "gemma-4-26b-a4b-it"
+    base_model: "google/gemma-4-31b-it"
     reasoning: "none"
     models:
-        - "gemma-4-26b-a4b-it"
+        - "google/gemma-4-31b-it"
 
   openrouter:
     enabled: true
-    base_model: "gemma-4-26b-a4b-it"
+    base_model: "google/gemma-4-26b-a4b-it:free"
     reasoning: "none"
     models:
-        - "gemma-4-26b-a4b-it"
+        - "google/gemma-4-26b-a4b-it:free"
 
   ollama_local:
     enabled: false

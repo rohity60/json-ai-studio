@@ -127,7 +127,7 @@ class DeploymentProvider(ABC):
         Override for backends with different controls (e.g. Google's
         generationConfig.thinkingConfig).
         """
-        if self.reasoning is None:
+        if self.reasoning is None or self.reasoning.lower() == "none":
             return {}
         return {"reasoning_effort": self.reasoning}
 
