@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Clock } from 'lucide-react';
+import Button from '@/components/ui/Button';
 
 // Module-level store for modal state — callable from anywhere (context, api
 // callbacks) without prop drilling. Same pattern as VersionModal.
@@ -138,43 +139,24 @@ export default function RateLimitModal() {
         )}
 
         {info.loginAvailable && (
-          <button
+          <Button
+            variant="primary"
+            className="w-full mb-2"
             onClick={() => {
               window.location.href = '/auth/login?returnTo=/studio';
             }}
-            style={{
-              width: '100%',
-              padding: '0.5rem 0.75rem',
-              backgroundColor: '#7c3aed',
-              color: 'white',
-              fontSize: '0.875rem',
-              fontWeight: 500,
-              borderRadius: '0.5rem',
-              border: 'none',
-              cursor: 'pointer',
-              marginBottom: '0.5rem',
-            }}
           >
             Log in for higher free limits
-          </button>
+          </Button>
         )}
 
-        <button
+        <Button
+          variant={info.loginAvailable ? 'secondary' : 'primary'}
+          className="w-full"
           onClick={() => hideRateLimitModal()}
-          style={{
-            width: '100%',
-            padding: '0.5rem 0.75rem',
-            backgroundColor: info.loginAvailable ? '#f3f4f6' : '#7c3aed',
-            color: info.loginAvailable ? '#374151' : 'white',
-            fontSize: '0.875rem',
-            fontWeight: 500,
-            borderRadius: '0.5rem',
-            border: 'none',
-            cursor: 'pointer',
-          }}
         >
           Got it
-        </button>
+        </Button>
       </div>
     </div>
   );

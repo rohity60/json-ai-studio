@@ -5,7 +5,9 @@ import { JsonView } from 'react-json-view-lite';
 import 'react-json-view-lite/dist/index.css';
 import { Check, X, Code, Columns } from 'lucide-react';
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer';
+import { toast } from 'sonner';
 import { useSession } from '@/context/SessionContext';
+import Button from '@/components/ui/Button';
 
 type DiffEntry = {
   id: string;
@@ -18,6 +20,7 @@ type DiffEntry = {
 type DiffViewerProps = {
   before: Record<string, unknown>;
   after: Record<string, unknown>;
+  onResolved?: () => void;
 };
 
 const opColors: Record<string, string> = {
@@ -26,7 +29,7 @@ const opColors: Record<string, string> = {
   delete: 'text-red-600 bg-red-50',
 };
 
-export default function DiffViewer({ before, after }: DiffViewerProps) {
+export default function DiffViewer({ before, after, onResolved }: DiffViewerProps) {
   const [localDiffs, setLocalDiffs] = useState<DiffEntry[]>([]);
   const [accepted, setAccepted] = useState<Set<number>>(new Set());
   const [rejected, setRejected] = useState<Set<number>>(new Set());
@@ -73,28 +76,14 @@ export default function DiffViewer({ before, after }: DiffViewerProps) {
     <div className='space-y-4'>
       {/* View mode toggle */}
       <div className='flex items-center gap-2 border-b pb-2'>
-        <button
-          onClick={() => setViewMode('diffviewer')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded ${
-            viewMode === 'diffviewer'
-              ? 'bg-gray-900 text-white'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
+        <Button variant="pill" active={viewMode === 'diffviewer'} onClick={() => setViewMode('diffviewer')}>
           <Code className='w-4 h-4' />
           Diff Viewer
-        </button>
-        <button
-          onClick={() => setViewMode('sidebyside')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded ${
-            viewMode === 'sidebyside'
-              ? 'bg-gray-900 text-white'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
+        </Button>
+        <Button variant="pill" active={viewMode === 'sidebyside'} onClick={() => setViewMode('sidebyside')}>
           <Columns className='w-4 h-4' />
           Side by Side
-        </button>
+        </Button>
         <div className='flex-1' />
         <div className='flex items-center gap-4 text-xs text-muted-foreground'>
           <span className='flex items-center gap-1'>
@@ -159,28 +148,32 @@ export default function DiffViewer({ before, after }: DiffViewerProps) {
                 <span className='uppercase'>{diff.operation}</span>
               </span>
               <div className='flex gap-1'>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => {
                     acceptDiff(diff.id);
                     setAccepted((prev) => new Set([...prev, i]));
                   }}
                   disabled={accepted.has(i)}
-                  className='p-1 hover:bg-black/10 rounded'
+                  className='hover:bg-black/10'
                   title='Accept'
                 >
                   <Check className='w-4 h-4 text-green-600' />
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => {
                     removeDiff(diff.id);
                     setRejected((prev) => new Set([...prev, i]));
                   }}
                   disabled={rejected.has(i)}
-                  className='p-1 hover:bg-black/10 rounded'
+                  className='hover:bg-black/10'
                   title='Reject'
                 >
                   <X className='w-4 h-4 text-red-600' />
-                </button>
+                </Button>
               </div>
             </div>
           ))}
@@ -195,26 +188,32 @@ export default function DiffViewer({ before, after }: DiffViewerProps) {
 
       {/* Accept/Reject all */}
       <div className='flex justify-end gap-2 pt-4 border-t'>
-        <button
+        <Button
+          variant="success"
+          size="md"
           onClick={async () => {
             await acceptAllDiffs();
             setAccepted(new Set(localDiffs.map((_, i) => i)));
+            toast.success('All changes applied');
+            onResolved?.();
           }}
           disabled={accepted.size === localDiffs.length && rejected.size === 0}
-          className='px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50'
         >
           Accept All
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="danger"
+          size="md"
           onClick={async () => {
             await rejectAllDiffs();
             setRejected(new Set(localDiffs.map((_, i) => i)));
+            toast.success('All changes rejected');
+            onResolved?.();
           }}
           disabled={rejected.size === localDiffs.length && accepted.size === 0}
-          className='px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50'
         >
           Reject All
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,16 +1,30 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { FileJson2, Upload } from 'lucide-react';
-import JSONTree from './JSONTree';
+import { FileJson2 } from 'lucide-react';
+import Button from '@/components/ui/Button';
 
 type UploadPanelProps = {
   onUpload: (json: Record<string, any>) => void;
 };
 
+const SAMPLE_JSON = `{
+  "service": "payments-api",
+  "timeout": 30,
+  "retryCount": 3,
+  "endpoints": {
+    "checkout": "/api/v1/checkout",
+    "refund": "/api/v1/refund"
+  },
+  "features": {
+    "logging": true,
+    "rateLimit": 100
+  }
+}`;
+
 export default function UploadPanel({ onUpload }: UploadPanelProps) {
   const [dragging, setDragging] = useState(false);
-  const [pasteText, setPasteText] = useState('');
+  const [pasteText, setPasteText] = useState(SAMPLE_JSON);
   const [parseError, setParseError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -73,16 +87,12 @@ export default function UploadPanel({ onUpload }: UploadPanelProps) {
           value={pasteText}
           onChange={(e) => { setPasteText(e.target.value); setParseError(null); }}
           placeholder='{"key": "value"}'
-          rows={4}
+          rows={8}
           className="w-full rounded-lg border px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
         />
-        <button
-          onClick={handlePasteSubmit}
-          disabled={!pasteText.trim()}
-          className="px-4 py-1.5 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50 transition-colors"
-        >
+        <Button variant="primary" onClick={handlePasteSubmit} disabled={!pasteText.trim()}>
           Upload
-        </button>
+        </Button>
         {parseError && <p className="text-xs text-red-500">{parseError}</p>}
       </div>
     </div>

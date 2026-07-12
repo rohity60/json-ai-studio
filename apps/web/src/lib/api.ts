@@ -45,19 +45,16 @@ async function httpError(res: Response, prefix: string): Promise<Error> {
 }
 
 export async function createSession(name: string, apiKey: string) {
-    console.log('[api] createSession ENTRY, name:', name);
     const res = await fetch(`${BASE}/sessions`, {
         method: 'POST',
         headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
         body: JSON.stringify({name}),
     });
     if (!res.ok) throw await httpError(res, 'Failed to create session');
-    console.log('[api] createSession OK, status:', res.status);
     return await res.json();
 }
 
 export async function getSession(sessionId: string, apiKey: string) {
-    console.log('[api] getSession ENTRY, sessionId:', sessionId.slice(0, 8));
     const res = await fetch(`${BASE}/sessions/${sessionId}`, {
         headers: await authHeaders(apiKey),
     });
@@ -68,7 +65,6 @@ export async function getSession(sessionId: string, apiKey: string) {
         err.status = res.status;
         throw err;
     }
-    console.log('[api] getSession OK, status:', res.status);
     return await res.json();
 }
 
@@ -112,7 +108,6 @@ export async function createVersion(
 export async function uploadJson(
     jsonBody: string | null, _file: File | undefined, apiKey: string, sessionId?: string,
 ) {
-    console.log('[api] uploadJson ENTRY, hasBody=', !!jsonBody, 'sessionId:', sessionId);
     const formData = new FormData();
     if (_file) formData.append('file', _file);
     if (jsonBody) formData.append('json_body', jsonBody);
@@ -124,7 +119,6 @@ export async function uploadJson(
         body: formData,
     });
     if (!res.ok) throw await httpError(res, 'Upload failed');
-    console.log('[api] uploadJson OK, status:', res.status);
     return await res.json();
 }
 
@@ -149,24 +143,20 @@ export async function computeDiff(oldJson: object, newJson: object, apiKey: stri
 }
 
 export async function acceptDiff(sessionId: string, diffId: string, apiKey: string) {
-    console.log('[api] acceptDiff ENTRY, sessionId:', sessionId.slice(0, 8), 'diffId:', diffId);
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/${diffId}/accept`, {
         method: 'POST',
         headers: await authHeaders(apiKey),
     });
     if (!res.ok) throw new Error('Failed to accept diff');
-    console.log('[api] acceptDiff OK, status:', res.status);
     return await res.json();
 }
 
 export async function rejectDiff(sessionId: string, diffId: string, apiKey: string) {
-    console.log('[api] rejectDiff ENTRY, sessionId:', sessionId.slice(0, 8), 'diffId:', diffId);
     const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/${diffId}/reject`, {
         method: 'POST',
         headers: await authHeaders(apiKey),
     });
     if (!res.ok) throw new Error('Failed to reject diff');
-    console.log('[api] rejectDiff OK, status:', res.status);
     return await res.json();
 }
 
@@ -251,7 +241,6 @@ function parseSseBlock(block: string): {type: string; data: any} | null {
 }
 
 export async function* streamChat(sessionId: string, message: string, workingJson: object | null, apiKey: string) {
-    console.log('[api] streamChat ENTRY: sessionId=', sessionId.slice(0, 8), 'msgLen=', message.length, 'wjKeys=', workingJson ? Object.keys(workingJson).length : 'null');
 
     const formData = new FormData();
     formData.append('session_id', sessionId);
@@ -304,7 +293,6 @@ export async function* streamChat(sessionId: string, message: string, workingJso
         if (err.name === 'AbortError') {
             throw new Error('LLM request timed out. Server may be slow or unavailable.');
         }
-        console.error('[api] streamChat error in fetch/reader:', err?.message || String(err));
         throw err;
     } finally {
         clearTimeout(timeoutId);

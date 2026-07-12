@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react';
 import { Plus, History, Download, RefreshCw, Trash2, PanelRightClose } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
 import { showVersionModal } from './VersionModal';
+import Button from '@/components/ui/Button';
 
 export default function VersionSidebar({ onClose }: { onClose?: () => void }) {
   const { state, createVersion, exportJson, refreshSession, clearCache } = useSession();
@@ -31,9 +32,9 @@ export default function VersionSidebar({ onClose }: { onClose?: () => void }) {
             <History className='w-5 h-5 text-purple-600' />
             <h3 className='font-semibold text-sm'>Versions</h3>
             {onClose && (
-              <button onClick={onClose} className='ml-auto p-1 hover:bg-gray-200 rounded transition-colors' title='Collapse'>
+              <Button variant="ghost" size="icon" onClick={onClose} className='ml-auto' title='Collapse'>
                 <PanelRightClose className='w-4 h-4' />
-              </button>
+              </Button>
             )}
           </div>
           <div className='flex-1 flex items-center justify-center text-sm text-muted-foreground'>
@@ -48,13 +49,13 @@ export default function VersionSidebar({ onClose }: { onClose?: () => void }) {
         <div className='border-b p-3 flex items-center gap-2'>
           <History className='w-5 h-5 text-purple-600' />
           <h3 className='font-semibold text-sm'>Versions</h3>
-          <button onClick={handleRefresh} className='ml-auto p-1 hover:bg-gray-200 rounded transition-colors' title='Refresh versions' disabled={refreshing}>
+          <Button variant="ghost" size="icon" onClick={handleRefresh} className='ml-auto' title='Refresh versions' disabled={refreshing}>
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
+          </Button>
           {onClose && (
-            <button onClick={onClose} className='p-1 hover:bg-gray-200 rounded transition-colors' title='Collapse'>
+            <Button variant="ghost" size="icon" onClick={onClose} title='Collapse'>
               <PanelRightClose className='w-4 h-4' />
-            </button>
+            </Button>
           )}
         </div>
         <div className='flex-1 overflow-y-auto p-2 space-y-1'>
@@ -76,24 +77,24 @@ export default function VersionSidebar({ onClose }: { onClose?: () => void }) {
             <div className='space-y-2'>
               <input placeholder='Version label...' value={label} onChange={(e) => setLabel(e.target.value)} className='w-full px-3 py-2 text-sm rounded-lg border' />
               <div className='flex gap-1'>
-                <button onClick={() => { if (label.trim()) createVersion(label); setLabel(''); setCreating(false); }} className='flex-1 px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg'>Save</button>
-                <button onClick={() => { setLabel(''); setCreating(false); }} className='px-3 py-1.5 border text-sm rounded-lg'>Cancel</button>
+                <Button variant="primary" className='flex-1' onClick={() => { if (label.trim()) createVersion(label); setLabel(''); setCreating(false); }}>Save</Button>
+                <Button variant="secondary" onClick={() => { setLabel(''); setCreating(false); }}>Cancel</Button>
               </div>
             </div>
           ) : (
-            <button onClick={() => setCreating(true)} className='w-full flex items-center justify-center gap-2 px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700'>
+            <Button variant="primary" className='w-full' onClick={() => setCreating(true)}>
               <Plus className='w-4 h-4' />
               <span>New Version</span>
-            </button>
+            </Button>
           )}
-          <button onClick={() => exportJson()} className='w-full flex items-center justify-center gap-2 px-3 py-1.5 border text-sm rounded-lg hover:bg-gray-50'>
+          <Button variant="secondary" className='w-full' onClick={() => exportJson()}>
             <Download className='w-4 h-4' />
             <span>Export JSON</span>
-          </button>
-          <button onClick={() => clearCache()} className='w-full flex items-center justify-center gap-2 px-3 py-1.5 border text-sm rounded-lg text-muted-foreground hover:bg-gray-50' title='Remove versions cached in this browser (IndexedDB)'>
+          </Button>
+          <Button variant="secondary" className='w-full' onClick={() => clearCache()} title='Remove versions cached in this browser (IndexedDB)'>
             <Trash2 className='w-4 h-4' />
             <span>Clear cached data</span>
-          </button>
+          </Button>
         </div>
       </div>
     );

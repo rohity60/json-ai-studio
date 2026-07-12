@@ -3,6 +3,7 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import { RotateCcw, Sparkles } from 'lucide-react';
+import Button from '@/components/ui/Button';
 
 interface ExplainPanelProps {
     markdown: string;
@@ -77,14 +78,16 @@ export default function ExplainPanel({
                     <span className="text-sm font-medium text-purple-900">AI Explanation</span>
                 </div>
                 {onRetry && markdown && !loading && !error && (
-                    <button
+                    <Button
+                        variant="ghost"
+                        size="icon"
                         onClick={onRetry}
-                        className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                        className="px-2 py-1 !text-xs"
                         title="Re-run explanation"
                     >
                         <RotateCcw className="w-3 h-3" />
                         Refresh
-                    </button>
+                    </Button>
                 )}
             </div>
 
@@ -100,13 +103,10 @@ export default function ExplainPanel({
                     <div className="flex flex-col items-center justify-center py-6 gap-4">
                         <p className="text-sm text-red-500">{error}</p>
                         {onRetry && (
-                            <button
-                                onClick={onRetry}
-                                className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 flex items-center gap-2"
-                            >
+                            <Button variant="primary" size="md" onClick={onRetry}>
                                 <RotateCcw className="w-4 h-4" />
                                 Retry
-                            </button>
+                            </Button>
                         )}
                     </div>
                 ) : (

@@ -13,9 +13,10 @@ export default function UserChip() {
 
   if (!user) {
     return (
+      // Anchor, not <button> — mirrors ui/Button `secondary` variant classes
       <a
         href="/auth/login?returnTo=/studio"
-        className="px-3 py-1.5 text-sm border border-purple-600 text-purple-600 rounded-lg hover:bg-purple-50 flex items-center gap-1"
+        className="inline-flex items-center justify-center gap-1.5 rounded-lg text-sm font-medium transition-colors border border-purple-600 text-purple-600 bg-white hover:bg-purple-50 px-3 py-1.5"
       >
         <LogIn className="w-4 h-4" />
         Log in

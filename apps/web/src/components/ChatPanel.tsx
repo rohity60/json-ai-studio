@@ -1,15 +1,25 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Sparkles } from 'lucide-react';
+import { Send, Loader2, Sparkles, FileJson2 } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
+import Button from '@/components/ui/Button';
 
-export default function ChatPanel() {
+const EXAMPLE_PROMPTS = [
+  'Increase timeout to 60',
+  'Add a retryCount of 5',
+  'Rename service to orders-api',
+  'Remove the refund endpoint',
+];
+
+export default function ChatPanel({ onGoToUpload }: { onGoToUpload?: () => void }) {
   const { state, sendMessage } = useSession();
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const hasJson = Object.keys(state.workingJson || {}).length > 0;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -17,28 +27,18 @@ export default function ChatPanel() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('[ChatPanel] handleSubmit called, inputLen:', input.length, 'sessionId:', state.sessionId, 'isStreaming:', isStreaming);
-    if (!input.trim() || !state.sessionId || isStreaming) {
-      console.warn('[ChatPanel] handleSubmit blocked: inputEmpty=', !input.trim(), 'noSession=', !state.sessionId, 'alreadyStreaming=', isStreaming);
-      return;
-     }
+    if (!input.trim() || !state.sessionId || isStreaming || !hasJson) return;
 
     const message = input.trim();
-    console.log('[ChatPanel] Message captured:', message.slice(0, 100));
     setInput('');
     setIsStreaming(true);
-    console.log('[ChatPanel] Input cleared, streaming=true');
 
     try {
-      console.log('[ChatPanel] Calling sendMessage...');
       await sendMessage(message);
-      console.log('[ChatPanel] sendMessage resolved successfully');
-       } catch (err: any) {
-        console.error('[ChatPanel] sendMessage threw:', err?.message || String(err));
+       } catch {
          // Message sent or failed - stop streaming
        } finally {
       setIsStreaming(false);
-      console.log('[ChatPanel] streaming=false, totalDurationMs:', performance.now().toFixed(0));
        }
      };
 
@@ -60,10 +60,30 @@ export default function ChatPanel() {
          </div>
 
          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {state.conversationHistory.length === 0 && (
+          {state.conversationHistory.length === 0 && !hasJson && (
+             <div className="text-center text-muted-foreground mt-8 flex flex-col items-center gap-3">
+              <FileJson2 className="w-10 h-10 text-gray-300" />
+              <p className="text-sm">Upload a JSON file to get started</p>
+              {onGoToUpload && (
+                <Button variant="primary" onClick={onGoToUpload}>Upload JSON</Button>
+              )}
+             </div>
+          )}
+
+          {state.conversationHistory.length === 0 && hasJson && (
              <div className="text-center text-muted-foreground mt-8">
-              <p className="text-sm mb-2">Send a message to start editing your JSON</p>
-              <p className="text-xs opacity-60">Examples: "Increase timeout to 60", "Add retry count"</p>
+              <p className="text-sm mb-3">Send a message to start editing your JSON</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {EXAMPLE_PROMPTS.map((prompt) => (
+                  <Button
+                    key={prompt}
+                    variant="chip"
+                    onClick={() => { setInput(prompt); textareaRef.current?.focus(); }}
+                  >
+                    {prompt}
+                  </Button>
+                ))}
+              </div>
              </div>
           )}
 
@@ -102,18 +122,20 @@ export default function ChatPanel() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Describe your JSON changes..."
-              disabled={!state.sessionId || isStreaming}
+              placeholder={hasJson ? 'Describe your JSON changes...' : 'Upload JSON first to start chatting'}
+              disabled={!state.sessionId || isStreaming || !hasJson}
               rows={2}
               className="flex-1 resize-none rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
              />
-             <button
+             <Button
               type="submit"
-              disabled={!state.sessionId || isStreaming || !input.trim()}
-              className="self-end px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              variant="primary"
+              size="md"
+              disabled={!state.sessionId || isStreaming || !input.trim() || !hasJson}
+              className="self-end"
              >
               <Send className="w-4 h-4" />
-             </button>
+             </Button>
            </div>
          </form>
        </div>

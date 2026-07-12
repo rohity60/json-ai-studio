@@ -83,7 +83,7 @@ type SessionState = {
 type SessionContextValue = {
   state: SessionState;
   createSession: (name: string) => Promise<void>;
-  uploadJson: (jsonData: Record<string, any>) => Promise<void>;
+  uploadJson: (jsonData: Record<string, any>) => Promise<boolean>;
   sendMessage: (message: string) => Promise<void>;
   acceptDiff: (diffId: string) => Promise<void>;
   createVersion: (label: string) => void;
@@ -283,9 +283,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     }, [apiKey, state]);
 
   const uploadJson = useCallback(async (jsonData: Record<string, any>) => {
-    if (!state.sessionId) {
-      await createSession('Uploaded');
-      }
+      // No createSession pre-call: the upload endpoint creates/reuses a session,
+      // and createSession flips `loading` which unmounts the whole app tree
+      // (provider renders null), losing page-local UI state mid-upload.
     try {
       const data = await api.uploadJson(
         JSON.stringify(jsonData), undefined, apiKey, state.sessionId || undefined,
@@ -301,6 +301,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainMarkdown: null,
         explainError: null,
         }));
+      toast.success('JSON loaded');
+      return true;
       } catch (err: any) {
       if (handleQuotaError(err)) {
         // popup shown
@@ -310,26 +312,21 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         toast.error(String(err));
         }
       setState((prev) => ({ ...prev, error: String(err) }));
+      return false;
       }
-    }, [state.sessionId, createSession, apiKey]);
+    }, [state.sessionId, apiKey]);
 
   const sendMessage = useCallback(async (message: string) => {
-    console.log('[SessionContext] sendMessage ENTRY called, messageLen:', message.length, 'sessionId:', state.sessionId, 'workingJsonKeys:', Object.keys(state.workingJson).length);
-    if (!state.sessionId) {
-      console.warn('[SessionContext] sendMessage early-return: no sessionId');
-      return;
-      }
+    if (!state.sessionId) return;
 
          // 1. Snapshot the initial payload variables
     const currentWorkingJson = JSON.parse(JSON.stringify(state.workingJson));
-    console.log('[SessionContext] Snapshot workingJson, keys:', Object.keys(currentWorkingJson));
 
     setState((prev) => ({
         ...prev,
       loading: false,
       conversationHistory: [...prev.conversationHistory, { role: 'user', content: message }]
       }));
-    console.log('[SessionContext] SET_STATE: loading=true, added user message to history');
 
     try {
         // Track streaming variables locally
@@ -346,14 +343,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             { role: 'assistant', content: '', diffs: [] }
           ]
         }));
-      console.log('[SessionContext] Initialized assistant message container in history');
 
         // 2. Stream loop
-      console.log('[SessionContext] Starting stream loop over api.streamChat...');
-      let chunkCount = 0;
       for await (const chunk of api.streamChat(state.sessionId, message, currentWorkingJson, apiKey)) {
-        chunkCount++;
-        console.log('[SessionContext] Chunk #' + chunkCount + ':', JSON.stringify(chunk).slice(0, 200));
 
         // Model-level quota/availability events: backend streams a
         // `rate_limit`, `credit_limit` or `service_unavailable` event
@@ -395,7 +387,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             textAccumulator += String(chunk.data.explanation);
             }
           structureChanged = true;
-          console.log('[SessionContext] Received COMPLETE event, working_json keys:', Object.keys(activeJson));
           } else if (chunk.type === 'content' || chunk.type === 'text') {
           textAccumulator += chunk.data.text || '';
             // Backend may embed explanation alongside working_json in content/text chunks
@@ -407,7 +398,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
             // 3. CRITICAL: Update both History AND Working JSON simultaneously
         if (structureChanged) {
-          console.log('[SessionContext] structureChanged=true, diffCount=', diffs.length, 'textLen=', textAccumulator.length);
           ReactDOM.flushSync(() => {
             setState((prev) => {
               const historyCopy = [...prev.conversationHistory];
@@ -429,12 +419,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                      };
                  });
              });
-            console.log('[SessionContext] SET_STATE after chunk #' + chunkCount + ' flushed');
          }
          }
 
         // 4. Stream finalized successfully
-      console.log('[SessionContext] Stream loop finished, totalChunks=', chunkCount);
       ReactDOM.flushSync(() => {
         setState((prev) => ({
             ...prev,
@@ -442,10 +430,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           error: null
           }));
         });
-      console.log('[SessionContext] SET_STATE: loading=false, error=null');
 
       } catch (err: any) {
-      console.error('[SessionContext] sendMessage caught exception:', err?.message || String(err));
       if (handleQuotaError(err)) {
         // popup shown
         } else if (err.message?.includes('401') || err.message?.includes('API key')) {
@@ -646,11 +632,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const exportJson = useCallback(() => {
     if (!state.sessionId) return;
-      // build a data-URI blob for download
     const jsonStr = JSON.stringify(state.workingJson, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'config.json';
+    a.click();
+    URL.revokeObjectURL(url);
     }, [state]);
 
   const clearCache = useCallback(async () => {

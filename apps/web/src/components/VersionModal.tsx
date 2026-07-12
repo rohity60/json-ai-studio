@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useSession } from '@/context/SessionContext';
+import Button from '@/components/ui/Button';
 
 // Module-level store for modal state — accessible from anywhere without prop drilling
 let _pendingVersion: any = null;
@@ -71,38 +72,19 @@ export default function VersionModal() {
             This will replace your current working JSON with the selected version.
           </p>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
+            <Button
+              variant="primary"
+              className="flex-1"
               onClick={() => {
                 selectVersion(version.id);
                 hideVersionModal();
               }}
-              style={{
-                flex: 1,
-                padding: '0.375rem 0.75rem',
-                backgroundColor: '#7c3aed',
-                color: 'white',
-                fontSize: '0.875rem',
-                borderRadius: '0.5rem',
-                border: 'none',
-                cursor: 'pointer',
-              }}
             >
               Proceed
-            </button>
-            <button
-              onClick={hideVersionModal}
-              style={{
-                flex: 1,
-                padding: '0.375rem 0.75rem',
-                border: '1px solid #d1d5db',
-                fontSize: '0.875rem',
-                borderRadius: '0.5rem',
-                cursor: 'pointer',
-                backgroundColor: 'white',
-              }}
-            >
+            </Button>
+            <Button variant="secondary" className="flex-1" onClick={hideVersionModal}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       </div>
