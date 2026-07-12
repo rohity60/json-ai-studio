@@ -319,6 +319,7 @@ class GatewayService:
                 ],
                 stream=True,
                 timeout=120.0,
+                num_retries=0,
                 stream_options={"include_usage": True},
                 **deployment.completion_params(resolved_model),
             )
@@ -532,6 +533,7 @@ class GatewayService:
             ],
             stream=True,
             timeout=120.0,
+            num_retries=0,
             stream_options={"include_usage": True},
             **deployment.completion_params(resolved_model),
         )
