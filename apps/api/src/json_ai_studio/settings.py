@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     user_per_minute_token_limit: int = 30_000
     user_requests_per_minute: int = 30
 
+    # Workspace limits (ADR-0018). Writes past the limit are blocked with
+    # 409, never evicted.
+    workspace_max_jsons: int = 5
+    json_max_versions: int = 5
+
     # Logging (ADR-0017). Env-driven so level/dir/rotation are tunable without
     # code changes. Applies to root, the json_ai_studio namespace, and (when
     # log_capture_uvicorn) uvicorn's own loggers.

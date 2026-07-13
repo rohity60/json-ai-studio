@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ..db.database import session_factory
 from ..db.models_orm import User
 from ..settings import get_settings
+from . import workspace_service
 
 logger = logging.getLogger("json_ai_studio.user_service")
 
@@ -90,6 +91,11 @@ async def upsert_from_claims(claims: dict[str, Any], token: str) -> User:
                 user.email = profile.get("email")
                 user.name = profile.get("name")
                 user.picture = profile.get("picture")
+
+    # Default workspace provisioning (ADR-0018) — idempotent, race-safe via
+    # the partial unique index; piggybacks on the same upsert-in-dependency
+    # philosophy as the user row itself.
+    await workspace_service.ensure_default_workspace(user.id)
 
     return user
 

@@ -10,7 +10,7 @@ export type RateLimitInfo = {
   message?: string;
   retryAfter?: number; // seconds until the caller may retry
   scope?: string; // "api" | "model"
-  kind?: 'rate' | 'credits' | 'busy'; // credits = monthly quota exhausted (402), no countdown; busy = deployment/provider failure (503)
+  kind?: 'rate' | 'credits' | 'busy' | 'login'; // credits = monthly quota exhausted (402), no countdown; busy = deployment/provider failure (503); login = workspace persistence needs a bearer (ADR-0018), no countdown
   loginAvailable?: boolean; // anonymous caller — logging in raises free limits
 };
 
@@ -64,18 +64,23 @@ export default function RateLimitModal() {
 
   const isCredits = info.kind === 'credits';
   const isBusy = info.kind === 'busy';
-  const title = isCredits
-    ? 'Free credits used up'
-    : isBusy
-      ? 'Service busy'
-      : 'Rate limit reached';
+  const isLogin = info.kind === 'login';
+  const title = isLogin
+    ? 'Log in to save your work'
+    : isCredits
+      ? 'Free credits used up'
+      : isBusy
+        ? 'Service busy'
+        : 'Rate limit reached';
   const message =
     info.message ||
-    (isCredits
-      ? "You've used up the free credits for this month."
-      : isBusy
-        ? 'The service is experiencing flaky behavior due to high load. Please try again in a few moments.'
-        : "You've hit the rate limit. Please wait a moment before trying again.");
+    (isLogin
+      ? 'Workspaces keep your JSONs and versions safe in your account. Log in to save this work and organize it into workspaces.'
+      : isCredits
+        ? "You've used up the free credits for this month."
+        : isBusy
+          ? 'The service is experiencing flaky behavior due to high load. Please try again in a few moments.'
+          : "You've hit the rate limit. Please wait a moment before trying again.");
 
   return (
     <div
@@ -125,7 +130,7 @@ export default function RateLimitModal() {
 
         <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem' }}>{message}</p>
 
-        {!isCredits && (
+        {!isCredits && !isLogin && (
           <p style={{ fontSize: '0.875rem', color: '#374151', marginBottom: '1rem' }}>
             {remaining > 0 ? (
               <>
@@ -138,7 +143,7 @@ export default function RateLimitModal() {
           </p>
         )}
 
-        {info.loginAvailable && (
+        {(info.loginAvailable || isLogin) && (
           <Button
             variant="primary"
             className="w-full mb-2"
@@ -146,16 +151,16 @@ export default function RateLimitModal() {
               window.location.href = '/auth/login?returnTo=/studio';
             }}
           >
-            Log in for higher free limits
+            {isLogin ? 'Log in to save' : 'Log in for higher free limits'}
           </Button>
         )}
 
         <Button
-          variant={info.loginAvailable ? 'secondary' : 'primary'}
+          variant={info.loginAvailable || isLogin ? 'secondary' : 'primary'}
           className="w-full"
           onClick={() => hideRateLimitModal()}
         >
-          Got it
+          {isLogin ? 'Not now' : 'Got it'}
         </Button>
       </div>
     </div>

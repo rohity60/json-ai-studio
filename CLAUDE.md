@@ -25,7 +25,7 @@ Python files: always format with `black .` after editing (install via `uv add --
 
 ```
 json-ai-studio/
-├── openapi/spec.yaml            ← Single source of truth. 13 endpoints, 18 schemas. OpenAPI 3.1 YAML.
+├── openapi/spec.yaml            ← Single source of truth. 25 endpoints, 32 schemas. OpenAPI 3.1 YAML.
 ├── apps/api/                    ← FastAPI backend, layered per ADR-0013
 │     └── src/json_ai_studio/
 │           ├── main.py              ← Thin app factory: FastAPI init, lifespan (DB engine), CORS, include_router per controller.
@@ -65,7 +65,7 @@ json-ai-studio/
 
 ## Key facts
 
-- **OpenAPI-first contract**: `openapi/spec.yaml` (13 endpoints, 18 schemas) is the contract source. Pydantic models in `models.py` implement it verbatim (ADR-0011). Frontend TS types are hand-written mirrors — not auto-generated.
+- **OpenAPI-first contract**: `openapi/spec.yaml` (25 endpoints, 32 schemas) is the contract source. Pydantic models in `models.py` implement it verbatim (ADR-0011). Frontend TS types are hand-written mirrors — not auto-generated.
 - **Session model**: In-memory store behind async `SessionStore` ABC (`db/session_store.py`, ADR-0013). Each session = working_json + version snapshots + conversation history. No TTL. Browser mirrors versions + working JSON to IndexedDB and bulk-restores into a fresh session after backend restart (ADR-0014).
 - **Chat flow**: User NL message → LiteLLM call → field-level diffs → SSE stream: thinking → diff(s) → complete (ADR-0002, ADR-0004). The system prompt in `main.py` embeds the current working JSON as few-shot examples (ADR-0005).
 - **Diff engine**: `deepdiff` for backend (ADR-0003); client-side `deep-diff` for DiffViewer. Business rules only (timeout > 0, retryCount <= 10). No JSON Schema validation yet.
@@ -93,6 +93,12 @@ From `openapi/spec.yaml`, implemented in `controllers/`:
 | POST   | `/api/sessions/{id}/diffs/reject-all` | Reject all diffs |
 | POST   | `/api/explain` | LLM markdown explanation of working JSON |
 | GET    | `/api/me` | Logged-in user profile + credit quota (Auth0 bearer only) |
+| GET/POST | `/api/workspaces` | List / create workspaces (bearer only, ADR-0018) |
+| PATCH/DELETE | `/api/workspaces/{id}` | Rename / delete workspace (default not deletable) |
+| GET/POST | `/api/workspaces/{id}/jsons` | List documents / bulk-save new document + versions |
+| GET/PATCH/DELETE | `/api/workspaces/{id}/jsons/{docId}` | Get with versions / rename tag / delete |
+| POST   | `/api/workspaces/{id}/jsons/{docId}/versions` | Append versions (5 max, 409 blocks) |
+| DELETE | `/api/workspaces/{id}/jsons/{docId}/versions/{vId}` | Delete one version (last one blocked) |
 
 Routers live in `controllers/` (one file per resource); auth via `Depends(require_api_key)` per route.
 
@@ -106,7 +112,7 @@ Routers live in `controllers/` (one file per resource); auth via `Depends(requir
 
 ## Important files
 
-- `openapi/spec.yaml` — Edit first for any contract change. 18 schemas define the wire format.
+- `openapi/spec.yaml` — Edit first for any contract change. 32 schemas define the wire format.
 - `apps/api/src/json_ai_studio/main.py` — Thin app factory (~40 lines). Routers registered from `controllers/`.
 - `apps/api/src/json_ai_studio/controllers/` — One router per resource. Thin: parse request, call service, map domain errors → HTTPException.
 - `apps/api/src/json_ai_studio/services/` — Business logic. `chat_service.py` has SSE streaming + LLM call; `version_service.py` has snapshot/select/restore.

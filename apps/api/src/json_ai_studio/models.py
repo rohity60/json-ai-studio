@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # -- Core Domain Models --
 
@@ -182,3 +182,76 @@ class UserProfile(BaseModel):
     plan: str
     credits: CreditsInfo
     per_minute_token_limit: int
+
+
+# -- Workspaces (ADR-0018) --
+
+
+class WorkspaceSummary(BaseModel):
+    """List/response shape for a workspace (spec: WorkspaceSummary)."""
+
+    id: str
+    name: str
+    is_default: bool
+    document_count: int
+    updated_at: datetime
+
+
+class CreateWorkspaceRequest(BaseModel):
+    """Body for POST /api/workspaces and PATCH /api/workspaces/{id}."""
+
+    name: str = Field(min_length=1, max_length=100)
+
+
+class RenameJsonRequest(BaseModel):
+    """Body for PATCH .../jsons/{documentId} (tag rename)."""
+
+    tag: str = Field(min_length=1, max_length=100)
+
+
+class JsonDocumentSummary(BaseModel):
+    """List/response shape for a document (spec: JsonDocumentSummary)."""
+
+    id: str
+    tag: str
+    version_count: int
+    latest_version_number: int
+    updated_at: datetime
+
+
+class WorkspaceJsonVersion(BaseModel):
+    """One persisted snapshot (spec: WorkspaceJsonVersion)."""
+
+    id: str
+    version_number: int
+    label: str | None = None
+    content: dict[str, Any]
+    created_at: datetime
+
+
+class JsonDocumentDetail(BaseModel):
+    """GET .../jsons/{documentId} — versions ordered by version_number."""
+
+    id: str
+    tag: str
+    versions: list[WorkspaceJsonVersion]
+
+
+class NewVersionPayload(BaseModel):
+    """One snapshot to persist (spec: NewVersionPayload)."""
+
+    label: str | None = None
+    content: dict[str, Any]
+
+
+class SaveJsonRequest(BaseModel):
+    """Body for POST .../jsons — bulk save of a new document."""
+
+    tag: str = Field(min_length=1, max_length=100)
+    versions: list[NewVersionPayload] = Field(min_length=1, max_length=5)
+
+
+class AppendVersionsRequest(BaseModel):
+    """Body for POST .../jsons/{documentId}/versions — append-only."""
+
+    versions: list[NewVersionPayload] = Field(min_length=1)

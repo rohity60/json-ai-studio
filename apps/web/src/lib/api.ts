@@ -210,6 +210,190 @@ export async function getMe(): Promise<Record<string, any> | null> {
     return await res.json();
 }
 
+// -- Workspaces (ADR-0018) — bearer-only persistence layer -----------------
+
+export type WorkspaceSummary = {
+    id: string;
+    name: string;
+    is_default: boolean;
+    document_count: number;
+    updated_at: string;
+};
+
+export type JsonDocumentSummary = {
+    id: string;
+    tag: string;
+    version_count: number;
+    latest_version_number: number;
+    updated_at: string;
+};
+
+export type WorkspaceJsonVersion = {
+    id: string;
+    version_number: number;
+    label: string | null;
+    content: Record<string, any>;
+    created_at: string;
+};
+
+export type JsonDocumentDetail = {
+    id: string;
+    tag: string;
+    versions: WorkspaceJsonVersion[]; // ordered by version_number ascending
+};
+
+export type NewVersionPayload = {
+    label: string | null;
+    content: Record<string, any>;
+};
+
+/** Bearer-only headers: workspace routes must never fall back to X-API-Key.
+ *  Missing token throws the same 401/loginAvailable shape httpError builds,
+ *  so callers funnel into the login CTA without a network round-trip. */
+async function workspaceHeaders(
+    extra: Record<string, string> = {},
+): Promise<Record<string, string>> {
+    const token = await getBearerToken();
+    if (!token) {
+        const err: any = new Error('Login required to use workspaces.');
+        err.status = 401;
+        err.loginAvailable = true;
+        throw err;
+    }
+    return {...extra, Authorization: `Bearer ${token}`};
+}
+
+export async function listWorkspaces(): Promise<WorkspaceSummary[]> {
+    const res = await fetch(`${BASE}/workspaces`, {
+        headers: await workspaceHeaders(),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to list workspaces');
+    return await res.json();
+}
+
+export async function createWorkspace(name: string): Promise<WorkspaceSummary> {
+    const res = await fetch(`${BASE}/workspaces`, {
+        method: 'POST',
+        headers: await workspaceHeaders({'Content-Type': 'application/json'}),
+        body: JSON.stringify({name}),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to create workspace');
+    return await res.json();
+}
+
+export async function renameWorkspace(
+    workspaceId: string,
+    name: string,
+): Promise<WorkspaceSummary> {
+    const res = await fetch(`${BASE}/workspaces/${workspaceId}`, {
+        method: 'PATCH',
+        headers: await workspaceHeaders({'Content-Type': 'application/json'}),
+        body: JSON.stringify({name}),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to rename workspace');
+    return await res.json();
+}
+
+export async function deleteWorkspace(workspaceId: string): Promise<void> {
+    const res = await fetch(`${BASE}/workspaces/${workspaceId}`, {
+        method: 'DELETE',
+        headers: await workspaceHeaders(),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to delete workspace');
+}
+
+export async function listWorkspaceJsons(
+    workspaceId: string,
+): Promise<JsonDocumentSummary[]> {
+    const res = await fetch(`${BASE}/workspaces/${workspaceId}/jsons`, {
+        headers: await workspaceHeaders(),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to list JSONs');
+    return await res.json();
+}
+
+export async function saveWorkspaceJson(
+    workspaceId: string,
+    payload: {tag: string; versions: NewVersionPayload[]},
+): Promise<JsonDocumentSummary> {
+    const res = await fetch(`${BASE}/workspaces/${workspaceId}/jsons`, {
+        method: 'POST',
+        headers: await workspaceHeaders({'Content-Type': 'application/json'}),
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to save JSON');
+    return await res.json();
+}
+
+export async function getWorkspaceJson(
+    workspaceId: string,
+    documentId: string,
+): Promise<JsonDocumentDetail> {
+    const res = await fetch(
+        `${BASE}/workspaces/${workspaceId}/jsons/${documentId}`,
+        {headers: await workspaceHeaders()},
+    );
+    if (!res.ok) throw await httpError(res, 'Failed to load JSON');
+    return await res.json();
+}
+
+export async function renameWorkspaceJson(
+    workspaceId: string,
+    documentId: string,
+    tag: string,
+): Promise<JsonDocumentSummary> {
+    const res = await fetch(
+        `${BASE}/workspaces/${workspaceId}/jsons/${documentId}`,
+        {
+            method: 'PATCH',
+            headers: await workspaceHeaders({'Content-Type': 'application/json'}),
+            body: JSON.stringify({tag}),
+        },
+    );
+    if (!res.ok) throw await httpError(res, 'Failed to rename JSON');
+    return await res.json();
+}
+
+export async function deleteWorkspaceJson(
+    workspaceId: string,
+    documentId: string,
+): Promise<void> {
+    const res = await fetch(
+        `${BASE}/workspaces/${workspaceId}/jsons/${documentId}`,
+        {method: 'DELETE', headers: await workspaceHeaders()},
+    );
+    if (!res.ok) throw await httpError(res, 'Failed to delete JSON');
+}
+
+export async function appendJsonVersions(
+    workspaceId: string,
+    documentId: string,
+    payload: {versions: NewVersionPayload[]},
+): Promise<WorkspaceJsonVersion[]> {
+    const res = await fetch(
+        `${BASE}/workspaces/${workspaceId}/jsons/${documentId}/versions`,
+        {
+            method: 'POST',
+            headers: await workspaceHeaders({'Content-Type': 'application/json'}),
+            body: JSON.stringify(payload),
+        },
+    );
+    if (!res.ok) throw await httpError(res, 'Failed to save versions');
+    return await res.json();
+}
+
+export async function deleteJsonVersion(
+    workspaceId: string,
+    documentId: string,
+    versionId: string,
+): Promise<void> {
+    const res = await fetch(
+        `${BASE}/workspaces/${workspaceId}/jsons/${documentId}/versions/${versionId}`,
+        {method: 'DELETE', headers: await workspaceHeaders()},
+    );
+    if (!res.ok) throw await httpError(res, 'Failed to delete version');
+}
+
 /** Parse one complete SSE event block into {type, data}, or null.
  *  Tolerates both "data: {...}" (spec) and legacy "data{...}" payload lines. */
 function parseSseBlock(block: string): {type: string; data: any} | null {

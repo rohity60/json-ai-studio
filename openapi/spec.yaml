@@ -44,6 +44,8 @@ tags:
      description: Export downloaded JSON files
    - name: users
      description: Signed-up user profile + quota (optional Auth0 login)
+   - name: workspaces
+     description: Persistent workspaces of tagged JSON documents + versions (ADR-0018)
 
 paths:
    # =====================================================================
@@ -853,6 +855,318 @@ paths:
               schema:
                  $ref: '#/components/schemas/Error'
 
+   # =====================================================================
+   # WORKSPACES (ADR-0018) — bearer-only persistence layer
+   # =====================================================================
+
+   /api/workspaces:
+    get:
+      tags: [workspaces]
+      summary: List the caller's workspaces
+      description: |-
+        All workspaces owned by the logged-in user, with document counts.
+        Anonymous callers get 401 with login_available true.
+      operationId: listWorkspaces
+      security:
+         - bearerAuth: []
+      responses:
+         '200':
+          description: Workspaces owned by the caller
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                   $ref: '#/components/schemas/WorkspaceSummary'
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '503':
+           $ref: '#/components/responses/Error503'
+    post:
+      tags: [workspaces]
+      summary: Create a workspace
+      operationId: createWorkspace
+      security:
+         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/CreateWorkspaceRequest'
+      responses:
+         '201':
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/WorkspaceSummary'
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '409':
+           $ref: '#/components/responses/Error409Workspace'
+         '503':
+           $ref: '#/components/responses/Error503'
+
+   /api/workspaces/{workspaceId}:
+    parameters:
+       - name: workspaceId
+         in: path
+         required: true
+         schema:
+           type: string
+    patch:
+      tags: [workspaces]
+      summary: Rename a workspace
+      operationId: renameWorkspace
+      security:
+         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/CreateWorkspaceRequest'
+      responses:
+         '200':
+          description: Workspace renamed
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/WorkspaceSummary'
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+           $ref: '#/components/responses/Error409Workspace'
+    delete:
+      tags: [workspaces]
+      summary: Delete a workspace and everything in it
+      description: The default workspace cannot be deleted (409).
+      operationId: deleteWorkspace
+      security:
+         - bearerAuth: []
+      responses:
+         '204':
+          description: Workspace deleted (documents + versions cascade)
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+           $ref: '#/components/responses/Error409Workspace'
+
+   /api/workspaces/{workspaceId}/jsons:
+    parameters:
+       - name: workspaceId
+         in: path
+         required: true
+         schema:
+           type: string
+    get:
+      tags: [workspaces]
+      summary: List JSON documents in a workspace
+      operationId: listWorkspaceJsons
+      security:
+         - bearerAuth: []
+      responses:
+         '200':
+          description: Documents in the workspace
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                   $ref: '#/components/schemas/JsonDocumentSummary'
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '404':
+           $ref: '#/components/responses/Error404'
+    post:
+      tags: [workspaces]
+      summary: Save a new JSON document (bulk, with versions)
+      description: |-
+        The Save flow: persists 1..5 versions in one transaction. 409 when
+        the workspace already holds the maximum number of documents or the
+        tag is taken.
+      operationId: saveWorkspaceJson
+      security:
+         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/SaveJsonRequest'
+      responses:
+         '201':
+          description: Document + versions saved
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/JsonDocumentSummary'
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+           $ref: '#/components/responses/Error409Workspace'
+         '422':
+          description: Payload has 0 versions or more than the version limit
+
+   /api/workspaces/{workspaceId}/jsons/{documentId}:
+    parameters:
+       - name: workspaceId
+         in: path
+         required: true
+         schema:
+           type: string
+       - name: documentId
+         in: path
+         required: true
+         schema:
+           type: string
+    get:
+      tags: [workspaces]
+      summary: Get a document with all its versions
+      description: |-
+        Versions are ordered by version_number; the client loads the highest
+        one as the working JSON (hydrated through the session restore flow).
+      operationId: getWorkspaceJson
+      security:
+         - bearerAuth: []
+      responses:
+         '200':
+          description: Document detail
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/JsonDocumentDetail'
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '404':
+           $ref: '#/components/responses/Error404'
+    patch:
+      tags: [workspaces]
+      summary: Rename a document's tag
+      operationId: renameWorkspaceJson
+      security:
+         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/RenameJsonRequest'
+      responses:
+         '200':
+          description: Tag renamed
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/JsonDocumentSummary'
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+           $ref: '#/components/responses/Error409Workspace'
+    delete:
+      tags: [workspaces]
+      summary: Delete a document and its versions
+      operationId: deleteWorkspaceJson
+      security:
+         - bearerAuth: []
+      responses:
+         '204':
+          description: Document deleted (frees a document slot)
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '404':
+           $ref: '#/components/responses/Error404'
+
+   /api/workspaces/{workspaceId}/jsons/{documentId}/versions:
+    parameters:
+       - name: workspaceId
+         in: path
+         required: true
+         schema:
+           type: string
+       - name: documentId
+         in: path
+         required: true
+         schema:
+           type: string
+    post:
+      tags: [workspaces]
+      summary: Append versions to an existing document
+      description: |-
+        The Save flow for an already-persisted document: appends only the
+        not-yet-persisted snapshots. Atomic — 409 (nothing written) when the
+        append would exceed the version limit.
+      operationId: appendJsonVersions
+      security:
+         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/AppendVersionsRequest'
+      responses:
+         '201':
+          description: Versions appended
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                   $ref: '#/components/schemas/WorkspaceJsonVersion'
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+           $ref: '#/components/responses/Error409Workspace'
+
+   /api/workspaces/{workspaceId}/jsons/{documentId}/versions/{versionId}:
+    parameters:
+       - name: workspaceId
+         in: path
+         required: true
+         schema:
+           type: string
+       - name: documentId
+         in: path
+         required: true
+         schema:
+           type: string
+       - name: versionId
+         in: path
+         required: true
+         schema:
+           type: string
+    delete:
+      tags: [workspaces]
+      summary: Delete one version
+      description: |-
+        Frees a version slot. Deleting the last remaining version is blocked
+        (409) — delete the document instead. Surviving versions are never
+        renumbered.
+      operationId: deleteJsonVersion
+      security:
+         - bearerAuth: []
+      responses:
+         '204':
+          description: Version deleted
+         '401':
+           $ref: '#/components/responses/Error401Login'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+           $ref: '#/components/responses/Error409Workspace'
+
 # =======================================================================
 # COMPONENTS — SHARED TYPES, RESPONSES, EXAMPLES
 # =======================================================================
@@ -1195,6 +1509,169 @@ components:
           additionalProperties: true
       required: [success, working_json]
 
+     # -- Workspaces (ADR-0018) --
+
+    WorkspaceSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          description: UUID of the workspace
+        name:
+          type: string
+          description: User-given name, unique per user
+        is_default:
+          type: boolean
+          description: Exactly one default workspace per user; not deletable
+        document_count:
+          type: integer
+          description: Number of JSON documents currently in the workspace
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, name, is_default, document_count, updated_at]
+
+    CreateWorkspaceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: Workspace name, unique per user
+      required: [name]
+
+    RenameJsonRequest:
+      type: object
+      properties:
+        tag:
+          type: string
+          maxLength: 100
+          description: New tag, unique within the workspace
+      required: [tag]
+
+    JsonDocumentSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          description: UUID of the document
+        tag:
+          type: string
+          description: User-given identifier, unique within the workspace
+        version_count:
+          type: integer
+        latest_version_number:
+          type: integer
+          description: Highest version_number; the version loaded for work
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, tag, version_count, latest_version_number, updated_at]
+
+    WorkspaceJsonVersion:
+      type: object
+      properties:
+        id:
+          type: string
+          description: UUID of the version
+        version_number:
+          type: integer
+          description: Monotonic per document, server-assigned, never reused
+        label:
+          type: string
+          description: Optional user-given label
+        content:
+          type: object
+          additionalProperties: true
+          description: Full JSON snapshot
+        created_at:
+          type: string
+          format: date-time
+      required: [id, version_number, content, created_at]
+
+    JsonDocumentDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        tag:
+          type: string
+        versions:
+          type: array
+          items:
+             $ref: '#/components/schemas/WorkspaceJsonVersion'
+          description: Ordered by version_number ascending
+      required: [id, tag, versions]
+
+    NewVersionPayload:
+      type: object
+      properties:
+        label:
+          type: string
+          description: Optional label for the snapshot
+        content:
+          type: object
+          additionalProperties: true
+          description: Full JSON snapshot to persist
+      required: [content]
+
+    SaveJsonRequest:
+      type: object
+      properties:
+        tag:
+          type: string
+          maxLength: 100
+          description: Tag for the new document, unique within the workspace
+        versions:
+          type: array
+          items:
+             $ref: '#/components/schemas/NewVersionPayload'
+          minItems: 1
+          maxItems: 5
+          description: Snapshots to persist, oldest first
+      required: [tag, versions]
+
+    AppendVersionsRequest:
+      type: object
+      properties:
+        versions:
+          type: array
+          items:
+             $ref: '#/components/schemas/NewVersionPayload'
+          minItems: 1
+          description: Not-yet-persisted snapshots, oldest first
+      required: [versions]
+
+    WorkspaceConflictDetail:
+      type: object
+      description: |-
+        Structured 409 detail for workspace writes. Either a blocked limit
+        (error=limit_exceeded, limit_type jsons|versions) or a UNIQUE
+        violation (error=duplicate, field name|tag).
+      properties:
+        error:
+          type: string
+          enum: [limit_exceeded, duplicate]
+        limit_type:
+          type: string
+          enum: [jsons, versions]
+        limit:
+          type: integer
+        field:
+          type: string
+          enum: [name, tag]
+      required: [error]
+
+    LoginRequiredError:
+      type: object
+      properties:
+        message:
+          type: string
+        login_available:
+          type: boolean
+          description: Always true — the frontend shows the login CTA popup
+      required: [message, login_available]
+
      # -- HTTP Error Response Templates --
 
   responses:
@@ -1266,6 +1743,52 @@ components:
             hint: null
             login_available: true
             retry_after: 60
+
+    Error401Login:
+      description: |-
+        Unauthorized — workspace routes require an Auth0 bearer token.
+        login_available true drives the frontend login CTA popup.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                 $ref: '#/components/schemas/LoginRequiredError'
+          example:
+            detail:
+              message: "Login required to use workspaces."
+              login_available: true
+
+    Error409Workspace:
+      description: |-
+        Conflict — a workspace limit blocks the write (never evicted), a
+        name/tag is taken, the default workspace was targeted for delete,
+        or the last remaining version was targeted for delete.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                oneOf:
+                   - $ref: '#/components/schemas/WorkspaceConflictDetail'
+                   - type: string
+          example:
+            detail:
+              error: "limit_exceeded"
+              limit_type: "jsons"
+              limit: 5
+
+    Error503:
+      description: Service unavailable — database not configured (anonymous-only mode)
+      content:
+        application/json:
+          schema:
+             $ref: '#/components/schemas/Error'
+          example:
+            error: "Workspaces are temporarily unavailable (database not configured)."
+            hint: null
 
     Error500:
       description: Internal server error — LLM call failed or unexpected error

@@ -95,6 +95,12 @@ type SessionContextValue = {
   refreshSession: () => Promise<void>;
   explainJson: () => Promise<void>;
   clearCache: () => Promise<void>;
+  loadSnapshot: (payload: {
+    versions: Array<{ id: string; parent_id: string | null; json_data: Record<string, any>; label: string; created_at: string }>;
+    workingJson: Record<string, any>;
+    activeVersionId: string | null;
+  }) => Promise<void>;
+  clearSession: () => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -538,6 +544,59 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       } catch (err: any) { toast.error(String(err)); }
     }, [state.sessionId, apiKey]);
 
+  // Load an external snapshot set (a workspace document, ADR-0018) into a
+  // FRESH session: the restore endpoint only accepts sessions with no
+  // versions, so we mint one — same flow the IndexedDB boot restore uses.
+  // Does not touch the global `loading` flag (tree would unmount).
+  const loadSnapshot = useCallback(async (payload: {
+    versions: Array<{ id: string; parent_id: string | null; json_data: Record<string, any>; label: string; created_at: string }>;
+    workingJson: Record<string, any>;
+    activeVersionId: string | null;
+  }) => {
+    const sess = await api.createSession('Workspace JSON', apiKey);
+    const data = await api.restoreVersions(sess.id, {
+      versions: payload.versions,
+      working_json: payload.workingJson,
+      baseline_json: payload.workingJson,
+      active_version_id: payload.activeVersionId,
+      }, apiKey);
+    updateSessionStorage(sess.id);
+    setState((prev) => ({
+      ...prev,
+      sessionId: sess.id,
+      workingJson: (data.working_json as Record<string, any>) || payload.workingJson,
+      baselineJson: (data.baseline_json as Record<string, any>) || payload.workingJson,
+      versions: mapVersions(data.versions),
+      conversationHistory: [],
+      activeVersionId: (data.active_version_id as string) ?? payload.activeVersionId,
+      error: null,
+      explainMarkdown: null,
+      explaining: false,
+      explainError: null,
+      }));
+    }, [apiKey]);
+
+  // Fresh empty session — used when switching workspaces so content from the
+  // previous workspace never lingers as "unsaved" in the new one. Never
+  // touches the global `loading` flag (the provider unmounts on it).
+  const clearSession = useCallback(async () => {
+    const sess = await api.createSession('My Config', apiKey);
+    updateSessionStorage(sess.id);
+    setState((prev) => ({
+      ...prev,
+      sessionId: sess.id,
+      workingJson: {},
+      baselineJson: {},
+      versions: [],
+      conversationHistory: [],
+      activeVersionId: null,
+      error: null,
+      explainMarkdown: null,
+      explaining: false,
+      explainError: null,
+    }));
+  }, [apiKey]);
+
   const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false);
   const [pendingVersionId, setPendingVersionId] = useState<string | null>(null);
 
@@ -651,7 +710,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   if (state.loading) return null;
 
   return (
-      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson, clearCache }}>
+      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson, clearCache, loadSnapshot, clearSession }}>
         {children}
       </SessionContext.Provider>
     );

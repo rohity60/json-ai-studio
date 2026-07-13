@@ -6,13 +6,18 @@ import UploadPanel from '@/components/UploadPanel';
 import ChatPanel from '@/components/ChatPanel';
 import DiffViewer from '@/components/DiffViewer';
 import JSONTree from '@/components/JSONTree';
-import VersionSidebar from '@/components/VersionSidebar';
+import WorkspaceSidebar from '@/components/WorkspaceSidebar';
 import { useSession } from '@/context/SessionContext';
-import { FileJson2, MessageSquare, Code2, History, Sparkles, Download, Copy, Check, Plus } from 'lucide-react';
+import { useWorkspace } from '@/context/WorkspaceContext';
+import { FileJson2, MessageSquare, Code2, History, Sparkles, Download, Copy, Check, Plus, Save } from 'lucide-react';
 import ExplainPanel from '@/components/ExplainPanel';
 import Logo from '@/components/Logo';
 import UserChip from '@/components/UserChip';
 import Button from '@/components/ui/Button';
+import WorkspaceSwitcher from '@/components/WorkspaceSwitcher';
+import StatusPill from '@/components/StatusPill';
+import { showSaveDialog } from '@/components/SaveDialog';
+import { showRateLimitModal } from '@/components/RateLimitModal';
 
 // Left-panel tab (Chat / Upload): underline style, full width
 function TabButton({ active, onClick, children }: {
@@ -41,6 +46,7 @@ function pendingDiffCount(history: Array<{ role: string; diffs?: any[] }>): numb
 
 export default function Home() {
   const { state, createSession, uploadJson, explainJson, exportJson, createVersion } = useSession();
+  const { dirty, loggedIn, guardDirty } = useWorkspace();
 
   // SessionProvider blocks render until hydration, so workingJson is final here
   const [activeTab, setActiveTab] = useState<'chat' | 'upload'>(
@@ -70,12 +76,43 @@ export default function Home() {
     }
   }, [state.conversationHistory]);
 
+  // Warn on tab close while workspace-unsaved changes exist (F6/U-06).
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (dirty) e.preventDefault();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
+
   const handleUpload = async (data: Record<string, any>) => {
      // Do NOT call createSession here — the upload endpoint already creates or reuses a session.
      // Calling createSession('My Config') spawns a fresh empty session that overwrites
      // the working_json, causing the UI to blank out immediately after upload succeeds.
+
+     // Anonymous with a JSON already loaded: a 2nd JSON needs an account to
+     // live in (req 7 / F5) — show the login CTA instead of replacing.
+    if (!loggedIn && Object.keys(state.workingJson || {}).length > 0) {
+      showRateLimitModal({ scope: 'api', kind: 'login' });
+      return;
+    }
+     // Logged-in: replacing the working JSON drops unsaved work — guard it.
+    if (loggedIn && !(await guardDirty())) return;
     const ok = await uploadJson(data);
     if (ok) setActiveTab('chat');
+   };
+
+  const handleSaveToWorkspace = () => {
+    if (!loggedIn) {
+      showRateLimitModal({ scope: 'api', kind: 'login' });
+      return;
+    }
+    showSaveDialog();
+   };
+
+  const handleNewSession = async () => {
+    if (loggedIn && !(await guardDirty())) return;
+    createSession('My Config');
    };
 
   const handleCopy = async () => {
@@ -101,7 +138,7 @@ export default function Home() {
           <Logo />
           <div className="flex items-center gap-2">
             {Object.keys(json).length === 0 && (
-              <Button variant="primary" onClick={() => createSession('My Config')}>New Session</Button>
+              <Button variant="primary" onClick={handleNewSession}>New Session</Button>
             )}
             <UserChip />
           </div>
@@ -148,10 +185,12 @@ export default function Home() {
                 <span className="text-xs text-muted-foreground">
                   {Object.keys(json).length > 0 ? `${Object.keys(json).length} keys` : 'Empty'}
                 </span>
+                <StatusPill hasJson={Object.keys(json).length > 0} />
+                <WorkspaceSwitcher />
                 {!showSidebar && (
-                  <Button variant="secondary" onClick={() => setShowSidebar(true)} title="Version history">
+                  <Button variant="secondary" onClick={() => setShowSidebar(true)} title="Workspace JSONs + versions">
                     <History className="w-4 h-4" />
-                    Versions
+                    Workspace
                   </Button>
                 )}
               </div>
@@ -200,6 +239,10 @@ export default function Home() {
                               New Version
                             </Button>
                           )}
+                          <Button variant="secondary" onClick={handleSaveToWorkspace} title="Save a copy as a new JSON (or into another workspace)">
+                            <Save className="w-4 h-4" />
+                            Save as…
+                          </Button>
                         </div>
                       )}
                       {(state.explaining || state.explainError || state.explainMarkdown) && (
@@ -225,10 +268,12 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Right Sidebar - Version History (collapsible) */}
+          {/* Right Sidebar - workspace JSONs + version history (collapsible) */}
           {showSidebar && (
-            <aside className="w-[280px] border-l hidden lg:block bg-gray-50">
-              <VersionSidebar onClose={() => setShowSidebar(false)} />
+            <aside className="w-[280px] border-l hidden lg:flex lg:flex-col bg-gray-50">
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                <WorkspaceSidebar onClose={() => setShowSidebar(false)} />
+              </div>
             </aside>
           )}
         </main>

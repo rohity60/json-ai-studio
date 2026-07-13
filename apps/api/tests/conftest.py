@@ -77,3 +77,82 @@ def clean_settings_cache():
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# Workspace DB fixtures (ADR-0018)
+#
+# Integration tests run against a dedicated Postgres database so JSONB, the
+# partial unique index, and FOR UPDATE behave exactly as in production. The
+# DB is never the dev database — see WS_TEST_DB_URL.
+#
+# Fixtures are async so the engine is created in the SAME event loop as the
+# test (asyncpg connections are loop-bound; a cross-loop engine errors).
+# ---------------------------------------------------------------------------
+
+import uuid as _uuid
+
+import pytest_asyncio
+
+WS_TEST_DB_URL = (
+    "postgresql+asyncpg://json_ai:json_ai@localhost:5433/json_ai_studio_test"
+)
+
+
+@pytest_asyncio.fixture
+async def ws_db():
+    """Fresh schema on the test DB, engine wired into the app singletons.
+
+    Drops + recreates all tables each test (clean slate, loop-safe), points
+    `db.database` at this engine so the service layer uses it, and re-asserts
+    DATABASE_URL so `get_settings()` (cache cleared each test) still resolves
+    to the test database.
+    """
+    import os
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from src.json_ai_studio.db import database as db_mod
+    from src.json_ai_studio.db.models_orm import Base
+
+    os.environ["DATABASE_URL"] = WS_TEST_DB_URL
+    get_settings.cache_clear()
+
+    engine = create_async_engine(WS_TEST_DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+
+    prev_engine, prev_factory = db_mod._engine, db_mod._session_factory
+    db_mod._engine = engine
+    db_mod._session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    yield engine
+
+    db_mod._engine, db_mod._session_factory = prev_engine, prev_factory
+    await engine.dispose()
+
+
+async def _make_user(engine, email: str) -> _uuid.UUID:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from src.json_ai_studio.db.models_orm import User
+
+    uid = _uuid.uuid4()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as db:
+        db.add(User(id=uid, auth0_sub=f"test|{uid}", email=email))
+        await db.commit()
+    return uid
+
+
+@pytest_asyncio.fixture
+async def user_id(ws_db):
+    """Insert a user row and return its id (workspaces need a real FK)."""
+    return await _make_user(ws_db, "u@test.com")
+
+
+@pytest_asyncio.fixture
+async def other_user_id(ws_db):
+    """A second user, for cross-tenant isolation tests."""
+    return await _make_user(ws_db, "o@test.com")
