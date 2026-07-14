@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowRight, Check, X, Minus, Star } from 'lucide-react';
+import { ArrowRight, Check, X, Minus, Star, ChevronDown } from 'lucide-react';
 import Logo from '@/components/Logo';
+import JsonLd from '@/components/JsonLd';
 
 const REPO_URL = 'https://github.com/rohity60/json-ai-studio';
 
@@ -80,9 +81,9 @@ const features = [
     copy: 'Open and work with large API payloads and configuration files that are difficult to edit manually.',
   },
   {
-    emoji: '📜',
-    title: 'Version History',
-    copy: 'Track AI-generated changes and restore previous versions whenever needed.',
+    emoji: '🗂️',
+    title: 'Workspaces & Versions',
+    copy: 'Organize JSON into named workspaces, save tagged documents and keep a full version history — auto-saved and ready to resume when you log in.',
   },
 ];
 
@@ -113,11 +114,59 @@ const comparison: [string, boolean, boolean | 'partial', boolean | 'partial'][] 
   ['Natural Language Editing', true, false, true],
   ['Side-by-side Diffs', true, 'partial', false],
   ['Version History', true, 'partial', false],
+  ['Saved Workspaces', true, false, false],
   ['JSON Explanations', true, false, 'partial'],
   ['Large File Support', true, true, false],
   ['Visual Editing', true, true, false],
   ['Open Source', true, 'partial', false],
 ];
+
+// Single source of truth for both the visible FAQ section and the FAQPage
+// JSON-LD below — AI assistants get the same Q&A they can read on the page.
+const faqs = [
+  {
+    q: 'What is JSON AI Studio?',
+    a: 'JSON AI Studio is a free, AI-powered workspace for JSON. Upload or paste JSON, describe changes in plain English, review every edit as a side-by-side diff, and download valid JSON — plus AI explanations and full version history.',
+  },
+  {
+    q: 'Is JSON AI Studio free?',
+    a: 'Yes. The core JSON formatter, editor, explainer, validator and diff tools are free to use, with no signup required.',
+  },
+  {
+    q: 'Do I need to sign up or log in?',
+    a: 'No. You can use JSON AI Studio anonymously without an account. Logging in is optional and only adds per-user history and quota.',
+  },
+  {
+    q: 'Can I save and organize my JSON in workspaces?',
+    a: 'Yes. Log in to save your JSON into named workspaces as tagged documents, each keeping a full version history. Your work auto-saves, so you can switch between documents and resume anytime. Anonymous use stays local to your browser.',
+  },
+  {
+    q: 'What can the AI do with my JSON?',
+    a: 'The AI can explain unfamiliar or deeply nested JSON, edit it from natural-language instructions while keeping it valid, and produce a reviewable diff of every change.',
+  },
+  {
+    q: 'Does it keep my JSON valid?',
+    a: 'Yes. JSON AI Studio validates syntax after every AI edit, so you never download broken JSON.',
+  },
+  {
+    q: 'Is JSON AI Studio open source?',
+    a: 'Yes. The full source code is available on GitHub at github.com/rohity60/json-ai-studio.',
+  },
+  {
+    q: 'Can it handle large JSON files?',
+    a: 'Yes. It is built to open and work with large API payloads and configuration files that are hard to edit manually.',
+  },
+];
+
+const faqJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map((f) => ({
+    '@type': 'Question',
+    name: f.q,
+    acceptedAnswer: { '@type': 'Answer', text: f.a },
+  })),
+};
 
 function StarPill({ stars }: { stars: number | null }) {
   return (
@@ -163,6 +212,7 @@ export default async function LandingV2() {
 
   return (
     <div className="min-h-screen bg-white text-[#2c3e50]">
+      <JsonLd data={faqJsonLd} />
       {/* Header */}
       <header className="sticky top-0 z-50 flex items-center justify-between border-b border-gray-200 bg-white/80 px-4 py-3 backdrop-blur">
         <Logo />
@@ -300,17 +350,21 @@ export default async function LandingV2() {
               </div>
             </div>
 
-            {/* Versions */}
+            {/* Workspaces */}
             <div className="grid items-center gap-10 md:grid-cols-2">
               <div>
-                <div className="text-3xl">📜</div>
-                <h3 className="mt-4 text-2xl font-bold tracking-tight">Full version history</h3>
+                <div className="text-3xl">🗂️</div>
+                <h3 className="mt-4 text-2xl font-bold tracking-tight">Organize everything in Workspaces</h3>
                 <p className="mt-3 text-gray-600">
-                  Snapshot your work and roll back anytime. Track every AI-generated change and
-                  restore a previous version whenever you need it.
+                  Save your JSON into named workspaces as tagged documents, each with its own version
+                  history. Log in and your work auto-saves — switch between documents and pick up
+                  exactly where you left off.
                 </p>
               </div>
-              <Shot src="/landing/versions.png" alt="JSON version history sidebar" />
+              <Shot
+                src="/landing/workspaces.png"
+                alt="JSON AI Studio workspace with saved documents and version history"
+              />
             </div>
           </div>
         </section>
@@ -443,6 +497,34 @@ export default async function LandingV2() {
                   </span>
                 )}
               </a>
+            </div>
+          </div>
+        </section>
+
+        {/* FAQ */}
+        <section id="faq" className="px-4 py-20">
+          <div className="mx-auto max-w-3xl">
+            <div className="text-center">
+              <h2 className="text-3xl font-bold tracking-tight md:text-4xl">
+                Frequently Asked Questions
+              </h2>
+              <p className="mt-4 text-gray-600">
+                Everything you need to know about the AI JSON workspace.
+              </p>
+            </div>
+            <div className="mt-12 space-y-4">
+              {faqs.map((f) => (
+                <details
+                  key={f.q}
+                  className="group rounded-xl border border-gray-200 bg-white p-5"
+                >
+                  <summary className="flex cursor-pointer list-none items-center justify-between font-semibold">
+                    {f.q}
+                    <ChevronDown className="h-5 w-5 shrink-0 text-gray-400 transition-transform group-open:rotate-180" />
+                  </summary>
+                  <p className="mt-3 text-sm leading-relaxed text-gray-600">{f.a}</p>
+                </details>
+              ))}
             </div>
           </div>
         </section>

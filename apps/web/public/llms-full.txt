@@ -1,0 +1,103 @@
+# JSON AI Studio — full content for AI
+
+> AI-powered JSON workspace. Format, explain, edit, validate, diff and version JSON using
+> natural language. Free, open source, no signup required. https://jsonaistudio.com
+
+## What it is
+
+JSON AI Studio is a complete AI-powered workspace built specifically for developers and PMs
+who work with JSON every day. It is more than a formatter: upload or paste any JSON, describe
+the changes you want in plain English, review every modification as a side-by-side diff, and
+download valid JSON with confidence. Use it free with no signup; logging in is optional.
+
+Tagline: AI JSON Formatter & Editor. Format, explain, edit, validate and transform JSON using AI.
+
+## Features
+
+- Explain JSON: Instantly understand complex API responses, deeply nested JSON and unfamiliar
+  structures. Instead of reading thousands of lines manually, ask the AI questions about your JSON.
+- Edit JSON with AI: Describe changes in plain English. The AI modifies your JSON while preserving
+  formatting and validity. No manual editing.
+- Review every change: Every AI modification is shown as a visual side-by-side diff. Accept only
+  the changes you want; nothing is applied behind your back.
+- Always valid JSON: Syntax is automatically validated after every AI edit. Never download broken JSON.
+- Work with large JSON files: Open and edit large API payloads and configuration files that are
+  difficult to edit manually.
+- Version history: Track AI-generated changes and restore previous versions whenever needed.
+- Workspaces: Log in to organize JSON into named workspaces as tagged documents, each with its own
+  version history and auto-save.
+
+## Workspaces
+
+Logged-in users organize their work into named workspaces. A workspace holds up to five tagged JSON
+documents, and each document keeps up to five versions of its content. Loading a document restores
+its version history and opens the latest version as the working JSON. Work auto-saves as you switch
+between documents, and a status indicator shows whether the current document is saved, saving or
+has local unsaved changes. Anonymous users get a single local workspace stored in the browser;
+logging in unlocks durable, named workspaces synced to the account.
+
+## How it works
+
+1. Upload JSON — drop in a file or paste raw JSON.
+2. AI explains the structure — understand what you are looking at instantly.
+3. Ask AI to modify it — describe the change in plain English.
+4. Review side-by-side diff — accept only the changes you want.
+5. Download valid JSON — export syntax-checked, valid JSON.
+
+## Popular use cases
+
+Understand API responses, modify configuration files, clean messy JSON, generate JSON
+explanations, debug nested JSON, compare AI changes, explore unknown JSON, learn third-party APIs.
+
+## Why JSON AI Studio
+
+Compared with traditional JSON editors and general AI chatbots, JSON AI Studio is purpose-built
+for JSON, keeps JSON valid, supports natural-language editing, shows side-by-side diffs, keeps a
+version history, saves work in named workspaces, explains JSON, handles large files, offers visual
+editing, and is open source.
+
+## Open source
+
+JSON AI Studio is fully open source. Developers can inspect the code, contribute features, report
+issues and help shape the project. Repository: https://github.com/rohity60/json-ai-studio
+
+## FAQ
+
+Q: What is JSON AI Studio?
+A: A free, AI-powered workspace for JSON. Upload or paste JSON, describe changes in plain English,
+review every edit as a side-by-side diff, and download valid JSON — plus AI explanations and full
+version history.
+
+Q: Is JSON AI Studio free?
+A: Yes. The core JSON formatter, editor, explainer, validator and diff tools are free to use, with
+no signup required.
+
+Q: Do I need to sign up or log in?
+A: No. You can use JSON AI Studio anonymously without an account. Logging in is optional and only
+adds per-user history and quota.
+
+Q: Can I save and organize my JSON in workspaces?
+A: Yes. Log in to save your JSON into named workspaces as tagged documents, each keeping a full
+version history. Your work auto-saves, so you can switch between documents and resume anytime.
+Anonymous use stays local to your browser.
+
+Q: What can the AI do with my JSON?
+A: It can explain unfamiliar or deeply nested JSON, edit it from natural-language instructions while
+keeping it valid, and produce a reviewable diff of every change.
+
+Q: Does it keep my JSON valid?
+A: Yes. JSON AI Studio validates syntax after every AI edit, so you never download broken JSON.
+
+Q: Is JSON AI Studio open source?
+A: Yes. The full source code is available on GitHub at github.com/rohity60/json-ai-studio.
+
+Q: Can it handle large JSON files?
+A: Yes. It is built to open and work with large API payloads and configuration files that are hard
+to edit manually.
+
+## Links
+
+- Home: https://jsonaistudio.com/
+- Studio app: https://jsonaistudio.com/studio
+- Source: https://github.com/rohity60/json-ai-studio
+- Sitemap: https://jsonaistudio.com/sitemap.xml

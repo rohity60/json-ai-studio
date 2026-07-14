@@ -1,0 +1,25 @@
+# JSON AI Studio
+
+> AI-powered JSON workspace. Format, explain, edit, validate, diff and version JSON using natural language. Free, open source, no signup required.
+
+JSON AI Studio lets developers and PMs work with JSON through an AI chat: upload or paste JSON, describe changes in plain English, review every edit as a side-by-side diff, and download valid JSON. It also explains unfamiliar or deeply nested JSON in seconds and keeps a full version history.
+
+## Product
+- [JSON AI Studio home](https://jsonaistudio.com/): Overview of the AI JSON formatter, editor, validator and diff tool.
+- [Studio app](https://jsonaistudio.com/studio): The interactive workspace — AI chat, JSON tree view and diff viewer.
+
+## Key features
+- Explain JSON: plain-English explanation of any JSON structure, however deeply nested.
+- Edit JSON with AI: describe changes in natural language; formatting and validity are preserved.
+- Review every change: every AI edit is a visual side-by-side diff you accept or reject per change.
+- Always valid JSON: syntax is validated after every AI edit, so you never download broken JSON.
+- Version history: snapshot your work and restore previous versions anytime.
+- Workspaces: log in to organize JSON into named workspaces as tagged documents, each with its own version history and auto-save.
+- Large files: built to open and edit large API payloads and configuration files.
+
+## Docs
+- [Full site content](https://jsonaistudio.com/llms-full.txt): Expanded plain-text copy for AI ingestion.
+- [Source code (GitHub)](https://github.com/rohity60/json-ai-studio): Open-source repository.
+
+## Optional
+- [Sitemap](https://jsonaistudio.com/sitemap.xml)

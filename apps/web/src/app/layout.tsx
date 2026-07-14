@@ -1,5 +1,53 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import JsonLd from '@/components/JsonLd';
+
+const SITE_URL = 'https://jsonaistudio.com';
+const REPO_URL = 'https://github.com/rohity60/json-ai-studio';
+
+// schema.org entity graph so AI assistants and search engines can identify the
+// product, its publisher and the site. Emitted site-wide from the root layout.
+const siteJsonLd = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': ['SoftwareApplication', 'WebApplication'],
+      '@id': `${SITE_URL}/#app`,
+      name: 'JSON AI Studio',
+      description:
+        'AI-powered JSON workspace to format, explain, edit, validate, diff and version JSON using natural language.',
+      applicationCategory: 'DeveloperApplication',
+      operatingSystem: 'Web',
+      url: SITE_URL,
+      featureList: [
+        'AI JSON formatter',
+        'Natural-language JSON editing',
+        'AI JSON explanation',
+        'Side-by-side JSON diffs',
+        'JSON validation',
+        'Version history',
+        'Workspaces for saved, organized JSON documents',
+      ],
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      publisher: { '@id': `${SITE_URL}/#org` },
+    },
+    {
+      '@type': 'Organization',
+      '@id': `${SITE_URL}/#org`,
+      name: 'JSON AI Studio',
+      url: SITE_URL,
+      logo: `${SITE_URL}/icon.svg`,
+      sameAs: [REPO_URL],
+    },
+    {
+      '@type': 'WebSite',
+      '@id': `${SITE_URL}/#website`,
+      name: 'JSON AI Studio',
+      url: SITE_URL,
+      publisher: { '@id': `${SITE_URL}/#org` },
+    },
+  ],
+};
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://jsonaistudio.com'),
@@ -40,7 +88,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
       <html lang="en">
-        <body className="antialiased">{children}</body>
+        <body className="antialiased">
+          <JsonLd data={siteJsonLd} />
+          {children}
+        </body>
       </html>
     );
 }
