@@ -84,10 +84,26 @@ class CreateSessionRequest(BaseModel):
     name: str
 
 
+class SeedFromTemplateRequest(BaseModel):
+    """Open-in-Workspace payload from a static template page (ADR-0020).
+
+    `json` (wire) maps to `json_doc` to avoid clashing with BaseModel.json().
+    """
+
+    templateSlug: str = Field(..., max_length=200)
+    templateTitle: str | None = None
+    json_doc: dict[str, Any] = Field(..., alias="json")
+    starterPrompts: list[str] = Field(default_factory=list, max_length=8)
+
+    model_config = {"populate_by_name": True}
+
+
 class SessionResponse(Session):
     """Full session state returned by GET and POST endpoints."""
 
-    pass
+    # Transient: only populated by POST /api/sessions/from-template so the
+    # studio can render starter-prompt chips. Not persisted session state.
+    starter_prompts: list[str] = Field(default_factory=list)
 
 
 class CreateVersionRequest(BaseModel):

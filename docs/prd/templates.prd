@@ -1,0 +1,687 @@
+Absolutely. I think this feature is important enough to be a standalone product area rather than just another page on the website.
+
+# PRD: AI Configuration Templates & Knowledge Hub
+
+**Project Name**
+
+AI Configuration Templates
+
+**Product**
+
+JSON AI Studio
+
+**Version**
+
+v1.0
+
+**Status**
+
+Planning
+
+---
+
+# 1. Overview
+
+## Problem
+
+Developers constantly search for:
+
+* AWS IAM Policy examples
+* OpenAPI JSON examples
+* Postman Collection samples
+* Docker daemon.json
+* VS Code settings.json
+* Auth0 exports
+* Firebase config
+* Elasticsearch queries
+* Kubernetes configuration
+
+Most websites only provide static snippets.
+
+Users still need to:
+
+* understand the configuration
+* customize it
+* validate it
+* fix errors
+* adapt it to their own use case
+
+This causes users to copy examples into ChatGPT or another AI tool.
+
+---
+
+## Solution
+
+Create an **AI-powered Configuration Hub** inside JSON AI Studio.
+
+Instead of static templates, every configuration becomes editable inside the AI Workspace.
+
+Flow:
+
+```
+Developer
+
+↓
+
+Template Library
+
+↓
+
+Open Template
+
+↓
+
+AI Workspace
+
+↓
+
+Explain
+
+↓
+
+Modify
+
+↓
+
+Validate
+
+↓
+
+Download
+```
+
+---
+
+# 2. Goals
+
+Primary goals
+
+* Increase organic traffic
+* Increase user retention
+* Give first-time visitors something immediately useful
+* Improve SEO authority
+* Drive AI Workspace usage
+
+Success metrics
+
+* Organic visitors
+* Workspace opens from template pages
+* AI conversations started
+* Returning users
+* Search rankings
+
+---
+
+# 3. Navigation
+
+New top-level navigation
+
+```
+Home
+
+Workspace
+
+Templates
+
+Blog
+
+Pricing
+
+GitHub
+```
+
+---
+
+# 4. Template Categories
+
+## Cloud
+
+AWS
+
+Azure
+
+Google Cloud
+
+---
+
+## DevOps
+
+Docker
+
+Kubernetes
+
+Terraform JSON
+
+Helm values (JSON equivalents)
+
+---
+
+## Authentication
+
+JWT
+
+OAuth
+
+OpenID Connect
+
+Auth0
+
+Keycloak
+
+Firebase Auth
+
+---
+
+## APIs
+
+OpenAPI
+
+Swagger
+
+Postman
+
+GraphQL
+
+REST request payloads
+
+---
+
+## AI
+
+OpenAI
+
+Gemini
+
+Anthropic
+
+LiteLLM
+
+vLLM
+
+MCP configuration
+
+---
+
+## Databases
+
+MongoDB
+
+Elasticsearch
+
+Redis
+
+PostgreSQL JSON examples
+
+---
+
+## IDE
+
+VS Code
+
+JetBrains
+
+ESLint
+
+Prettier
+
+---
+
+## CI/CD
+
+GitHub Actions
+
+Azure DevOps
+
+GitLab
+
+Jenkins
+
+---
+
+# 5. Template Page
+
+Example
+
+```
+AWS IAM Read-only Policy
+```
+
+Sections
+
+Hero
+
+```
+Title
+
+Description
+
+Tags
+
+Difficulty
+
+Open in AI Workspace
+```
+
+---
+
+Preview
+
+```
+Syntax highlighted JSON
+```
+
+---
+
+AI Actions
+
+Buttons
+
+```
+Explain
+
+Customize
+
+Validate
+
+Improve
+
+Fix
+
+Download
+```
+
+---
+
+Documentation
+
+Purpose
+
+When to use
+
+Required fields
+
+Optional fields
+
+Best practices
+
+Security considerations
+
+---
+
+Related Templates
+
+```
+S3 Policy
+
+EC2 Policy
+
+Lambda Policy
+
+```
+
+---
+
+Related Blogs
+
+```
+Understanding IAM Policies
+
+Least Privilege Guide
+
+IAM Best Practices
+```
+
+---
+
+# 6. AI Workspace Integration
+
+Open Template launches Workspace.
+
+Preloaded JSON.
+
+Starter prompts.
+
+Examples
+
+```
+Make this read-only
+
+Allow access to bucket X
+
+Restrict to one region
+
+Add CloudFront permissions
+
+Explain each statement
+
+Remove unnecessary permissions
+```
+
+---
+
+# 7. Blog Integration
+
+Every template should generate multiple blog articles.
+
+Example
+
+AWS IAM Policy
+
+Blogs
+
+```
+What is an IAM Policy
+
+IAM JSON Explained
+
+Least Privilege IAM
+
+IAM Policy Generator
+
+Common IAM Mistakes
+
+How AI Helps Build IAM Policies
+```
+
+One template can generate many SEO-targeted articles.
+
+---
+
+# 8. Search
+
+Search bar
+
+Supports
+
+```
+AWS IAM
+
+docker
+
+postman
+
+openapi
+
+firebase
+
+jwt
+
+auth0
+
+```
+
+Filters
+
+```
+Category
+
+Cloud
+
+Difficulty
+
+Provider
+
+Tags
+```
+
+---
+
+# 9. Template Metadata
+
+Each template contains structured metadata like:
+
+```yaml
+id:
+slug:
+title:
+description:
+category:
+provider:
+difficulty:
+estimated_read_time:
+tags:
+schema_version:
+featured:
+updated_at:
+author:
+json:
+```
+
+This metadata supports search, filtering, recommendations, and SEO.
+
+---
+
+# 10. AI Features
+
+Every template supports
+
+### Explain
+
+Summarize
+
+---
+
+### Field Documentation
+
+Click field
+
+Explain meaning
+
+---
+
+### Improve
+
+Suggest improvements
+
+---
+
+### Validate
+
+JSON syntax
+
+Best practices
+
+---
+
+### Convert
+
+JSON
+
+↓
+
+YAML
+
+↓
+
+TOML
+
+↓
+
+XML
+
+---
+
+### Customize
+
+Natural language editing
+
+```
+Change timeout to 120
+
+Enable retries
+
+Remove deprecated fields
+
+Rename customerId
+
+Add logging
+
+```
+
+---
+
+# 11. Blog CMS
+
+Every blog
+
+Supports
+
+```
+Code snippets
+
+Copy buttons
+
+Interactive JSON
+
+Related Templates
+
+Related Blogs
+
+Open in Workspace
+
+FAQ
+
+AI Summary
+```
+
+---
+
+# 12. SEO
+
+Every template gets
+
+```
+/templates/aws-iam-policy
+
+/templates/docker-daemon
+
+/templates/openapi-example
+
+/templates/postman-collection
+```
+
+Blogs
+
+```
+/blog/aws-iam-policy-explained
+
+/blog/postman-json-example
+
+/blog/docker-daemon-json-guide
+```
+
+Schema.org
+
+Breadcrumbs
+
+OpenGraph
+
+Canonical URLs
+
+FAQ schema
+
+HowTo schema (where appropriate)
+
+---
+
+# 13. Content Strategy
+
+Start with the highest-demand configurations rather than trying to cover everything.
+
+**Phase 1 (Launch)** – 50–75 templates
+
+* AWS IAM Policies
+* S3 Bucket Policies
+* Lambda Events
+* OpenAPI Specifications
+* Postman Collections
+* VS Code settings.json
+* Docker daemon.json
+* Firebase Config
+* Elasticsearch Queries
+* MongoDB Schema Validation
+
+**Phase 2** – Expand to 200+ templates
+
+* Azure
+* GCP
+* Kubernetes
+* GitHub Actions
+* Terraform JSON
+* Auth0
+* Keycloak
+* Jenkins
+* AI provider request/response payloads
+
+**Phase 3** – Community contributions
+
+* User-submitted templates
+* Rating system
+* Comments
+* Verified templates
+* AI-generated template suggestions reviewed before publishing
+
+---
+
+# 14. Technical Architecture
+
+```
+Content Repository
+        │
+        ▼
+Markdown + JSON Metadata
+        │
+        ▼
+Static Site Generation
+        │
+        ▼
+Template Detail Pages
+        │
+        ▼
+Open in Workspace API
+        │
+        ▼
+JSON AI Workspace
+```
+
+This keeps pages fast, SEO-friendly, and easy to version in Git.
+
+---
+
+# 15. Future Enhancements
+
+* AI-generated templates from natural language ("Create a least-privilege IAM policy for an S3 upload service.")
+* Import templates directly from official documentation repositories where licensing permits.
+* Template version history aligned with cloud provider releases.
+* "Used by X developers" and popularity indicators.
+* One-click deployment links (where supported).
+* VS Code extension integration ("Open with JSON AI Studio").
+* GitHub Action to validate and improve configuration files in pull requests.
+* Community-maintained template collections.
+
+---
+
+# Why I think this is strategically important
+
+This feature does much more than add templates. It creates a **compounding growth loop**:
+
+```
+Official configuration examples
+            ↓
+High-quality template pages
+            ↓
+Long-tail SEO traffic
+            ↓
+Users open templates in AI Workspace
+            ↓
+AI conversations and edits
+            ↓
+User accounts and retention
+            ↓
+More templates and blogs
+            ↓
+More indexed pages and authority
+```
+
+Over time, this can position JSON AI Studio as the place developers visit not only to **edit JSON with AI**, but also to **discover, understand, customize, and manage real-world configuration files** across cloud platforms, APIs, and developer tools. This combination is significantly harder for competitors to replicate than a standalone JSON editor.
+

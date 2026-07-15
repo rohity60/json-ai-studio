@@ -501,6 +501,29 @@ export async function rejectDiffBatch(sessionId: string, apiKey: string) {
     return await res.json();
 }
 
+/** Seed a new session from a static template (Open in Workspace, ADR-0020).
+ *  Free (no LLM call). Works anonymously (X-API-Key) or logged-in (bearer). */
+export async function seedFromTemplate(
+    templateSlug: string,
+    templateTitle: string,
+    json: unknown,
+    starterPrompts: string[],
+    apiKey: string,
+): Promise<{
+    id: string;
+    name: string;
+    working_json: Record<string, any>;
+    starter_prompts: string[];
+}> {
+    const res = await fetch(`${BASE}/sessions/from-template`, {
+        method: 'POST',
+        headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
+        body: JSON.stringify({templateSlug, templateTitle, json, starterPrompts}),
+    });
+    if (!res.ok) throw await httpError(res, 'Open in Workspace failed');
+    return await res.json();
+}
+
 export async function explain(
     sessionId: string,
     workingJson: Record<string, any>,
