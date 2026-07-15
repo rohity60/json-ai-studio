@@ -41,7 +41,11 @@ async def endpoint_upload_json(
         body_bytes = await request.body()
         try:
             raw_data = _json.loads(body_bytes.decode("utf-8"))
-            sid = raw_data.get("session_id") if isinstance(raw_data, dict) else None
+            # Raw-body uploads smuggle session_id inside the document itself —
+            # pop it here so the stored JSON is exactly what the user sent.
+            sid = (
+                raw_data.pop("session_id", None) if isinstance(raw_data, dict) else None
+            )
             data = raw_data
         except (_json.JSONDecodeError, UnicodeDecodeError):
             raise HTTPException(status_code=400, detail="Invalid JSON in upload body")

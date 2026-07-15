@@ -2,8 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* The app has no dark theme yet — pin a light scheme so dark-mode OS users
+   don't get a UA-black background behind unstyled panels. */
+:root { color-scheme: light; }
+
 body {
   font-family: system-ui, -apple-system, sans-serif;
+  background: #fff;
+  color: #2c3e50;
 }
 
 /* Landing entrance animation (opt-in via .animate-fade-up) */

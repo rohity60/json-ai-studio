@@ -54,11 +54,12 @@ async function getStars(): Promise<number | null> {
   }
 }
 
+// Diff review leads — it's the differentiator vs chatbots and editors.
 const features = [
   {
-    emoji: '🧠',
-    title: 'Explain JSON',
-    copy: 'Instantly understand complex API responses, deeply nested JSON and unfamiliar structures. Instead of reading thousands of lines manually, ask AI questions about your JSON.',
+    emoji: '🔍',
+    title: 'Review Every Change',
+    copy: 'Every AI modification is shown as a visual side-by-side diff. Accept only the changes you want.',
   },
   {
     emoji: '✏️',
@@ -66,9 +67,9 @@ const features = [
     copy: 'Describe changes in plain English. The AI modifies your JSON while preserving formatting and validity. No manual editing.',
   },
   {
-    emoji: '🔍',
-    title: 'Review Every Change',
-    copy: 'Every AI modification is shown as a visual side-by-side diff. Accept only the changes you want.',
+    emoji: '🧠',
+    title: 'Explain JSON',
+    copy: 'Instantly understand complex API responses, deeply nested JSON and unfamiliar structures. Instead of reading thousands of lines manually, ask AI questions about your JSON.',
   },
   {
     emoji: '✅',
@@ -168,18 +169,22 @@ const faqJsonLd = {
   })),
 };
 
+// Below this, a public star count reads as anti-social-proof — show the
+// pill without the number until the repo has real traction.
+const MIN_STARS_TO_SHOW = 100;
+
 function StarPill({ stars }: { stars: number | null }) {
+  const showCount = stars !== null && stars >= MIN_STARS_TO_SHOW;
   return (
     <a
       href={REPO_URL}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-[#2c3e50] transition-colors hover:border-gray-400 hover:bg-gray-50"
+      className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-[#2c3e50] transition-colors hover:border-gray-400 hover:bg-gray-50"
     >
       <Github className="h-4 w-4" />
-      <span className="hidden sm:inline">Star on GitHub</span>
-      <span className="sm:hidden">GitHub</span>
-      {stars !== null && (
+      <span>Star on GitHub</span>
+      {showCount && (
         <span className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
           <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
           {stars.toLocaleString()}
@@ -239,19 +244,20 @@ export default async function LandingV2() {
               AI JSON Formatter <span className="text-purple-600">&amp; Editor</span>
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-gray-600">
-              Format, explain, edit, validate and transform JSON using AI.
+              Edit 10,000-line JSON configs in plain English. Review every change as a
+              side-by-side diff. Never ship broken JSON.
             </p>
             <p className="mx-auto mt-3 max-w-2xl text-base text-gray-500">
-              Upload any JSON, describe changes in plain English, review every modification with
-              side-by-side diffs and download valid JSON with confidence.
+              Unlike a chatbot, every AI edit is validated and shown as a reviewable diff —
+              accept only the changes you want, then download valid JSON.
             </p>
 
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link
-                href="/studio"
+                href="/studio?sample=package"
                 className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-8 py-3 text-base font-medium text-white transition-colors hover:bg-purple-700"
               >
-                Start Free
+                Try it on sample JSON
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <a
@@ -321,9 +327,22 @@ export default async function LandingV2() {
         {/* Showcase rows with real screenshots */}
         <section className="border-t border-gray-100 bg-gray-50/60 px-4 py-20">
           <div className="mx-auto flex max-w-6xl flex-col gap-24">
-            {/* Explain */}
+            {/* Diff / Review — leads the showcase, same reason it leads the feature grid */}
             <div className="grid items-center gap-10 md:grid-cols-2">
               <div>
+                <div className="text-3xl">🔍</div>
+                <h3 className="mt-4 text-2xl font-bold tracking-tight">Review every change as a JSON diff</h3>
+                <p className="mt-3 text-gray-600">
+                  Every AI edit is a visual, side-by-side JSON diff. Compare before and after,
+                  then accept only the changes you want — nothing is applied behind your back.
+                </p>
+              </div>
+              <Shot src="/landing/diff.png" alt="Side-by-side JSON diff viewer" />
+            </div>
+
+            {/* Explain */}
+            <div className="grid items-center gap-10 md:grid-cols-2">
+              <div className="md:order-2">
                 <div className="text-3xl">🧠</div>
                 <h3 className="mt-4 text-2xl font-bold tracking-tight">Explain any JSON in seconds</h3>
                 <p className="mt-3 text-gray-600">
@@ -332,21 +351,8 @@ export default async function LandingV2() {
                   thousands of lines.
                 </p>
               </div>
-              <Shot src="/landing/explain.png" alt="AI explanation of a JSON structure" />
-            </div>
-
-            {/* Diff / Review */}
-            <div className="grid items-center gap-10 md:grid-cols-2">
-              <div className="md:order-2">
-                <div className="text-3xl">🔍</div>
-                <h3 className="mt-4 text-2xl font-bold tracking-tight">Review every change as a JSON diff</h3>
-                <p className="mt-3 text-gray-600">
-                  Every AI edit is a visual, side-by-side JSON diff. Compare before and after,
-                  then accept only the changes you want — nothing is applied behind your back.
-                </p>
-              </div>
               <div className="md:order-1">
-                <Shot src="/landing/diff.png" alt="Side-by-side JSON diff viewer" />
+                <Shot src="/landing/explain.png" alt="AI explanation of a JSON structure" />
               </div>
             </div>
 
@@ -396,30 +402,9 @@ export default async function LandingV2() {
           </div>
         </section>
 
-        {/* Use cases */}
+        {/* Comparison — the "why not VSCode or ChatGPT" answer, kept high on
+            the page because it's the most persuasive section for developers. */}
         <section className="border-t border-gray-100 bg-gray-50/60 px-4 py-20">
-          <div className="mx-auto max-w-6xl">
-            <div className="text-center">
-              <h2 className="text-3xl font-bold tracking-tight md:text-4xl">Popular Use Cases</h2>
-              <p className="mt-4 text-gray-600">
-                What developers use the AI JSON editor and validator for every day.
-              </p>
-            </div>
-            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {useCases.map((uc) => (
-                <div
-                  key={uc}
-                  className="rounded-xl border border-gray-200 bg-white p-5 text-sm font-medium transition-colors hover:border-purple-200"
-                >
-                  {uc}
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Comparison */}
-        <section className="px-4 py-20">
           <div className="mx-auto max-w-5xl">
             <div className="text-center">
               <h2 className="text-3xl font-bold tracking-tight md:text-4xl">
@@ -467,6 +452,28 @@ export default async function LandingV2() {
           </div>
         </section>
 
+        {/* Use cases */}
+        <section className="px-4 py-20">
+          <div className="mx-auto max-w-6xl">
+            <div className="text-center">
+              <h2 className="text-3xl font-bold tracking-tight md:text-4xl">Popular Use Cases</h2>
+              <p className="mt-4 text-gray-600">
+                What developers use the AI JSON editor and validator for every day.
+              </p>
+            </div>
+            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {useCases.map((uc) => (
+                <div
+                  key={uc}
+                  className="rounded-xl border border-gray-200 bg-white p-5 text-sm font-medium transition-colors hover:border-purple-200"
+                >
+                  {uc}
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* Open source */}
         <section className="border-t border-gray-100 bg-gray-50/60 px-4 py-20">
           <div className="mx-auto max-w-3xl text-center">
@@ -490,7 +497,7 @@ export default async function LandingV2() {
               >
                 <Github className="h-5 w-5" />
                 View on GitHub
-                {stars !== null && (
+                {stars !== null && stars >= MIN_STARS_TO_SHOW && (
                   <span className="inline-flex items-center gap-1 rounded-md bg-white/15 px-2 py-0.5 text-sm">
                     <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
                     {stars.toLocaleString()}
@@ -538,13 +545,19 @@ export default async function LandingV2() {
             <p className="mt-4 text-gray-600">
               Format, explain, edit and validate JSON with AI — free, no signup required.
             </p>
-            <div className="mt-8">
+            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link
-                href="/studio"
+                href="/studio?sample=package"
                 className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-8 py-3 text-base font-medium text-white transition-colors hover:bg-purple-700"
               >
-                Start Free
+                Try it on sample JSON
                 <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link
+                href="/studio"
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-8 py-3 text-base font-medium text-[#2c3e50] transition-colors hover:border-gray-400 hover:bg-gray-50"
+              >
+                Start with your own JSON
               </Link>
             </div>
           </div>

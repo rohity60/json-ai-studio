@@ -47,10 +47,9 @@ async def upload_json(data: Any, session_id: str | None) -> dict[str, Any]:
         name = data.get("name", "Uploaded") if isinstance(data, dict) else "Uploaded"
         session = await store.create_session(name=name)
 
-    # Strip metadata before storing as working_json
-    if isinstance(data, dict):
-        data.pop("session_id", None)
-        data.pop("name", None)
+    # The document is stored verbatim: top-level keys like "name" or
+    # "session_id" are legitimate user data (e.g. package.json). Transport
+    # metadata is stripped in the controller, never here.
     session["working_json"] = data if isinstance(data, dict) else {}
     session["baseline_json"] = data if isinstance(data, dict) else {}
     session["updated_at"] = now_iso()

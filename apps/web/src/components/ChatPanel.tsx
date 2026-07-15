@@ -5,14 +5,23 @@ import { Send, Loader2, Sparkles, FileJson2 } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
 import Button from '@/components/ui/Button';
 
+// JSON-agnostic fallbacks — shown when no sample-specific prompts are wired
+// in (e.g. user's own upload or a restored session), so they must make sense
+// against any document. Edit-style only: the chat LLM produces diffs and
+// refuses "explain" requests — explaining goes through the dedicated
+// /api/explain flow (the Explain button on the preview panel).
 const EXAMPLE_PROMPTS = [
-  'Increase timeout to 60',
-  'Add a retryCount of 5',
+  'Add a "description" field at the top',
+    'Increase timeout to 60',
+  'Remove any empty or null values',
   'Rename service to orders-api',
-  'Remove the refund endpoint',
+  'remove all occurrences of timeout',
 ];
 
-export default function ChatPanel({ onGoToUpload }: { onGoToUpload?: () => void }) {
+export default function ChatPanel({ onGoToUpload, suggestions }: {
+  onGoToUpload?: () => void;
+  suggestions?: string[];
+}) {
   const { state, sendMessage } = useSession();
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -25,21 +34,24 @@ export default function ChatPanel({ onGoToUpload }: { onGoToUpload?: () => void 
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [state.conversationHistory, isStreaming]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || !state.sessionId || isStreaming || !hasJson) return;
+  const send = async (message: string) => {
+    if (!message.trim() || !state.sessionId || isStreaming || !hasJson) return;
 
-    const message = input.trim();
     setInput('');
     setIsStreaming(true);
 
     try {
-      await sendMessage(message);
+      await sendMessage(message.trim());
        } catch {
          // Message sent or failed - stop streaming
        } finally {
       setIsStreaming(false);
        }
+     };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await send(input);
      };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -74,11 +86,12 @@ export default function ChatPanel({ onGoToUpload }: { onGoToUpload?: () => void 
              <div className="text-center text-muted-foreground mt-8">
               <p className="text-sm mb-3">Send a message to start editing your JSON</p>
               <div className="flex flex-wrap justify-center gap-2">
-                {EXAMPLE_PROMPTS.map((prompt) => (
+                {(suggestions?.length ? suggestions : EXAMPLE_PROMPTS).map((prompt) => (
                   <Button
                     key={prompt}
                     variant="chip"
-                    onClick={() => { setInput(prompt); textareaRef.current?.focus(); }}
+                    disabled={isStreaming}
+                    onClick={() => send(prompt)}
                   >
                     {prompt}
                   </Button>
