@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     workspace_max_jsons: int = 5
     json_max_versions: int = 5
 
+    # Templates hub (ADR-0020). Max serialized size of template JSON accepted
+    # by POST /api/sessions/from-template. Guards memory; templates are small.
+    max_template_json_bytes: int = 262_144  # 256 KiB
+
     # Logging (ADR-0017). Env-driven so level/dir/rotation are tunable without
     # code changes. Applies to root, the json_ai_studio namespace, and (when
     # log_capture_uvicorn) uvicorn's own loggers.

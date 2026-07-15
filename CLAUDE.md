@@ -25,7 +25,7 @@ Python files: always format with `black .` after editing (install via `uv add --
 
 ```
 json-ai-studio/
-├── openapi/spec.yaml            ← Single source of truth. 25 endpoints, 32 schemas. OpenAPI 3.1 YAML.
+├── openapi/spec.yaml            ← Single source of truth. 26 endpoints, 33 schemas. OpenAPI 3.1 YAML.
 ├── apps/api/                    ← FastAPI backend, layered per ADR-0013
 │     └── src/json_ai_studio/
 │           ├── main.py              ← Thin app factory: FastAPI init, lifespan (DB engine), CORS, include_router per controller.
@@ -65,7 +65,7 @@ json-ai-studio/
 
 ## Key facts
 
-- **OpenAPI-first contract**: `openapi/spec.yaml` (25 endpoints, 32 schemas) is the contract source. Pydantic models in `models.py` implement it verbatim (ADR-0011). Frontend TS types are hand-written mirrors — not auto-generated.
+- **OpenAPI-first contract**: `openapi/spec.yaml` (26 endpoints, 33 schemas) is the contract source. Pydantic models in `models.py` implement it verbatim (ADR-0011). Frontend TS types are hand-written mirrors — not auto-generated.
 - **Session model**: In-memory store behind async `SessionStore` ABC (`db/session_store.py`, ADR-0013). Each session = working_json + version snapshots + conversation history. No TTL. Browser mirrors versions + working JSON to IndexedDB and bulk-restores into a fresh session after backend restart (ADR-0014).
 - **Chat flow**: User NL message → LiteLLM call → field-level diffs → SSE stream: thinking → diff(s) → complete (ADR-0002, ADR-0004). The system prompt in `main.py` embeds the current working JSON as few-shot examples (ADR-0005).
 - **Diff engine**: `deepdiff` for backend (ADR-0003); client-side `deep-diff` for DiffViewer. Business rules only (timeout > 0, retryCount <= 10). No JSON Schema validation yet.
@@ -80,6 +80,7 @@ From `openapi/spec.yaml`, implemented in `controllers/`:
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST   | `/api/sessions` | Create session |
+| POST   | `/api/sessions/from-template` | Seed a session from a static template (ADR-0020) |
 | GET    | `/api/sessions/{id}` | Get session |
 | POST   | `/api/json/upload` | Upload JSON file/body |
 | POST   | `/api/chat` (SSE) | NL message → diffs |
@@ -112,7 +113,7 @@ Routers live in `controllers/` (one file per resource); auth via `Depends(requir
 
 ## Important files
 
-- `openapi/spec.yaml` — Edit first for any contract change. 32 schemas define the wire format.
+- `openapi/spec.yaml` — Edit first for any contract change. 33 schemas define the wire format.
 - `apps/api/src/json_ai_studio/main.py` — Thin app factory (~40 lines). Routers registered from `controllers/`.
 - `apps/api/src/json_ai_studio/controllers/` — One router per resource. Thin: parse request, call service, map domain errors → HTTPException.
 - `apps/api/src/json_ai_studio/services/` — Business logic. `chat_service.py` has SSE streaming + LLM call; `version_service.py` has snapshot/select/restore.

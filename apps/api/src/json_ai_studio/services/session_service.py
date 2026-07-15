@@ -33,6 +33,34 @@ async def get_session(session_id: str) -> dict[str, Any]:
     return session
 
 
+async def create_from_template(
+    json_doc: dict[str, Any],
+    name: str | None = None,
+    starter_prompts: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a session preloaded with static template JSON (ADR-0020).
+
+    Reuses the ordinary session runtime — no new store, no version snapshot.
+    `starter_prompts` are echoed back as transient response metadata for the
+    studio's chip UI, not persisted into session state.
+    """
+    session = await store.create_session(name=name)
+    working = json_doc if isinstance(json_doc, dict) else {}
+    session["working_json"] = working
+    session["baseline_json"] = working
+    session["updated_at"] = now_iso()
+    await store.save_session(session)
+    logger.info(
+        "session seeded from template id=%s top_keys=%d prompts=%d",
+        session["id"],
+        len(working),
+        len(starter_prompts or []),
+    )
+    result = dict(session)
+    result["starter_prompts"] = list(starter_prompts or [])
+    return result
+
+
 async def upload_json(data: Any, session_id: str | None) -> dict[str, Any]:
     """Store an uploaded JSON document; reuse the session if one is given."""
     logger.info(

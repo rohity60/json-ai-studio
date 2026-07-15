@@ -221,6 +221,11 @@ export default async function LandingV2() {
       {/* Header */}
       <header className="sticky top-0 z-50 flex items-center justify-between border-b border-gray-200 bg-white/80 px-4 py-3 backdrop-blur">
         <Logo />
+        <nav className="hidden items-center gap-1 text-sm md:flex">
+          <Link href="/studio" className="rounded-lg px-3 py-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900">Workspace</Link>
+          <Link href="/templates" className="rounded-lg px-3 py-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900">Templates</Link>
+          <Link href="/blog" className="rounded-lg px-3 py-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900">Blog</Link>
+        </nav>
         <div className="flex items-center gap-2 sm:gap-3">
           <StarPill stars={stars} />
           <Link
