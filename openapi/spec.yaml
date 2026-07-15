@@ -100,6 +100,57 @@ paths:
          '500':
            $ref: '#/components/responses/Error500'
 
+   /api/sessions/from-template:
+    post:
+      tags: [sessions]
+      summary: Seed a new session from a static template
+      description: |-
+        Open-in-Workspace bridge (ADR-0020). Creates a session whose
+        working_json is the supplied static template JSON and echoes back the
+        starter prompts for the studio's chip UI. Free (no LLM call), counts
+        toward the request rate limit only; anonymous callers are allowed.
+      operationId: seedSessionFromTemplate
+      security:
+         - simpleApiKey: []
+         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/SeedFromTemplateRequest'
+            example:
+              templateSlug: "aws-iam-readonly-policy"
+              templateTitle: "AWS IAM Read-only Policy"
+              json: {"Version": "2012-10-17", "Statement": []}
+              starterPrompts: ["Explain each statement", "Restrict to one region"]
+      responses:
+         '201':
+          description: Session created and seeded with template JSON
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/SessionResponse'
+              example:
+                id: "abc123"
+                name: "AWS IAM Read-only Policy"
+                working_json: {"Version": "2012-10-17", "Statement": []}
+                versions: []
+                conversation_history: []
+                starter_prompts: ["Explain each statement"]
+                created_at: "2026-07-15T00:00:00Z"
+                updated_at: "2026-07-15T00:00:00Z"
+         '401':
+           $ref: '#/components/responses/Error401'
+         '413':
+           description: Template JSON exceeds the size limit
+         '422':
+           description: Invalid template payload (json not an object, etc.)
+         '429':
+           $ref: '#/components/responses/Error429'
+         '500':
+           $ref: '#/components/responses/Error500'
+
    /api/sessions/{sessionId}:
     get:
       tags: [sessions]
@@ -1364,7 +1415,39 @@ components:
     SessionResponse:
       allOf:
          - $ref: '#/components/schemas/Session'
+         - type: object
+           properties:
+             starter_prompts:
+               type: array
+               items:
+                 type: string
+               description: |-
+                 Transient starter prompts, only populated by
+                 POST /api/sessions/from-template for the studio chip UI.
       description: Full session state returned by GET /api/sessions/{id} and POST /api/sessions
+
+    SeedFromTemplateRequest:
+      type: object
+      properties:
+        templateSlug:
+          type: string
+          maxLength: 200
+          description: Slug of the static template being opened
+        templateTitle:
+          type: string
+          nullable: true
+          description: Human-readable template title (used as the session name)
+        json:
+          type: object
+          additionalProperties: true
+          description: The template JSON to seed as working_json
+        starterPrompts:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+          description: Prompts surfaced as clickable chips in the studio
+      required: [templateSlug, json]
 
     CreateVersionRequest:
       type: object
