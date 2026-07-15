@@ -13,7 +13,7 @@ import Button from '@/components/ui/Button';
 // /api/explain flow (the Explain button on the preview panel).
 const EXAMPLE_PROMPTS = [
   'Add a "description" field at the top',
-    'Increase timeout to 60',
+    'Change content typt to application/text for "Create item"',
   'Remove any empty or null values',
   'Rename service to orders-api',
   'remove all occurrences of timeout',
