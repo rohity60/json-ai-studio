@@ -18,6 +18,7 @@ import WorkspaceSwitcher from '@/components/WorkspaceSwitcher';
 import StatusPill from '@/components/StatusPill';
 import { showSaveDialog } from '@/components/SaveDialog';
 import { showRateLimitModal } from '@/components/RateLimitModal';
+import { SAMPLES, getSample, type Sample } from '@/lib/samples';
 
 // Left-panel tab (Chat / Upload): underline style, full width
 function TabButton({ active, onClick, children }: {
@@ -57,6 +58,8 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [savingVersion, setSavingVersion] = useState(false);
   const [versionLabel, setVersionLabel] = useState('');
+  // Chat suggestion chips tailored to the loaded sample (undefined → generic defaults)
+  const [sampleSuggestions, setSampleSuggestions] = useState<string[] | undefined>(undefined);
 
    // Derive displayed json from context workingJson.
    // On first mount workingJson is {} — fall back to an empty object.
@@ -85,7 +88,7 @@ export default function Home() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
-  const handleUpload = async (data: Record<string, any>) => {
+  const handleUpload = async (data: Record<string, any>, prompts?: string[]) => {
      // Do NOT call createSession here — the upload endpoint already creates or reuses a session.
      // Calling createSession('My Config') spawns a fresh empty session that overwrites
      // the working_json, causing the UI to blank out immediately after upload succeeds.
@@ -99,8 +102,28 @@ export default function Home() {
      // Logged-in: replacing the working JSON drops unsaved work — guard it.
     if (loggedIn && !(await guardDirty())) return;
     const ok = await uploadJson(data);
-    if (ok) setActiveTab('chat');
+    if (ok) {
+      setSampleSuggestions(prompts);
+      setActiveTab('chat');
+      setPreviewTab('preview');
+    }
    };
+
+  const handleLoadSample = (sample: Sample) => handleUpload(sample.json, sample.prompts);
+
+  // Deep link from the landing page: /studio?sample=<id> loads a built-in
+  // sample on first visit so there is zero-friction between "Try it" and a
+  // populated workspace. Never clobbers an existing working JSON.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('sample');
+    if (!id) return;
+    // Strip the param so refresh/back doesn't re-trigger the load.
+    window.history.replaceState(null, '', window.location.pathname);
+    const sample = getSample(id);
+    if (!sample || Object.keys(state.workingJson || {}).length > 0) return;
+    handleLoadSample(sample);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSaveToWorkspace = () => {
     if (!loggedIn) {
@@ -132,7 +155,7 @@ export default function Home() {
    };
 
   return (
-      <div className="h-screen flex flex-col">
+      <div className="h-screen h-dvh flex flex-col">
         {/* Header */}
         <header className="border-b bg-white px-4 py-3 flex items-center justify-between">
           <Logo />
@@ -144,9 +167,10 @@ export default function Home() {
           </div>
         </header>
 
-        <main className="flex flex-1 min-h-0">
+        {/* Stacks vertically on phones (chat on top, JSON below); side-by-side from md up */}
+        <main className="flex flex-1 min-h-0 flex-col md:flex-row">
           {/* Left Panel - Chat & Upload */}
-          <div className="w-[420px] border-r flex flex-col">
+          <div className="w-full md:w-[420px] border-b md:border-b-0 md:border-r flex flex-col h-[45dvh] shrink-0 md:h-auto md:shrink">
             <div className="flex border-b">
               <TabButton active={activeTab === 'chat'} onClick={() => setActiveTab('chat')}>
                 <MessageSquare className="w-4 h-4 inline mr-1" />Chat
@@ -156,18 +180,20 @@ export default function Home() {
               </TabButton>
             </div>
 
-            {activeTab === 'chat' && <ChatPanel onGoToUpload={() => setActiveTab('upload')} />}
+            {activeTab === 'chat' && (
+              <ChatPanel onGoToUpload={() => setActiveTab('upload')} suggestions={sampleSuggestions} />
+            )}
             {activeTab === 'upload' && (
               <div className="p-4 flex-1 overflow-y-auto">
-                <UploadPanel onUpload={handleUpload} />
+                <UploadPanel onUpload={handleUpload} onLoadSample={handleLoadSample} />
               </div>
             )}
           </div>
 
           {/* Right Panel - JSON Preview / Diff */}
-          <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1 flex flex-col min-w-0 min-h-0">
             {/* Tab Bar */}
-            <div className="flex items-center justify-between border-b px-4 py-2">
+            <div className="flex items-center justify-between border-b px-4 py-2 flex-wrap gap-2">
               <div className="flex gap-2">
                 <Button variant="pill" active={previewTab === 'preview'} onClick={() => setPreviewTab('preview')}>
                   Working JSON
@@ -181,7 +207,7 @@ export default function Home() {
                   )}
                 </Button>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 sm:gap-3 flex-wrap min-w-0">
                 <span className="text-xs text-muted-foreground">
                   {Object.keys(json).length > 0 ? `${Object.keys(json).length} keys` : 'Empty'}
                 </span>
@@ -199,7 +225,7 @@ export default function Home() {
             {/* Tab Content */}
             <div className="flex-1 p-4 overflow-auto">
               {previewTab === 'preview' && (
-              json
+              Object.keys(json).length > 0
                   ? <>
                       <JSONTree data={json} name="Working JSON" />
                       {Object.keys(json).length > 0 && (
@@ -254,13 +280,36 @@ export default function Home() {
                         />
                       )}
                     </>
-                  : <div className="flex items-center justify-center h-full text-muted-foreground flex-col gap-4">
-                      <FileJson2 className="w-16 h-16 text-gray-300" />
-                      <p className="text-sm text-center">Upload a JSON file or use AI chat to start</p>
+                  : <div className="flex flex-col items-center justify-center min-h-full gap-6 py-6">
+                      <div className="text-center max-w-md">
+                        <Sparkles className="w-8 h-8 mx-auto text-purple-500" />
+                        <h3 className="mt-3 text-lg font-semibold">Try it in one click</h3>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Pick a sample, edit it with plain English, review the diff, download valid JSON.
+                        </p>
+                      </div>
+                      <div className="grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {SAMPLES.map((s) => (
+                          <button
+                            key={s.id}
+                            onClick={() => handleLoadSample(s)}
+                            className="rounded-xl border bg-white p-4 text-left transition hover:border-purple-300 hover:shadow-sm"
+                          >
+                            <div className="flex items-center gap-2">
+                              <FileJson2 className="w-4 h-4 text-purple-600 shrink-0" />
+                              <span className="text-sm font-semibold">{s.label}</span>
+                            </div>
+                            <p className="mt-1.5 text-xs text-muted-foreground">{s.description}</p>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        …or upload / paste your own JSON in the Upload tab
+                      </p>
                     </div>
               )}
               {previewTab === 'diff' && (
-              json
+              Object.keys(json).length > 0
                   ? <DiffViewer before={state.baselineJson} after={json} onResolved={() => setPreviewTab('preview')} />
                   : <div className="flex items-center justify-center h-full text-muted-foreground">No diff data available</div>
               )}

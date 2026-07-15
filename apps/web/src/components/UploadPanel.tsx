@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { FileJson2 } from 'lucide-react';
+import { FileJson2, Sparkles } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import { SAMPLES, type Sample } from '@/lib/samples';
 
 type UploadPanelProps = {
   onUpload: (json: Record<string, any>) => void;
+  onLoadSample?: (sample: Sample) => void;
 };
 
 const SAMPLE_JSON = `{
@@ -22,7 +24,7 @@ const SAMPLE_JSON = `{
   }
 }`;
 
-export default function UploadPanel({ onUpload }: UploadPanelProps) {
+export default function UploadPanel({ onUpload, onLoadSample }: UploadPanelProps) {
   const [dragging, setDragging] = useState(false);
   const [pasteText, setPasteText] = useState(SAMPLE_JSON);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -51,6 +53,21 @@ export default function UploadPanel({ onUpload }: UploadPanelProps) {
 
   return (
     <div className="space-y-4">
+      {onLoadSample && (
+        <div className="border rounded-xl p-4 space-y-2 bg-purple-50/50 border-purple-200">
+          <p className="text-xs font-medium text-purple-700 uppercase tracking-wide flex items-center gap-1">
+            <Sparkles className="w-3.5 h-3.5" />
+            No JSON handy? Try a sample
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {SAMPLES.map((s) => (
+              <Button key={s.id} variant="chip" onClick={() => onLoadSample(s)} title={s.description}>
+                {s.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
       <div
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}

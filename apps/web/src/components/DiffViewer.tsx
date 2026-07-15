@@ -75,7 +75,7 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
   return (
     <div className='space-y-4'>
       {/* View mode toggle */}
-      <div className='flex items-center gap-2 border-b pb-2'>
+      <div className='flex items-center gap-2 border-b pb-2 flex-wrap'>
         <Button variant="pill" active={viewMode === 'diffviewer'} onClick={() => setViewMode('diffviewer')}>
           <Code className='w-4 h-4' />
           Diff Viewer
@@ -85,7 +85,7 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
           Side by Side
         </Button>
         <div className='flex-1' />
-        <div className='flex items-center gap-4 text-xs text-muted-foreground'>
+        <div className='flex items-center gap-4 text-xs text-muted-foreground flex-wrap'>
           <span className='flex items-center gap-1'>
             <span className='inline-block w-3 h-3 bg-green-400 rounded-sm' /> Added
           </span>
