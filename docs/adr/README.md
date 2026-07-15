@@ -47,6 +47,8 @@ Links to relevant discussions, PRDs, prior ADRs.
 | [0010](0010-lucide-react-over-native-or-alternatives-for-icon-library.md) | Use `lucide-react` for icon library | Accepted | 2026-06-21 |
 | [0011](0011-api-contracts-per-interface-with-pydantic-as-source-of-truth.md) | Per-interface contracts; Pydantic = wire format (Option A) | Accepted | 2026-06-21 |
 | [0012](0012-openapi-yaml-as-machine-readable-contract-spec-at-project-root.md) | OpenAPI YAML monolith at `openapi/spec.yaml` as machine-readable contract | Accepted | 2026-06-21 |
+| [0019](0019-static-git-content-for-templates-and-blog-hub.md) | Static git content (SSG) for templates & blog hub; no CMS/DB | Accepted | 2026-07-15 |
+| [0020](0020-seed-session-from-template-via-backend-endpoint.md) | Seed session from template via `POST /api/sessions/from-template` | Accepted | 2026-07-15 |
 
 ## Adding a New ADR
 

@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Sparkles, FileJson2 } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
+import { peekStarterPrompts, clearStarterPrompts } from '@/lib/openInWorkspace';
 import Button from '@/components/ui/Button';
 
 const EXAMPLE_PROMPTS = [
@@ -16,10 +17,30 @@ export default function ChatPanel({ onGoToUpload }: { onGoToUpload?: () => void 
   const { state, sendMessage } = useSession();
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [starterPrompts, setStarterPrompts] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const hasJson = Object.keys(state.workingJson || {}).length > 0;
+
+  // One-shot starter prompts stashed by an "Open in Workspace" click (ADR-0020).
+  useEffect(() => {
+    setStarterPrompts(peekStarterPrompts());
+  }, []);
+
+  const runPrompt = async (prompt: string) => {
+    if (!prompt.trim() || !state.sessionId || isStreaming || !hasJson) return;
+    setStarterPrompts([]);
+    clearStarterPrompts();
+    setIsStreaming(true);
+    try {
+      await sendMessage(prompt.trim());
+    } catch {
+      /* handled in context */
+    } finally {
+      setIsStreaming(false);
+    }
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -31,6 +52,8 @@ export default function ChatPanel({ onGoToUpload }: { onGoToUpload?: () => void 
 
     const message = input.trim();
     setInput('');
+    setStarterPrompts([]);
+    clearStarterPrompts();
     setIsStreaming(true);
 
     try {
@@ -72,13 +95,21 @@ export default function ChatPanel({ onGoToUpload }: { onGoToUpload?: () => void 
 
           {state.conversationHistory.length === 0 && hasJson && (
              <div className="text-center text-muted-foreground mt-8">
-              <p className="text-sm mb-3">Send a message to start editing your JSON</p>
+              <p className="text-sm mb-3">
+                {starterPrompts.length > 0
+                  ? 'Try one of these to get started'
+                  : 'Send a message to start editing your JSON'}
+              </p>
               <div className="flex flex-wrap justify-center gap-2">
-                {EXAMPLE_PROMPTS.map((prompt) => (
+                {(starterPrompts.length > 0 ? starterPrompts : EXAMPLE_PROMPTS).map((prompt) => (
                   <Button
                     key={prompt}
                     variant="chip"
-                    onClick={() => { setInput(prompt); textareaRef.current?.focus(); }}
+                    onClick={() =>
+                      starterPrompts.length > 0
+                        ? runPrompt(prompt)
+                        : (setInput(prompt), textareaRef.current?.focus())
+                    }
                   >
                     {prompt}
                   </Button>
