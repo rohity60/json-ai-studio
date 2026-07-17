@@ -62,10 +62,11 @@ async def _stream_llm(
     """
     try:
         logger.info(
-            "chat turn start session=%s message_len=%d working_keys=%d",
+            "chat turn start session=%s message_len=%d working_keys=%d user_message=%r",
             session_id,
             len(message),
             len(working_json),
+            message[:500],
         )
         logger.debug(
             "chat turn full session=%s message=%r working_json=%s",
