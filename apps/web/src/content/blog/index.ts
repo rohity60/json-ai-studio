@@ -16,6 +16,19 @@ import { post as s3BucketPolicyGenerator } from './s3-bucket-policy-generator';
 import { post as s3BucketPolicyVsIam } from './s3-bucket-policy-vs-iam-policy';
 import { post as s3StaticWebsiteCloudfront } from './s3-static-website-cloudfront';
 import { post as s3SelectAlternatives } from './s3-select-deprecated-alternatives';
+// Phase 3 (Azure)
+import { post as azureArmVmExplained } from './azure-arm-vm-deployment-explained';
+import { post as azureFunctionsHostGuide } from './azure-functions-host-json-guide';
+import { post as azureAppServiceSettingsGuide } from './azure-app-service-settings-guide';
+import { post as staticwebappConfigGuide } from './staticwebapp-config-json-guide';
+// Phase 4 (Dev environments)
+import { post as devcontainerGuide } from './devcontainer-json-guide';
+// Phase 5 (Dev IDE & AI tooling)
+import { post as mcpJsonGuide } from './mcp-json-guide';
+import { post as claudeCodeSettingsGuide } from './claude-code-settings-guide';
+import { post as continueDevConfigGuide } from './continue-dev-config-guide';
+import { post as vscodeLaunchGuide } from './vscode-launch-json-guide';
+import { post as vscodeTasksGuide } from './vscode-tasks-json-guide';
 
 export const posts: BlogPost[] = [
   whatIsIamPolicy,
@@ -32,4 +45,17 @@ export const posts: BlogPost[] = [
   s3BucketPolicyVsIam,
   s3StaticWebsiteCloudfront,
   s3SelectAlternatives,
+  // Phase 3 (Azure)
+  azureArmVmExplained,
+  azureFunctionsHostGuide,
+  azureAppServiceSettingsGuide,
+  staticwebappConfigGuide,
+  // Phase 4 (Dev environments)
+  devcontainerGuide,
+  // Phase 5 (Dev IDE & AI tooling)
+  mcpJsonGuide,
+  claudeCodeSettingsGuide,
+  continueDevConfigGuide,
+  vscodeLaunchGuide,
+  vscodeTasksGuide,
 ];
