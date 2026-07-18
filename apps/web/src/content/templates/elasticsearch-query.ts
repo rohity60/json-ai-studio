@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain the bool query clauses',
+      'Sort results by date descending',
       'Add a fuzzy match on the title field',
       'Filter to the last 7 days only',
       'Add aggregations by category',

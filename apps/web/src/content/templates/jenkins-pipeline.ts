@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain this pipeline definition',
+      'Add a post block to notify on failure',
       'Add a deploy stage after test',
       'Add a boolean parameter to skip tests',
       'Run the build and test stages in parallel',

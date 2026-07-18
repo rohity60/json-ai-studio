@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain each field of this event',
+      'Change the bucket name to my-uploads',
       'Change this to an ObjectRemoved event',
       'Add a second record for another object',
       'Which fields does my handler actually need?',

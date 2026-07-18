@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain the structure of this spec',
+      'Add a 404 response to GET /items',
       'Add a DELETE /items/{id} operation',
       'Add pagination to the list endpoint',
       'Generate an example response for GET /items',

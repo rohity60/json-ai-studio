@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain this realm configuration',
+      'Enable user registration',
       'Add a public client for a SPA',
       'Tighten the password policy',
       'Shorten the access token lifespan',

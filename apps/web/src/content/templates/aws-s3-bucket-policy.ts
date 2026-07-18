@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain each statement',
+      'Restrict access to a specific IP range',
       'Restrict access to a CloudFront origin only',
       'Make this private instead of public',
       'Add a deny for unencrypted uploads',

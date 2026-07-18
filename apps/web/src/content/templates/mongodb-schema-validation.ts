@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain this validator',
+      'Add a minimum length for the name field',
       'Make the phone field required',
       'Add an enum for the role field',
       'Loosen validation to warn instead of reject',

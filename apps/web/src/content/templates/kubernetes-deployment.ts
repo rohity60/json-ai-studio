@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain each part of this Deployment',
+      'Set CPU and memory limits',
       'Scale this to 5 replicas',
       'Add a liveness probe on /healthz',
       'Add an environment variable from a secret',

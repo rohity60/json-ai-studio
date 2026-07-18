@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain each daemon option',
+      'Set the default address pool',
       'Add a private registry mirror',
       'Cap container logs at 5 files of 20MB',
       'Enable metrics on localhost only',

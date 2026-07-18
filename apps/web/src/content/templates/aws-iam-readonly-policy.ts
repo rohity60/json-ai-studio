@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain each statement',
+      'Add read access to CloudWatch logs',
       'Restrict this to a single S3 bucket',
       'Add read access to DynamoDB',
       'Remove unnecessary permissions',

@@ -13,7 +13,7 @@ import Button from '@/components/ui/Button';
 // /api/explain flow (the Explain button on the preview panel).
 const EXAMPLE_PROMPTS = [
   'Add a "description" field at the top',
-    'Change content typt to application/text for "Create item"',
+    'Change content type to application/text for "Create item"',
   'Remove any empty or null values',
   'Rename service to orders-api',
   'remove all occurrences of timeout',
@@ -36,20 +36,6 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
   useEffect(() => {
     setStarterPrompts(peekStarterPrompts());
   }, []);
-
-  const runPrompt = async (prompt: string) => {
-    if (!prompt.trim() || !state.sessionId || isStreaming || !hasJson) return;
-    setStarterPrompts([]);
-    clearStarterPrompts();
-    setIsStreaming(true);
-    try {
-      await sendMessage(prompt.trim());
-    } catch {
-      /* handled in context */
-    } finally {
-      setIsStreaming(false);
-    }
-  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -113,7 +99,12 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
                   : 'Send a message to start editing your JSON'}
               </p>
               <div className="flex flex-wrap justify-center gap-2">
-                {(suggestions?.length ? suggestions : EXAMPLE_PROMPTS).map((prompt) => (
+                {(suggestions?.length
+                  ? suggestions
+                  : starterPrompts.length
+                    ? starterPrompts
+                    : EXAMPLE_PROMPTS
+                ).map((prompt) => (
                   <Button
                     key={prompt}
                     variant="chip"

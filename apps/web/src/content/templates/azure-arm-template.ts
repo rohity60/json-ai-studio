@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain each section of this ARM template',
+      'Add an output for the resource ID',
       'Add a parameter for the SKU',
       'Output the storage account connection string',
       'Add tags to the resource',
