@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain this workflow step by step',
+      'Add a step to upload build artifacts',
       'Add a job that builds a Docker image',
       'Run tests on Node 18 and 20 in a matrix',
       'Cache npm dependencies',

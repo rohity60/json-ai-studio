@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain the bindings and roles',
+      'Add an editor role for a group',
       'Add a viewer role for a service account',
       'Add a conditional binding by resource',
       'Remove the owner binding',

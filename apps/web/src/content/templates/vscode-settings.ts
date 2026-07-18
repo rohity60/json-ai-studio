@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain what each setting does',
+      'Enable format on save',
       'Add Python-specific formatting settings',
       'Turn on ESLint auto-fix on save',
       'Set the default formatter to Prettier for JSON',

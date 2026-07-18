@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain this Terraform JSON',
+      'Add a tag block to the resource',
       'Add an S3 bucket resource',
       'Parameterize the region as a variable',
       'Add an output for the instance public IP',

@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain how this collection is structured',
+      'Add a collection-level bearer token',
       'Add a POST request that creates a user',
       'Convert the auth to API key in a header',
       'Add a test script that checks for status 200',

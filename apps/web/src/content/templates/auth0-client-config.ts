@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain each setting in this Auth0 config',
+      'Add a logout redirect URL',
       'Add a production callback URL',
       'Switch token endpoint auth to none for a SPA',
       'Enable refresh token rotation',

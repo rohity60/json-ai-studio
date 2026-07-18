@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain each section of this config',
+      'Add a 404 error page rewrite',
       'Add a redirect from /old to /new',
       'Cache images for 30 days',
       'Add Cloud Functions configuration',

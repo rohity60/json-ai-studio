@@ -17,7 +17,7 @@ export const template: Template = {
     updatedAt: '2026-07-15',
     author: 'JSON AI Studio',
     starterPrompts: [
-      'Explain each field of this request',
+      'Add a system message',
       'Add a function tool for the weather',
       'Enable streaming',
       'Force a JSON response format',
