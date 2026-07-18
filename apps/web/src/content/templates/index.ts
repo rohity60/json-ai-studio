@@ -24,6 +24,19 @@ import { template as keycloakRealm } from './keycloak-realm';
 import { template as jenkinsPipeline } from './jenkins-pipeline';
 import { template as anthropicMessages } from './anthropic-messages-request';
 import { template as openaiChat } from './openai-chat-request';
+// Phase 3 (Azure)
+import { template as azureArmVm } from './azure-arm-vm-deployment';
+import { template as azureFunctionsHost } from './azure-functions-host-json';
+import { template as azureAppServiceSettings } from './azure-app-service-settings';
+import { template as azureStaticWebApp } from './azure-static-web-app-config';
+// Phase 4 (Dev environments)
+import { template as devcontainer } from './devcontainer-json';
+// Phase 5 (Dev IDE & AI tooling)
+import { template as mcpServerConfig } from './mcp-server-config';
+import { template as claudeCodeSettings } from './claude-code-settings';
+import { template as continueDevConfig } from './continue-dev-config';
+import { template as vscodeLaunch } from './vscode-launch-json';
+import { template as vscodeTasks } from './vscode-tasks-json';
 
 export const templates: Template[] = [
   // Phase 1
@@ -48,4 +61,17 @@ export const templates: Template[] = [
   jenkinsPipeline,
   anthropicMessages,
   openaiChat,
+  // Phase 3 (Azure)
+  azureArmVm,
+  azureFunctionsHost,
+  azureAppServiceSettings,
+  azureStaticWebApp,
+  // Phase 4 (Dev environments)
+  devcontainer,
+  // Phase 5 (Dev IDE & AI tooling)
+  mcpServerConfig,
+  claudeCodeSettings,
+  continueDevConfig,
+  vscodeLaunch,
+  vscodeTasks,
 ];
