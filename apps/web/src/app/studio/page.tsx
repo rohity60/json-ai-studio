@@ -170,7 +170,7 @@ export default function Home() {
         {/* Stacks vertically on phones (chat on top, JSON below); side-by-side from md up */}
         <main className="flex flex-1 min-h-0 flex-col md:flex-row">
           {/* Left Panel - Chat & Upload */}
-          <div className="w-full md:w-[420px] border-b md:border-b-0 md:border-r flex flex-col h-[45dvh] shrink-0 md:h-auto md:shrink">
+          <div className="w-full md:w-[420px] border-b md:border-b-0 md:border-r flex flex-col h-[45dvh] shrink-0 md:h-auto md:shrink min-h-0 overflow-hidden">
             <div className="flex border-b">
               <TabButton active={activeTab === 'chat'} onClick={() => setActiveTab('chat')}>
                 <MessageSquare className="w-4 h-4 inline mr-1" />Chat
