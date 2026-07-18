@@ -217,6 +217,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   // Bounded self-retry for rate-limited refreshes: a 429 on the boot fetch
   // must not strand the UI with an empty workspace list until a reload.
   const retryRef = useRef(0);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear any pending retry on unmount so it can't fire setState after teardown.
+  useEffect(() => {
+    return () => {
+      if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+    };
+  }, []);
 
   const refreshWorkspaces = useCallback(async () => {
     setLoadingWorkspaces(true);
@@ -246,7 +254,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         retryRef.current += 1;
         const wait = Number(err.retryAfter) || 30;
         toast.info(`Rate limited — retrying workspaces in ${wait}s`);
-        setTimeout(() => { refreshWorkspaces(); }, wait * 1000);
+        retryTimeoutRef.current = setTimeout(() => { refreshWorkspaces(); }, wait * 1000);
         return;
       }
       if (!handleWorkspaceError(err)) toast.error(String(err?.message || err));
