@@ -70,6 +70,7 @@ export default function LandingPage() {
         <Logo />
         <Link
           href="/studio"
+          data-gtag-conversion
           className="px-4 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700"
         >
           Open Studio
@@ -90,6 +91,7 @@ export default function LandingPage() {
           <div className="mt-8">
             <Link
               href="/studio"
+              data-gtag-conversion
               className="px-8 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-base font-medium inline-flex items-center gap-2"
             >
               Start Formatting — Free
@@ -121,6 +123,7 @@ export default function LandingPage() {
           <div className="mt-6">
             <Link
               href="/studio"
+              data-gtag-conversion
               className="px-8 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-base font-medium inline-flex items-center gap-2"
             >
               Open Studio

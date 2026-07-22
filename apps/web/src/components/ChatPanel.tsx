@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Sparkles, FileJson2 } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
 import { peekStarterPrompts, clearStarterPrompts } from '@/lib/openInWorkspace';
+import { trackEvent } from '@/lib/gtagConversion';
 import Button from '@/components/ui/Button';
 
 // JSON-agnostic fallbacks — shown when no sample-specific prompts are wired
@@ -48,6 +49,7 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
     setStarterPrompts([]);
     clearStarterPrompts();
     setIsStreaming(true);
+    trackEvent('chat_submit');
 
     try {
       await sendMessage(message.trim());

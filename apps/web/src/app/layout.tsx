@@ -2,6 +2,9 @@ import type { Metadata } from 'next';
 import './globals.css';
 import JsonLd from '@/components/JsonLd';
 import GoogleTag from '@/components/GoogleTag';
+import ConversionTracker from '@/components/ConversionTracker';
+import PageViewTracker from '@/components/PageViewTracker';
+import { Suspense } from 'react';
 
 const SITE_URL = 'https://jsonaistudio.com';
 const REPO_URL = 'https://github.com/rohity60/json-ai-studio';
@@ -94,6 +97,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </head>
         <body className="antialiased">
           <JsonLd data={siteJsonLd} />
+          <ConversionTracker />
+          <Suspense fallback={null}>
+            <PageViewTracker />
+          </Suspense>
           {children}
         </body>
       </html>

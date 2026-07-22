@@ -230,6 +230,7 @@ export default async function LandingV2() {
           <StarPill stars={stars} />
           <Link
             href="/studio"
+            data-gtag-conversion
             className="rounded-lg bg-purple-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-purple-700"
           >
             Start Free
@@ -260,6 +261,7 @@ export default async function LandingV2() {
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link
                 href="/studio?sample=package"
+                data-gtag-conversion
                 className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-8 py-3 text-base font-medium text-white transition-colors hover:bg-purple-700"
               >
                 Try it on sample JSON
@@ -553,6 +555,7 @@ export default async function LandingV2() {
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link
                 href="/studio?sample=package"
+                data-gtag-conversion
                 className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-8 py-3 text-base font-medium text-white transition-colors hover:bg-purple-700"
               >
                 Try it on sample JSON
@@ -560,6 +563,7 @@ export default async function LandingV2() {
               </Link>
               <Link
                 href="/studio"
+                data-gtag-conversion
                 className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-8 py-3 text-base font-medium text-[#2c3e50] transition-colors hover:border-gray-400 hover:bg-gray-50"
               >
                 Start with your own JSON

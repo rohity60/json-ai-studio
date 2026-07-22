@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import * as api from '../lib/api';
 import { saveWorkspace, loadWorkspace, clearWorkspace } from '../lib/versionCache';
 import { showRateLimitModal } from '../components/RateLimitModal';
+import { trackEvent } from '../lib/gtagConversion';
 
 // A request is rate-limited when the backend answered HTTP 429 (status carried
 // on the error) or the message otherwise mentions 429.
@@ -308,6 +309,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainError: null,
         }));
       toast.success('JSON loaded');
+      trackEvent('json_upload');
       return true;
       } catch (err: any) {
       if (handleQuotaError(err)) {
