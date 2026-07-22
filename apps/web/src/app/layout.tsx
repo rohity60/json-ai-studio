@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import JsonLd from '@/components/JsonLd';
+import GoogleTag from '@/components/GoogleTag';
 
 const SITE_URL = 'https://jsonaistudio.com';
 const REPO_URL = 'https://github.com/rohity60/json-ai-studio';
@@ -88,6 +89,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
       <html lang="en">
+        <head>
+          <GoogleTag />
+        </head>
         <body className="antialiased">
           <JsonLd data={siteJsonLd} />
           {children}
