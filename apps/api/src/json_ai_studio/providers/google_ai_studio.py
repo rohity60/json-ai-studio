@@ -30,10 +30,11 @@ class GoogleAIStudioProvider(DeploymentProvider):
         "high": "HIGH",
     }
 
-    def completion_params(self, model: str) -> dict[str, Any]:
-        if self.reasoning is None:
+    def completion_params(
+        self, model: str, reasoning: str | None = None
+    ) -> dict[str, Any]:
+        level = self.resolve_reasoning(reasoning)
+        if level is None:
             return {}
-        level = self._THINKING_LEVELS.get(
-            self.reasoning.lower(), self.reasoning.upper()
-        )
-        return {"thinkingConfig": {"thinkingLevel": level}}
+        mapped = self._THINKING_LEVELS.get(level.lower(), level.upper())
+        return {"thinkingConfig": {"thinkingLevel": mapped}}

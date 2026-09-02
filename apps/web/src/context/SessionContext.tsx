@@ -85,7 +85,7 @@ type SessionContextValue = {
   state: SessionState;
   createSession: (name: string) => Promise<void>;
   uploadJson: (jsonData: Record<string, any>) => Promise<boolean>;
-  sendMessage: (message: string) => Promise<void>;
+  sendMessage: (message: string, thinking?: boolean) => Promise<void>;
   acceptDiff: (diffId: string) => Promise<void>;
   createVersion: (label: string) => void;
   selectVersion: (versionId: string) => Promise<void>;
@@ -324,7 +324,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       }
     }, [state.sessionId, apiKey]);
 
-  const sendMessage = useCallback(async (message: string) => {
+  const sendMessage = useCallback(async (message: string, thinking: boolean = false) => {
     if (!state.sessionId) return;
 
          // 1. Snapshot the initial payload variables
@@ -353,7 +353,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         }));
 
         // 2. Stream loop
-      for await (const chunk of api.streamChat(state.sessionId, message, currentWorkingJson, apiKey)) {
+      for await (const chunk of api.streamChat(state.sessionId, message, currentWorkingJson, apiKey, thinking)) {
 
         // Model-level quota/availability events: backend streams a
         // `rate_limit`, `credit_limit` or `service_unavailable` event

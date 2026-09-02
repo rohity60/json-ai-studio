@@ -68,6 +68,13 @@ class DeploymentProvider(ABC):
             str(raw_reasoning) if raw_reasoning is not None else None
         )
 
+        # Whether this backend honors a per-request thinking override (the
+        # UI on/off switch). False = the override is ignored so we never send
+        # a reasoning param the backend rejects (e.g. OpenRouter's free Gemma
+        # 400s on reasoning_effort). The deployment's own `reasoning` default
+        # still applies regardless of this flag.
+        self.supports_thinking: bool = bool(cfg.get("supports_thinking", False))
+
         # Empty base_url = endpoint env var not set -> deployment disabled
         # (warning, not an error). Non-empty must be a valid http(s) URL.
         self.base_url: str = self._resolve_base_url(cfg, settings) or ""
@@ -119,17 +126,31 @@ class DeploymentProvider(ABC):
             return ""
         return getattr(settings, self.api_key_setting, None) or ""
 
-    def completion_params(self, model: str) -> dict[str, Any]:
+    def resolve_reasoning(self, reasoning: str | None) -> str | None:
+        """Effective reasoning level for one call.
+
+        `reasoning` is the per-request override (from the UI thinking
+        switch); None means "no override, use the deployment default".
+        The override is honored only when the backend supports_thinking,
+        so unsupported backends never receive a param they reject.
+        """
+        if reasoning is not None and self.supports_thinking:
+            return reasoning
+        return self.reasoning
+
+    def completion_params(
+        self, model: str, reasoning: str | None = None
+    ) -> dict[str, Any]:
         """Extra litellm kwargs for a completion on this backend.
 
-        Translates the generic `reasoning` level from deployments.yaml
-        into backend params. Default: OpenAI-style reasoning_effort.
-        Override for backends with different controls (e.g. Google's
-        generationConfig.thinkingConfig).
+        Translates the effective `reasoning` level into backend params.
+        Default: OpenAI-style reasoning_effort. Override for backends with
+        different controls (e.g. Google's generationConfig.thinkingConfig).
         """
-        if self.reasoning is None or self.reasoning.lower() == "none":
+        level = self.resolve_reasoning(reasoning)
+        if level is None or level.lower() == "none":
             return {}
-        return {"reasoning_effort": self.reasoning}
+        return {"reasoning_effort": level}
 
     # --- shared behavior -----------------------------------------------------
 

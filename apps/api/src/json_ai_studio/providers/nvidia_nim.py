@@ -18,8 +18,11 @@ class NvidiaNimProvider(DeploymentProvider):
     # NIM's vLLM backend rejects OpenAI-style reasoning_effort
     # (UnsupportedParamsError) for Gemma; thinking is toggled via
     # chat_template_kwargs.enable_thinking instead.
-    def completion_params(self, model: str) -> dict[str, Any]:
-        if self.reasoning is None:
+    def completion_params(
+        self, model: str, reasoning: str | None = None
+    ) -> dict[str, Any]:
+        level = self.resolve_reasoning(reasoning)
+        if level is None:
             return {}
-        enable_thinking = self.reasoning.lower() not in ("none", "minimal")
+        enable_thinking = level.lower() not in ("none", "minimal")
         return {"chat_template_kwargs": {"enable_thinking": enable_thinking}}

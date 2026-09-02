@@ -32,6 +32,7 @@ from .auth import Principal, mask_secret
 from .deployment import DeploymentRegistry
 from .providers import DeploymentProvider
 from .services import credit_service
+from .settings import get_settings
 
 logger = logging.getLogger("json_ai_studio.gateway")
 
@@ -256,8 +257,14 @@ class GatewayService:
         system_prompt: str,
         model: str | None = None,
         profile: str | None = None,
+        reasoning: str | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Full LLM pipeline: credit check -> stream -> diff -> cost -> deduct -> log."""
+        """Full LLM pipeline: credit check -> stream -> diff -> cost -> deduct -> log.
+
+        `reasoning` is the per-request thinking override from the UI switch
+        (None = deployment default); backends that don't support_thinking
+        ignore it.
+        """
         resolved_model = GatewayService._resolve_model(model, profile)
         deployment: DeploymentProvider | None = None
         # Quota errors surface as clean SSE events the client can turn into
@@ -320,8 +327,9 @@ class GatewayService:
                 stream=True,
                 timeout=120.0,
                 num_retries=0,
+                max_tokens=get_settings().llm_max_tokens,
                 stream_options={"include_usage": True},
-                **deployment.completion_params(resolved_model),
+                **deployment.completion_params(resolved_model, reasoning),
             )
 
             content_parts: list[str] = []
@@ -534,6 +542,7 @@ class GatewayService:
             stream=True,
             timeout=120.0,
             num_retries=0,
+            max_tokens=get_settings().llm_max_tokens,
             stream_options={"include_usage": True},
             **deployment.completion_params(resolved_model),
         )
