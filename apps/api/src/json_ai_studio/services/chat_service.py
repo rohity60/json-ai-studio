@@ -49,7 +49,11 @@ def parse_sse(event_text: str) -> tuple[str | None, dict[str, Any] | None]:
 
 
 async def _stream_llm(
-    session_id: str, working_json: dict[str, Any], message: str, principal
+    session_id: str,
+    working_json: dict[str, Any],
+    message: str,
+    principal,
+    reasoning: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream LLM response as SSE events via GatewayService.
 
@@ -85,7 +89,7 @@ async def _stream_llm(
         error_payload: dict[str, Any] | None = None
         quota_hit = False
         async for event_text in GatewayService.invoke(
-            session_id, message, principal, system_prompt
+            session_id, message, principal, system_prompt, reasoning=reasoning
         ):
             yield event_text
             event, payload = parse_sse(event_text)
@@ -145,9 +149,11 @@ async def _stream_llm(
                 "complete",
                 {
                     "working_json": working_json,
-                    "explanation": explanation
-                    or combined
-                    or "The model returned no changes.",
+                    # Never fall back to `combined` (raw model output): a
+                    # truncated/malformed diff payload would leak as the
+                    # explanation. parse_llm_response returns prose or a
+                    # friendly message; "" only for a genuinely empty parse.
+                    "explanation": explanation or "The model returned no changes.",
                 },
             )
             return
@@ -206,8 +212,17 @@ async def chat_event_stream(
     working_json: dict[str, Any],
     message: str,
     principal,
+    thinking: bool = False,
 ) -> AsyncGenerator[str, None]:
-    """Full chat turn: stream LLM events, then persist the merged JSON."""
+    """Full chat turn: stream LLM events, then persist the merged JSON.
+
+    `thinking` is the UI on/off switch: True elevates the model to high
+    reasoning; False uses the deployment default (backends that don't
+    support a thinking override ignore this either way).
+    """
+    # Map the boolean switch onto a generic reasoning level. None = no
+    # override (deployment default); "high" = maximum reasoning.
+    reasoning = "high" if thinking else None
     try:
         # If session has no JSON yet, tell user to upload
         if not working_json:
@@ -228,7 +243,11 @@ async def chat_event_stream(
         merged_json = None
         all_diffs: list[dict[str, Any]] = []
         async for event_text in _stream_llm(
-            session.get("id", "chat-session"), working_json, message, principal
+            session.get("id", "chat-session"),
+            working_json,
+            message,
+            principal,
+            reasoning=reasoning,
         ):
             yield event_text
             event, payload = parse_sse(event_text)

@@ -16,9 +16,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# Above this many serialized characters we stop inlining the document.
-# Large payloads previously froze local Ollama backends for 5-60s.
-MAX_INLINE_CHARS = 60_000
+from .settings import get_settings
+
+# The verbatim-inline threshold now lives in Settings
+# (llm_max_inline_chars); above it, build_system_prompt sends a typed
+# skeleton instead of the full document.
 
 _TEMPLATE = """\
 You are a JSON configuration editor. The user describes a change in natural \
@@ -40,6 +42,7 @@ RULES:
 7. If a modify or delete request cannot be applied (target not found, ambiguous, or unrelated to this JSON), return {"diffs": [], "explanation": "..."} — say why, list what actually exists, and suggest the closest match.
 8. When duplicating an object, add the copy at the same level as the source with the same keys and values, unless the user specifies new ones.
 9. Multiple requested changes = multiple entries in the "diffs" array of the SAME single object.
+10. If the user's message is ITSELF a whole new JSON document (a full configuration pasted as the message, not an instruction) that they seem to want to work on, do NOT adopt, replace, or merge it into the CURRENT WORKING JSON — return {"diffs": [], "explanation": "It looks like you pasted a full JSON document. To work on it, load it with the Upload feature; then describe the changes you want here."}. This does NOT apply when JSON appears as an EXAMPLE inside an instruction (e.g. "add an entry like {...}", "make it match this shape: {...}") — there, use the provided JSON to build the correct diffs against the CURRENT WORKING JSON.
 
 EXAMPLES (illustrative only — real answers must use paths, values, and indices from the CURRENT WORKING JSON above, never from these examples):
 
@@ -134,53 +137,89 @@ Do NOT use markdown code fences. Output raw markdown only.
 """
 
 
-def compute_schema_summary(data: Any, prefix: str = "") -> dict[str, Any]:
-    """Summarize structure: keys, nesting depth, array lengths by path."""
-    top_keys: list[str] = []
-    max_depth = 0
-    array_lengths: dict[str, int] = {}
+# Skeleton bounds for the too-large-to-inline path. Keep the skeleton itself
+# small while still carrying nested key names and representative values.
+_SKELETON_MAX_DEPTH = 8
+_SKELETON_STR_CAP = 80  # truncate long string values to this many chars
+_SKELETON_DICT_KEY_CAP = 300  # cap keys shown per object
 
+
+def build_skeleton(
+    data: Any,
+    depth: int = 0,
+    *,
+    max_depth: int = _SKELETON_MAX_DEPTH,
+    str_cap: int = _SKELETON_STR_CAP,
+    key_cap: int = _SKELETON_DICT_KEY_CAP,
+) -> Any:
+    """Compact, size-bounded structural skeleton of a JSON value.
+
+    Unlike a bare key list, this preserves the full nested key structure
+    AND representative values so the model can reason about a document too
+    large to inline verbatim:
+      - dict  -> every key mapped to its child skeleton (capped at key_cap).
+      - list  -> the first element's skeleton plus a "…+N more items" marker,
+                 so array length is conveyed without dumping every element.
+      - str   -> the value, truncated to str_cap chars.
+      - number/bool/null -> kept as-is (small, high-signal).
+    """
     if isinstance(data, dict):
-        top_keys = list(data.keys())
-        for key, value in data.items():
-            child = compute_schema_summary(value, f"{prefix}/{key}")
-            max_depth = max(max_depth, child["nested_depth"] + 1)
-            array_lengths.update(child["array_lengths"])
-    elif isinstance(data, list):
-        array_lengths[prefix or "/"] = len(data)
-        for i, item in enumerate(data[:1]):  # sample first element's shape
-            child = compute_schema_summary(item, f"{prefix}/{i}")
-            max_depth = max(max_depth, child["nested_depth"] + 1)
-            array_lengths.update(child["array_lengths"])
-
-    return {
-        "top_level_keys": top_keys,
-        "nested_depth": max_depth,
-        "array_lengths": array_lengths,
-    }
+        if depth >= max_depth:
+            return {"…": f"<{len(data)} keys, depth capped>"}
+        out: dict[str, Any] = {}
+        for i, (key, value) in enumerate(data.items()):
+            if i >= key_cap:
+                out["…"] = f"+{len(data) - key_cap} more keys"
+                break
+            out[str(key)] = build_skeleton(
+                value, depth + 1, max_depth=max_depth, str_cap=str_cap, key_cap=key_cap
+            )
+        return out
+    if isinstance(data, list):
+        if not data:
+            return []
+        head = build_skeleton(
+            data[0], depth + 1, max_depth=max_depth, str_cap=str_cap, key_cap=key_cap
+        )
+        if len(data) == 1:
+            return [head]
+        return [head, f"…+{len(data) - 1} more items"]
+    if isinstance(data, str):
+        return data if len(data) <= str_cap else data[:str_cap] + "…"
+    return data
 
 
 def build_system_prompt(working_json: dict[str, Any]) -> str:
     """Build the system prompt with the working JSON inlined."""
+    max_inline = get_settings().llm_max_inline_chars
     pretty = json.dumps(working_json, indent=2, ensure_ascii=False, default=str)
-    if len(pretty) <= MAX_INLINE_CHARS:
+    if len(pretty) <= max_inline:
         context = f"CURRENT WORKING JSON:\n{pretty}"
     else:
         compact = json.dumps(
             working_json, separators=(",", ":"), ensure_ascii=False, default=str
         )
-        if len(compact) <= MAX_INLINE_CHARS:
+        if len(compact) <= max_inline:
             context = f"CURRENT WORKING JSON:\n{compact}"
         else:
-            summary = json.dumps(compute_schema_summary(working_json), indent=2)
+            skeleton = json.dumps(
+                build_skeleton(working_json),
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            )
             context = (
-                "The working JSON is too large to show in full. "
-                "STRUCTURE SUMMARY (keys, depth, array lengths by path):\n"
-                f"{summary}\n"
-                "You cannot see the actual values. Only propose diffs whose "
-                "paths you can verify from this summary; when the request "
-                "depends on values you cannot see, return "
-                '{"diffs": [], "explanation": "..."} asking the user to '
-                "narrow the request."
+                "The working JSON is too large to inline in full. Below is a "
+                "STRUCTURAL SKELETON: the complete nested key structure with "
+                "SAMPLE values — long strings are truncated with an ellipsis, "
+                'and arrays show only their first element plus a "…+N more '
+                'items" marker (so N+1 is the array length).\n'
+                f"{skeleton}\n"
+                "You may rely on the keys and the sample values shown. For "
+                "large arrays you can see only the first element's shape: when "
+                "a request targets a specific element by a value you cannot "
+                "see, or asks to rewrite values across every element, return "
+                '{"diffs": [], "explanation": "..."} and ask the user to '
+                "narrow it to a specific index or field."
             )
     return _TEMPLATE.replace("__CONTEXT__", context)

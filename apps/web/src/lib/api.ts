@@ -424,13 +424,16 @@ function parseSseBlock(block: string): {type: string; data: any} | null {
     }
 }
 
-export async function* streamChat(sessionId: string, message: string, workingJson: object | null, apiKey: string) {
+export async function* streamChat(sessionId: string, message: string, workingJson: object | null, apiKey: string, thinking: boolean = false) {
 
     const formData = new FormData();
     formData.append('session_id', sessionId);
     formData.append('message', message);
     if (workingJson) {
         formData.append('working_json_str', JSON.stringify(workingJson));
+    }
+    if (thinking) {
+        formData.append('thinking', 'true');
     }
 
     const controller = new AbortController();

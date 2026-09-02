@@ -16,12 +16,18 @@
 # reasoning_effort by default; Google maps it to
 # generationConfig.thinkingConfig.thinkingLevel (Gemma 4 requires one).
 # Omit the key to send no reasoning params at all.
+#
+# supports_thinking: whether this backend honors the UI thinking on/off
+# override. false = ignore the override (never send a reasoning param the
+# backend rejects — e.g. OpenRouter's free Gemma 400s on reasoning_effort).
+# The `reasoning` default above still applies regardless of this flag.
 
 deployments:
   google_ai_studio:
     enabled: true
     base_model: "gemma-4-26b-a4b-it"
     reasoning: "minimal"
+    supports_thinking: true
     models:
         - "gemma-4-26b-a4b-it"
 
@@ -29,6 +35,7 @@ deployments:
     enabled: false
     base_model: "google/gemma-4-31b-it"
     reasoning: "none"
+    supports_thinking: true
     models:
         - "google/gemma-4-31b-it"
 
@@ -36,6 +43,7 @@ deployments:
     enabled: true
     base_model: "google/gemma-4-26b-a4b-it:free"
     reasoning: "none"
+    supports_thinking: false
     models:
         - "google/gemma-4-26b-a4b-it:free"
 
@@ -43,6 +51,7 @@ deployments:
     enabled: false
     base_model: "gemma4:12b"
     reasoning: "none"
+    supports_thinking: false
     models:
         - "qwen3.6:35b-mlx"
         - "gemma4:12b"

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Sparkles, FileJson2 } from 'lucide-react';
+import { Send, Loader2, Sparkles, FileJson2, Brain } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
 import { peekStarterPrompts, clearStarterPrompts } from '@/lib/openInWorkspace';
 import { trackEvent } from '@/lib/gtagConversion';
@@ -27,6 +27,7 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
   const { state, sendMessage } = useSession();
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [thinking, setThinking] = useState(false);
   const [starterPrompts, setStarterPrompts] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -52,7 +53,7 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
     trackEvent('chat_submit');
 
     try {
-      await sendMessage(message.trim());
+      await sendMessage(message.trim(), thinking);
        } catch {
          // Message sent or failed - stop streaming
        } finally {
@@ -169,6 +170,25 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
              >
               <Send className="w-4 h-4" />
              </Button>
+           </div>
+           <div className="mt-2 flex items-center">
+             <button
+              type="button"
+              role="switch"
+              aria-checked={thinking}
+              aria-label="Toggle extended thinking"
+              onClick={() => setThinking((t) => !t)}
+              disabled={!hasJson}
+              title="Extended thinking makes the model reason harder for complex edits (slower)."
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                thinking
+                  ? 'border-purple-500 bg-purple-50 text-purple-700'
+                  : 'border-gray-300 bg-white text-gray-500 hover:text-gray-700'
+              }`}
+             >
+              <Brain className="w-3.5 h-3.5" />
+              Thinking {thinking ? 'On' : 'Off'}
+             </button>
            </div>
          </form>
        </div>

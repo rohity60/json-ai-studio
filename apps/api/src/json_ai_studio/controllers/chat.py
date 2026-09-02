@@ -22,15 +22,18 @@ async def endpoint_chat(
     session_id: str = Form(...),
     message: str = Form(...),
     working_json_str: str | None = Form(default=None),
+    thinking: bool = Form(default=False),
     principal: Principal = Depends(get_principal),
 ):
     """Send a chat turn; stream SSE response (ADR-0004)."""
     logger.info(
-        "POST /api/chat principal=%s session=%s message_len=%d override_json=%s",
+        "POST /api/chat principal=%s session=%s message_len=%d override_json=%s "
+        "thinking=%s",
         principal.kind,
         session_id,
         len(message),
         working_json_str is not None,
+        thinking,
     )
     try:
         session = await session_service.get_session(session_id)
@@ -47,6 +50,8 @@ async def endpoint_chat(
         raise HTTPException(status_code=400, detail="Invalid working_json in request")
 
     return StreamingResponse(
-        chat_service.chat_event_stream(session, working_json, message, principal),
+        chat_service.chat_event_stream(
+            session, working_json, message, principal, thinking=thinking
+        ),
         media_type="text/event-stream",
     )

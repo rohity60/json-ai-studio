@@ -268,6 +268,22 @@ class DiffUtils:
 
 _FENCE_RE = re.compile(r"^```[\w-]*[ \t]*\r?\n(.*?)\r?\n?```\s*$", re.DOTALL)
 _TRAILING_COMMA_RE = re.compile(r",\s*([\]}])")
+# Empty/leading array elements from small models: "[ , {...}]", "[, x]",
+# "[a,,b]". Observed leaking valid sibling diffs at users when the outer
+# array failed to parse and only one inner object could be salvaged.
+_EMPTY_ELEM_RE = re.compile(r"([\[,])\s*,")
+
+
+def _repair_json(s: str) -> str:
+    """Best-effort fixes for common small-model JSON defects, applied only
+    as a fallback parse candidate: trailing commas ({"a":1,} / [1,2,]),
+    and leading/empty/doubled array elements ([ , {...}] / [a,,b])."""
+    prev = None
+    out = s
+    while out != prev:  # collapse runs like [,,,] in one pass each
+        prev = out
+        out = _EMPTY_ELEM_RE.sub(r"\1", out)
+    return _TRAILING_COMMA_RE.sub(r"\1", out)
 
 
 def normalize_entry(d: Any) -> dict[str, Any] | None:
@@ -336,23 +352,49 @@ def parse_llm_response(text: str | None) -> tuple[list[dict[str, Any]], str]:
 
     decoder = json.JSONDecoder()
     candidates = [body]
-    # Second pass with trailing commas stripped -- the most common JSON
-    # defect from small local models ({"a": 1,} / [1, 2,]).
-    repaired = _TRAILING_COMMA_RE.sub(r"\1", body)
+    # Also try a copy with common small-model JSON defects repaired (trailing
+    # commas, leading/empty/doubled array elements).
+    repaired = _repair_json(body)
     if repaired != body:
         candidates.append(repaired)
+
+    def _try(candidate: str, start: int) -> tuple[list[dict[str, Any]], str] | None:
+        try:
+            value, end = decoder.raw_decode(candidate[start:])
+        except ValueError:
+            return None
+        coerced = _coerce_diffs(value)
+        if coerced is None:
+            return None
+        diffs, explanation = coerced
+        surrounding = (candidate[:start] + " " + candidate[start + end :]).strip()
+        return diffs, explanation or surrounding
+
+    # Pass 1: decode each candidate as a whole from its first bracket. This
+    # prefers the complete {"diffs":[...]} object over salvaging a single
+    # embedded element — the latter used to drop sibling diffs and leak the
+    # rest as the explanation when the outer array was malformed.
+    for candidate in candidates:
+        first = next((i for i, ch in enumerate(candidate) if ch in "[{"), None)
+        if first is not None and (result := _try(candidate, first)) is not None:
+            return result
+
+    # Pass 2: salvage — scan for any embedded diff-shaped JSON (e.g. a JSON
+    # object buried in prose the model wrapped around it).
     for candidate in candidates:
         for i, ch in enumerate(candidate):
-            if ch not in "[{":
-                continue
-            try:
-                value, end = decoder.raw_decode(candidate[i:])
-            except ValueError:
-                continue
-            coerced = _coerce_diffs(value)
-            if coerced is None:
-                continue
-            diffs, explanation = coerced
-            surrounding = (candidate[:i] + " " + candidate[i + end :]).strip()
-            return diffs, explanation or surrounding
+            if ch in "[{" and (result := _try(candidate, i)) is not None:
+                return result
+
+    # Nothing diff-shaped parsed. If the leftover still looks like a JSON
+    # diff payload (truncated mid-object, or malformed beyond repair), never
+    # surface raw model JSON to the user — return a friendly, actionable
+    # message. Genuine prose explanations pass through unchanged.
+    stripped = body.lstrip()
+    if stripped.startswith(("{", "[")) or '"diffs"' in body:
+        return [], (
+            "I couldn't apply that cleanly — the change I generated was too "
+            "large or malformed to parse. Try narrowing the request to "
+            "specific fields, or splitting it into smaller steps."
+        )
     return [], body
