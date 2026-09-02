@@ -272,6 +272,9 @@ _TRAILING_COMMA_RE = re.compile(r",\s*([\]}])")
 # "[a,,b]". Observed leaking valid sibling diffs at users when the outer
 # array failed to parse and only one inner object could be salvaged.
 _EMPTY_ELEM_RE = re.compile(r"([\[,])\s*,")
+# Pull the model's "explanation" string even when the surrounding JSON is
+# malformed, so a partial/garbled response never leaks raw JSON at the user.
+_EXPLANATION_RE = re.compile(r'"explanation"\s*:\s*"((?:\\.|[^"\\])*)"')
 
 
 def _repair_json(s: str) -> str:
@@ -335,6 +338,43 @@ def _coerce_diffs(value: Any) -> tuple[list[dict[str, Any]], str] | None:
     return None
 
 
+def _extract_explanation(text: str) -> str:
+    """Pull the model's "explanation" string out of a (possibly malformed)
+    response, so a garbled diff payload never leaks raw JSON as the message."""
+    m = _EXPLANATION_RE.search(text)
+    if not m:
+        return ""
+    try:
+        return json.loads('"' + m.group(1) + '"')  # unescape via JSON
+    except ValueError:
+        return m.group(1)
+
+
+def _salvage_entries(text: str, decoder: "json.JSONDecoder") -> list[dict[str, Any]]:
+    """Collect every substring that decodes to a valid diff entry, skipping
+    malformed siblings. Runs only after a whole-object parse failed, so the
+    diffs the model got right still apply. Advancing past each decoded object
+    avoids re-scanning its internals (e.g. an object-valued new_value)."""
+    entries: list[dict[str, Any]] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "{":
+            i += 1
+            continue
+        try:
+            value, end = decoder.raw_decode(text[i:])
+        except ValueError:
+            i += 1
+            continue
+        entry = normalize_entry(value) if isinstance(value, dict) else None
+        if entry is not None:
+            entries.append(entry)
+            i += end
+        else:
+            i += 1
+    return entries
+
+
 def parse_llm_response(text: str | None) -> tuple[list[dict[str, Any]], str]:
     """Parse raw LLM output into (diffs, explanation).
 
@@ -379,17 +419,20 @@ def parse_llm_response(text: str | None) -> tuple[list[dict[str, Any]], str]:
         if first is not None and (result := _try(candidate, first)) is not None:
             return result
 
-    # Pass 2: salvage — scan for any embedded diff-shaped JSON (e.g. a JSON
-    # object buried in prose the model wrapped around it).
-    for candidate in candidates:
-        for i, ch in enumerate(candidate):
-            if ch in "[{" and (result := _try(candidate, i)) is not None:
-                return result
+    # Pass 2: salvage. A whole-object parse failed (the model emitted broken
+    # JSON — e.g. a doubled key `"path": "x": "y"`, or truncation). Collect
+    # every diff entry that still decodes on its own, and pull the model's
+    # explanation separately. This keeps the valid changes AND guarantees the
+    # user never sees raw JSON as the "explanation".
+    salvaged = _salvage_entries(body, decoder)
+    explanation = _extract_explanation(body)
+    if salvaged:
+        return salvaged, explanation
+    if explanation:
+        return [], explanation
 
-    # Nothing diff-shaped parsed. If the leftover still looks like a JSON
-    # diff payload (truncated mid-object, or malformed beyond repair), never
-    # surface raw model JSON to the user — return a friendly, actionable
-    # message. Genuine prose explanations pass through unchanged.
+    # Nothing usable. Never surface raw model JSON — a friendly, actionable
+    # message when it looked like a diff payload; genuine prose passes through.
     stripped = body.lstrip()
     if stripped.startswith(("{", "[")) or '"diffs"' in body:
         return [], (
