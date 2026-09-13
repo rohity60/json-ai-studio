@@ -26,7 +26,10 @@ import type { WorkspaceJsonVersion } from '@/lib/api';
 // Pseudo-parent id for the not-yet-saved session ("Current JSON").
 const LOCAL = '__local__';
 
-export default function WorkspaceSidebar({ onClose }: { onClose?: () => void }) {
+export default function WorkspaceSidebar({ onClose, onNewJson }: {
+  onClose?: () => void;
+  onNewJson?: () => void;
+}) {
   const { state, createVersion, exportJson, refreshSession, clearCache } =
     useSession();
   const {
@@ -164,6 +167,11 @@ export default function WorkspaceSidebar({ onClose }: { onClose?: () => void }) 
               : 'Log in to save workspaces'}
           </p>
         </div>
+        {onNewJson && (
+          <Button variant="ghost" size="icon" onClick={onNewJson} title="New JSON (upload a fresh document)">
+            <Plus className="h-4 w-4" />
+          </Button>
+        )}
         <Button variant="ghost" size="icon" onClick={handleRefresh} title="Refresh" disabled={refreshing}>
           <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
         </Button>
@@ -297,9 +305,17 @@ export default function WorkspaceSidebar({ onClose }: { onClose?: () => void }) 
           })}
 
         {loggedIn && !loadingDocuments && documents.length === 0 && !showLocalParent && (
-          <p className="p-4 text-center text-sm text-gray-400">
-            No JSONs saved yet. Use Save to add the current JSON here.
-          </p>
+          <div className="space-y-3 p-4 text-center">
+            <p className="text-sm text-gray-400">
+              No JSONs saved yet. Use Save to add the current JSON here.
+            </p>
+            {onNewJson && (
+              <Button variant="primary" onClick={onNewJson}>
+                <Plus className="h-4 w-4" />
+                New JSON
+              </Button>
+            )}
+          </div>
         )}
         {!loggedIn && !hasLocalWork && (
           <p className="p-4 text-center text-sm text-gray-400">

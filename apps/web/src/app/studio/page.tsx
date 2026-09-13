@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { toast } from 'sonner';
 import UploadPanel from '@/components/UploadPanel';
 import ChatPanel from '@/components/ChatPanel';
@@ -46,8 +47,8 @@ function pendingDiffCount(history: Array<{ role: string; diffs?: any[] }>): numb
 }
 
 export default function Home() {
-  const { state, createSession, uploadJson, explainJson, exportJson, createVersion } = useSession();
-  const { dirty, loggedIn, guardDirty } = useWorkspace();
+  const { state, uploadJson, explainJson, exportJson, createVersion } = useSession();
+  const { dirty, loggedIn, guardDirty, startNewDocument } = useWorkspace();
 
   // SessionProvider blocks render until hydration, so workingJson is final here
   const [activeTab, setActiveTab] = useState<'chat' | 'upload'>(
@@ -111,17 +112,26 @@ export default function Home() {
 
   const handleLoadSample = (sample: Sample) => handleUpload(sample.json, sample.prompts);
 
-  // Deep link from the landing page: /studio?sample=<id> loads a built-in
-  // sample on first visit so there is zero-friction between "Try it" and a
-  // populated workspace. Never clobbers an existing working JSON.
+  // Deep links from the landing page:
+  //  - /studio?sample=<id> loads a built-in sample on first visit so there is
+  //    zero-friction between "Try it" and a populated workspace. Never
+  //    clobbers an existing working JSON.
+  //  - /studio?tab=upload opens the Upload tab even when a JSON is already
+  //    loaded (returning users land on Chat by default).
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get('sample');
-    if (!id) return;
-    // Strip the param so refresh/back doesn't re-trigger the load.
+    const params = new URLSearchParams(window.location.search);
+    const sampleId = params.get('sample');
+    const tab = params.get('tab');
+    if (!sampleId && !tab) return;
+    // Strip the params so refresh/back doesn't re-trigger.
     window.history.replaceState(null, '', window.location.pathname);
-    const sample = getSample(id);
-    if (!sample || Object.keys(state.workingJson || {}).length > 0) return;
-    handleLoadSample(sample);
+    if (tab === 'upload') setActiveTab('upload');
+    if (sampleId) {
+      const sample = getSample(sampleId);
+      if (sample && Object.keys(state.workingJson || {}).length === 0) {
+        handleLoadSample(sample);
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -133,9 +143,18 @@ export default function Home() {
     showSaveDialog();
    };
 
-  const handleNewSession = async () => {
-    if (loggedIn && !(await guardDirty())) return;
-    createSession('My Config');
+  // Workspace-level "start over with a different JSON". One handler, three
+  // entry points (header, chat panel, workspace sidebar) — always lands on
+  // the Upload tab. Anonymous users can't persist the current JSON, so an
+  // explicit confirm replaces the silent-clobber login CTA of handleUpload.
+  const handleNewJson = async () => {
+    if (!loggedIn && Object.keys(state.workingJson || {}).length > 0) {
+      if (!confirm('Start a new JSON? Your current JSON and chat will be cleared.')) return;
+    }
+    if (!(await startNewDocument())) return;
+    setSampleSuggestions(undefined);
+    setPreviewTab('preview');
+    setActiveTab('upload');
    };
 
   const handleCopy = async () => {
@@ -158,11 +177,25 @@ export default function Home() {
       <div className="h-screen h-dvh flex flex-col">
         {/* Header */}
         <header className="border-b bg-white px-4 py-3 flex items-center justify-between">
-          <Logo />
+          <div className="flex items-center gap-4 min-w-0">
+            <Link href="/" title="Back to home">
+              <Logo />
+            </Link>
+            {/* Same targets as SiteHeader — the studio must not be a dead end. */}
+            <nav className="hidden md:flex items-center gap-1 text-sm">
+              <Link href="/templates" className="rounded-lg px-3 py-1.5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900">
+                Templates
+              </Link>
+              <Link href="/blog" className="rounded-lg px-3 py-1.5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900">
+                Blog
+              </Link>
+            </nav>
+          </div>
           <div className="flex items-center gap-2">
-            {Object.keys(json).length === 0 && (
-              <Button variant="primary" onClick={handleNewSession}>New Session</Button>
-            )}
+            <Button variant="primary" onClick={handleNewJson} title="Start over with a different JSON">
+              <Plus className="w-4 h-4" />
+              New JSON
+            </Button>
             <UserChip />
           </div>
         </header>
@@ -181,7 +214,13 @@ export default function Home() {
             </div>
 
             {activeTab === 'chat' && (
-              <ChatPanel onGoToUpload={() => setActiveTab('upload')} suggestions={sampleSuggestions} />
+              <div className="flex-1 min-h-0 flex flex-col">
+                <ChatPanel
+                  onGoToUpload={() => setActiveTab('upload')}
+                  onNewJson={handleNewJson}
+                  suggestions={sampleSuggestions}
+                />
+              </div>
             )}
             {activeTab === 'upload' && (
               <div className="p-4 flex-1 overflow-y-auto">
@@ -321,7 +360,7 @@ export default function Home() {
           {showSidebar && (
             <aside className="w-[280px] border-l hidden lg:flex lg:flex-col bg-gray-50">
               <div className="flex-1 min-h-0 overflow-y-auto">
-                <WorkspaceSidebar onClose={() => setShowSidebar(false)} />
+                <WorkspaceSidebar onClose={() => setShowSidebar(false)} onNewJson={handleNewJson} />
               </div>
             </aside>
           )}

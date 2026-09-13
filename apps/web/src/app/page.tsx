@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowRight, Check, X, Minus, Star, ChevronDown } from 'lucide-react';
+import { ArrowRight, Check, X, Minus, Star, ChevronDown, Upload } from 'lucide-react';
 import Logo from '@/components/Logo';
 import JsonLd from '@/components/JsonLd';
 
@@ -267,15 +267,14 @@ export default async function LandingV2() {
                 Try it on sample JSON
                 <ArrowRight className="h-4 w-4" />
               </Link>
-              <a
-                href={REPO_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-8 py-3 text-base font-medium text-[#2c3e50] transition-colors hover:border-gray-400 hover:bg-gray-50"
+              <Link
+                href="/studio?tab=upload"
+                data-gtag-conversion
+                className="inline-flex items-center gap-2 rounded-lg border border-purple-300 bg-white px-8 py-3 text-base font-medium text-purple-700 transition-colors hover:border-purple-400 hover:bg-purple-50"
               >
-                <Github className="h-4 w-4" />
-                View on GitHub
-              </a>
+                <Upload className="h-4 w-4" />
+                Try with your JSON
+              </Link>
             </div>
 
             <div className="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-gray-500">
@@ -562,10 +561,11 @@ export default async function LandingV2() {
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
-                href="/studio"
+                href="/studio?tab=upload"
                 data-gtag-conversion
                 className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-8 py-3 text-base font-medium text-[#2c3e50] transition-colors hover:border-gray-400 hover:bg-gray-50"
               >
+                <Upload className="h-4 w-4" />
                 Start with your own JSON
               </Link>
             </div>

@@ -95,6 +95,10 @@ type WorkspaceContextValue = {
   deleteVersion: (docId: string, versionId: string) => Promise<void>;
   /** True = proceed (clean, saved, or discarded); false = user cancelled. */
   guardDirty: () => Promise<boolean>;
+  /** Start a fresh, unsaved document: saves pending edits first, clears the
+   *  session and detaches the active document (workspace selection is kept).
+   *  False = the guarding save failed or was cancelled. */
+  startNewDocument: () => Promise<boolean>;
 };
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -461,6 +465,15 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   // latest saveWork closure.
   saveWorkRef.current = saveWork;
 
+  const startNewDocument = useCallback(async (): Promise<boolean> => {
+    if (!(await guardDirty())) return false;
+    await clearSession();
+    setActiveDocumentId(null);
+    persistSelection(activeWorkspaceId, null);
+    resetBaseline();
+    return true;
+  }, [guardDirty, clearSession, activeWorkspaceId, resetBaseline]);
+
   const deleteDocument = useCallback(async (docId: string) => {
     if (!activeWorkspaceId) return;
     try {
@@ -520,6 +533,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         deleteDocument,
         deleteVersion,
         guardDirty,
+        startNewDocument,
       }}
     >
       {children}

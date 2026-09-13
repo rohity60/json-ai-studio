@@ -20,8 +20,9 @@ const EXAMPLE_PROMPTS = [
   'remove all occurrences of timeout',
 ];
 
-export default function ChatPanel({ onGoToUpload, suggestions }: {
+export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
   onGoToUpload?: () => void;
+  onNewJson?: () => void;
   suggestions?: string[];
 }) {
   const { state, sendMessage } = useSession();
@@ -29,7 +30,7 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
   const [isStreaming, setIsStreaming] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [starterPrompts, setStarterPrompts] = useState<string[]>([]);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const hasJson = Object.keys(state.workingJson || {}).length > 0;
@@ -39,8 +40,12 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
     setStarterPrompts(peekStarterPrompts());
   }, []);
 
+  // Scroll ONLY the messages list. scrollIntoView also scrolls ancestor
+  // containers (overflow-hidden boxes scroll programmatically), which pushed
+  // the Chat/Upload tab bar out of view once the history grew.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = messagesRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
     }, [state.conversationHistory, isStreaming]);
 
   const send = async (message: string) => {
@@ -78,12 +83,20 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
          <div className="border-b p-4 flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-purple-600" />
           <h3 className="font-semibold">AI Chat</h3>
-         <span className="ml-auto text-xs text-muted-foreground">
-           {state.sessionId ? `Session: ${state.sessionId.slice(0, 8)}` : 'No session'}
-         </span>
+         <div className="ml-auto flex items-center gap-2 min-w-0">
+           <span className="hidden sm:inline truncate text-xs text-muted-foreground">
+             {state.sessionId ? `Session: ${state.sessionId.slice(0, 8)}` : 'No session'}
+           </span>
+           {onNewJson && hasJson && (
+             <Button variant="secondary" onClick={onNewJson} title="Start over with a different JSON">
+               <FileJson2 className="w-3.5 h-3.5" />
+               New JSON
+             </Button>
+           )}
+         </div>
          </div>
 
-         <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+         <div ref={messagesRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
           {state.conversationHistory.length === 0 && !hasJson && (
              <div className="text-center text-muted-foreground mt-8 flex flex-col items-center gap-3">
               <FileJson2 className="w-10 h-10 text-gray-300" />
@@ -146,7 +159,6 @@ export default function ChatPanel({ onGoToUpload, suggestions }: {
              </div>
           )}
 
-         <div ref={messagesEndRef} />
          </div>
 
          <form onSubmit={handleSubmit} className="border-t p-4">
