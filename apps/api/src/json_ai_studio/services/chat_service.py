@@ -48,6 +48,13 @@ def parse_sse(event_text: str) -> tuple[str | None, dict[str, Any] | None]:
         return event, None
 
 
+def _short(value: Any, limit: int = 120) -> str:
+    """Compact repr for logging a diff value — truncated so a large
+    new_value (e.g. an embedded object) doesn't flood the log line."""
+    text = repr(value)
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
 async def _stream_llm(
     session_id: str,
     working_json: dict[str, Any],
@@ -132,6 +139,18 @@ async def _stream_llm(
             len(diffs),
             explanation[:300],
         )
+        # Log each generated diff at INFO (not just DEBUG) so failures to
+        # apply can be diagnosed from the standard log without flipping to
+        # DEBUG. old/new values are truncated to keep lines readable.
+        for i, d in enumerate(diffs):
+            logger.info(
+                "  diff[%d] op=%s path=%s old=%s new=%s",
+                i,
+                d.get("operation"),
+                d.get("path"),
+                _short(d.get("old_value")),
+                _short(d.get("new_value")),
+            )
         logger.debug(
             "parsed llm response (full) session=%s diffs=%s explanation=%r",
             session_id,
@@ -159,12 +178,17 @@ async def _stream_llm(
             return
 
         merged, applied, failed = DiffUtils.apply_all_verbose(diffs, working_json)
-        logger.info(
-            "diff application: applied=%d failed=%d%s",
-            len(applied),
-            len(failed),
-            " reasons=" + "; ".join(r for _, r in failed) if failed else "",
-        )
+        logger.info("diff application: applied=%d failed=%d", len(applied), len(failed))
+        # Per-failed-diff path + reason at INFO — the key signal for "model
+        # produced N diffs but none applied" (usually a path that does not
+        # resolve against the current working JSON).
+        for d, reason in failed:
+            logger.info(
+                "  FAILED op=%s path=%s reason=%s",
+                d.get("operation"),
+                d.get("path"),
+                reason,
+            )
         logger.debug(
             "diff application (full) session=%s applied=%s failed=%s merged=%s",
             session_id,
