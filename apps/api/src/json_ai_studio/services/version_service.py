@@ -9,7 +9,9 @@ from typing import Any
 
 from ..db.session_store import store
 from ..models import RestoreVersionsRequest, VersionSnapshot
+from . import chat_history_service as history
 from .errors import ConflictError, NotFoundError
+from ..settings import get_settings
 from .session_service import get_session, now_iso
 
 logger = logging.getLogger("json_ai_studio.version_service")
@@ -51,7 +53,12 @@ async def create_snapshot(
 
 
 async def select_version(session_id: str, version_id: str) -> dict[str, Any]:
-    """Reset working + baseline JSON to a snapshot; clear conversation."""
+    """Reset working + baseline JSON to a snapshot.
+
+    Chat history is kept but fenced off by a boundary turn (earlier turns
+    stay visible, are no longer replayed to the LLM). Pending diffs are
+    discarded by the reset, so they are marked rejected.
+    """
     session = await get_session(session_id)
 
     versions_list = session.get("versions", [])
@@ -76,7 +83,10 @@ async def select_version(session_id: str, version_id: str) -> dict[str, Any]:
     session["working_json"] = copy.deepcopy(json_data)
     session["baseline_json"] = copy.deepcopy(json_data)
     session["active_version_id"] = version_id
-    session["conversation_history"] = []
+    label = target.label if hasattr(target, "label") else target.get("label", "")
+    if session.get("conversation_history"):
+        history.mark_all_pending(session, "rejected")
+        history.append_boundary(session, f"Switched to version {label or version_id}")
     session["updated_at"] = now_iso()
     await store.save_session(session)
     logger.info("version selected session_id=%s version_id=%s", session_id, version_id)
@@ -89,7 +99,7 @@ async def select_version(session_id: str, version_id: str) -> dict[str, Any]:
         "versions": [
             v.model_dump() if hasattr(v, "model_dump") else v for v in versions_list
         ],
-        "conversation_history": [],
+        "conversation_history": session.get("conversation_history", []),
     }
 
 
@@ -147,6 +157,11 @@ async def restore_versions(
     session["active_version_id"] = (
         req.active_version_id if req.active_version_id in restored_ids else None
     )
+    if req.conversation_history:
+        cap = get_settings().chat_history_max_stored_turns
+        session["conversation_history"] = [
+            t.model_dump(mode="json") for t in req.conversation_history[-cap:]
+        ]
     session["updated_at"] = now_iso()
     await store.save_session(session)
     return session

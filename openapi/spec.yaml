@@ -184,6 +184,35 @@ paths:
          '429':
            $ref: '#/components/responses/Error429'
 
+   /api/sessions/{sessionId}/chat:
+    delete:
+      tags: [sessions]
+      summary: Clear chat history
+      description: |-
+        Drop the session's chat thread (LLM context). Refused with 409 while
+        any diff is still pending — accept-all / reject-all first.
+      operationId: clearChat
+      security:
+         - simpleApiKey: []
+         - bearerAuth: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           schema:
+             type: string
+      responses:
+         '204':
+          description: Chat history cleared
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+          description: Pending diffs exist
+         '429':
+           $ref: '#/components/responses/Error429'
+
    /api/sessions/{sessionId}/versions:
     get:
       tags: [sessions]
@@ -629,13 +658,13 @@ paths:
                 data: {"text":"Applying timeout change to all services..."}
 
                 event: diff
-                data: {"entry":{"path":"/services/api/timeout","operation":"modify","old_value":30,"new_value":60}}
+                data: {"entry":{"id":"d1","path":"/services/api/timeout","operation":"modify","old_value":30,"new_value":60,"status":"pending"}}
 
                 event: diff
-                data: {"entry":{"path":"/services/payment/timeout","operation":"modify","old_value":30,"new_value":60}}
+                data: {"entry":{"id":"d2","path":"/services/payment/timeout","operation":"modify","old_value":30,"new_value":60,"status":"pending"}}
 
                 event: complete
-                data: {"working_json":{"services":{"api":{"timeout":60},"payment":{"timeout":60}}},"explanation":"Done — 2 changes applied."}
+                data: {"working_json":{"services":{"api":{"timeout":60},"payment":{"timeout":60}}},"explanation":"Done — 2 changes applied.","user_turn_id":"u1","assistant_turn_id":"a1"}
          '401':
            $ref: '#/components/responses/Error401'
          '429':
@@ -1284,20 +1313,45 @@ components:
 
     ChatTurn:
       type: object
+      description: |-
+        One stored chat turn. Server-authoritative: replayed to the LLM on the
+        next chat call (with diff statuses) so follow-ups resolve.
       properties:
+        id:
+          type: string
+          description: Turn id (uuid hex)
         role:
           type: string
           enum: [user, assistant]
           description: Speaker of the chat turn
+        kind:
+          type: string
+          enum: [message, boundary]
+          default: message
+          description: boundary = context reset (e.g. version switch); earlier turns are not replayed to the LLM
         content:
           type: string
-          description: The message text
+          description: User text, or the assistant's final explanation
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
         diffs:
           type: array
           items:
              $ref: '#/components/schemas/DiffEntry'
           nullable: true
           description: Attached diff entries for assistant turns
+        bulk:
+          type: array
+          nullable: true
+          items:
+            type: object
+            additionalProperties: true
+          description: |-
+            Bulk ops the model emitted ({path with * wildcards, where, operation,
+            new_value}); the server expanded them into `diffs` against the full
+            document. Replayed to the model on follow-ups.
       required: [role, content]
 
      # -- Wire Contracts --
@@ -1318,6 +1372,20 @@ components:
         new_value:
           nullable: true
           description: Value after the change; null for "delete" operations
+        id:
+          type: string
+          description: Unique diff id (backend-generated) used for accept/reject
+        status:
+          type: string
+          enum: [pending, accepted, rejected, failed]
+          default: pending
+          description: |-
+            pending = previewed in working_json; accepted = promoted to baseline;
+            rejected = reverted; failed = proposed but did not resolve against the JSON (never applied)
+        failure_reason:
+          type: string
+          nullable: true
+          description: Why a failed diff did not apply
       required: [path, operation]
 
     ValidationError:
@@ -1492,6 +1560,12 @@ components:
           type: string
           nullable: true
           description: Previously active version id; ignored if not among restored versions
+        conversation_history:
+          type: array
+          nullable: true
+          items:
+             $ref: '#/components/schemas/ChatTurn'
+          description: Mirrored chat thread with diff statuses (capped server-side). The only path where client-held history enters the server.
       required: [versions]
 
     ChatRequest:
@@ -1500,11 +1574,6 @@ components:
         session_id:
           type: string
           description: UUID of the session to send a message in
-        conversation_history:
-          type: array
-          items:
-             $ref: '#/components/schemas/ChatTurn'
-          description: Full chat history for context-aware LLM processing
         working_json:
           type: object
           additionalProperties: true

@@ -12,9 +12,12 @@ from typing import Any, AsyncGenerator
 from uuid import uuid4
 
 from ..db.session_store import store
+from ..bulk_edits import expand_all, extract_bulk
 from ..diff_utils import DiffUtils, parse_llm_response
+from ..settings import get_settings
 from ..gateway import GatewayService
 from ..prompting import build_system_prompt
+from . import chat_history_service
 from .session_service import now_iso
 
 logger = logging.getLogger("json_ai_studio.chat")
@@ -54,8 +57,16 @@ async def _stream_llm(
     message: str,
     principal,
     reasoning: str | None = None,
+    history: list[dict[str, str]] | None = None,
+    outcome: dict[str, Any] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream LLM response as SSE events via GatewayService.
+
+    `history` is replayed prior turns (chat history). `outcome`, when given,
+    is filled with what the turn produced (applied/failed diffs,
+    explanation) so the caller can persist it without re-parsing SSE; it is
+    left with ``store=False`` when the turn should not be recorded (quota
+    stop, provider error, exception).
 
     Event sequence: thinking -> diff(s) -> complete (ADR-0004).
     Parses the LLM output into diffs, applies only the ones that
@@ -80,16 +91,25 @@ async def _stream_llm(
         )
         yield sse("thinking", {"text": "Analyzing your request..."})
 
-        system_prompt = build_system_prompt(working_json)
+        if outcome is None:
+            outcome = {}
+        outcome["store"] = False
+        system_prompt = build_system_prompt(working_json, has_history=bool(history))
         logger.debug(
             "chat system_prompt session=%s prompt=%s", session_id, system_prompt
         )
+        logger.debug("chat history session=%s messages=%s", session_id, history)
 
         content_parts: list[str] = []
         error_payload: dict[str, Any] | None = None
         quota_hit = False
         async for event_text in GatewayService.invoke(
-            session_id, message, principal, system_prompt, reasoning=reasoning
+            session_id,
+            message,
+            principal,
+            system_prompt,
+            reasoning=reasoning,
+            history=history,
         ):
             yield event_text
             event, payload = parse_sse(event_text)
@@ -127,6 +147,26 @@ async def _stream_llm(
             return
 
         diffs, explanation = parse_llm_response(combined)
+        # Bulk ops (pattern + where) are expanded server-side against the
+        # full document into ordinary diffs — the model may only have seen a
+        # skeleton, and listing hundreds of diffs would blow the output cap.
+        bulk_ops, bulk_explanation = extract_bulk(combined)
+        bulk_notes: list[str] = []
+        if bulk_ops:
+            bulk_diffs, bulk_notes = expand_all(
+                bulk_ops, working_json, get_settings().bulk_max_matches
+            )
+            listed = {d.get("path") for d in diffs}
+            diffs = [*diffs, *(d for d in bulk_diffs if d["path"] not in listed)]
+            explanation = bulk_explanation or explanation
+            outcome["bulk"] = bulk_ops
+            logger.info(
+                "bulk ops=%d expanded_diffs=%d notes=%s",
+                len(bulk_ops),
+                len(bulk_diffs),
+                bulk_notes,
+            )
+            logger.debug("bulk ops (full) session=%s ops=%s", session_id, bulk_ops)
         logger.info(
             "parsed llm response: diffs=%d explanation=%r",
             len(diffs),
@@ -139,7 +179,13 @@ async def _stream_llm(
             explanation,
         )
 
+        outcome.update(store=True, applied=[], failed=[])
+        if not diffs and bulk_notes:
+            # The model claimed a bulk change but nothing matched / it was
+            # rejected — report that, not the model's optimistic sentence.
+            explanation = " ".join(bulk_notes)
         if not diffs:
+            outcome["explanation"] = explanation or "The model returned no changes."
             logger.warning(
                 "no diffs parsed from llm output (len=%d); "
                 "returning explanation only",
@@ -173,15 +219,23 @@ async def _stream_llm(
             merged,
         )
 
-        for diff in applied:
-            entry = {**diff, "id": str(uuid4())}
+        applied_entries = [
+            {**diff, "id": str(uuid4()), "status": "pending"} for diff in applied
+        ]
+        for entry in applied_entries:
             yield sse("diff", {"entry": entry})
+        outcome["applied"] = applied_entries
+        outcome["failed"] = [
+            {**diff, "id": str(uuid4()), "status": "failed", "failure_reason": reason}
+            for diff, reason in failed
+        ]
 
         notes: list[str] = []
         if explanation:
             notes.append(explanation)
         elif applied:
             notes.append(f"Applied {len(applied)} change(s).")
+        notes.extend(bulk_notes)
         if failed:
             failed_desc = "; ".join(
                 f"{d.get('path')} ({reason})" for d, reason in failed
@@ -190,17 +244,20 @@ async def _stream_llm(
                 f"Skipped {len(failed)} proposed change(s) that did not match "
                 f"the current JSON: {failed_desc}."
             )
+        outcome["explanation"] = " ".join(notes) or "Done."
         yield sse(
             "complete",
             {
                 "working_json": merged,
-                "explanation": " ".join(notes) or "Done.",
+                "explanation": outcome["explanation"],
             },
         )
 
     except Exception as e:
         # Fail-fast error (ADR-0007): yield error in stream, don't retry
         logger.exception("chat stream failed")
+        if outcome is not None:
+            outcome["store"] = False
         yield sse(
             "complete",
             {"working_json": working_json, "explanation": f"Error: {e}"},
@@ -240,56 +297,59 @@ async def chat_event_stream(
             )
             return
 
-        merged_json = None
-        all_diffs: list[dict[str, Any]] = []
+        history = chat_history_service.build_history_messages(session)
+        outcome: dict[str, Any] = {}
         async for event_text in _stream_llm(
             session.get("id", "chat-session"),
             working_json,
             message,
             principal,
             reasoning=reasoning,
+            history=history,
+            outcome=outcome,
         ):
-            yield event_text
             event, payload = parse_sse(event_text)
-            if event == "complete" and payload is not None:
-                merged_json = payload.get("working_json")
-            elif event == "diff" and payload is not None:
-                entry = payload.get("entry")
-                if isinstance(entry, dict):
-                    all_diffs.append(entry)
+            if event != "complete" or payload is None:
+                yield event_text
+                continue
 
-        # Persist the merged working_json to session store.
-        if merged_json is not None:
-            session["working_json"] = merged_json
-            if all_diffs:
-                session.setdefault("conversation_history", []).append(
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "diffs": [
-                            {
-                                "path": d.get("path", ""),
-                                "operation": d.get("operation", ""),
-                                "old_value": d.get("old_value"),
-                                "new_value": d.get("new_value"),
-                                "id": str(d.get("id", "")),
-                            }
-                            for d in all_diffs
-                        ],
-                    }
+            # Persist before the client sees "complete" so an immediate
+            # accept/reject finds the diff ids in history.
+            merged_json = payload.get("working_json")
+            if merged_json is not None:
+                session["working_json"] = merged_json
+            if outcome.get("store"):
+                user_turn = chat_history_service.make_turn("user", message)
+                assistant_turn = chat_history_service.make_turn(
+                    "assistant",
+                    outcome.get("explanation", ""),
+                    diffs=[
+                        *outcome.get("applied", []),
+                        *outcome.get("failed", []),
+                    ],
                 )
+                if outcome.get("bulk"):
+                    # Replayed instead of the (possibly hundreds of) expanded
+                    # diffs' detail, so follow-ups see the intent.
+                    assistant_turn["bulk"] = outcome["bulk"]
+                chat_history_service.append_turns(session, user_turn, assistant_turn)
+                payload["user_turn_id"] = user_turn["id"]
+                payload["assistant_turn_id"] = assistant_turn["id"]
             session["updated_at"] = now_iso()
             await store.save_session(session)
             logger.info(
-                "chat turn persisted session=%s diffs=%d",
+                "chat turn persisted session=%s applied=%d failed=%d stored=%s",
                 session.get("id"),
-                len(all_diffs),
+                len(outcome.get("applied", [])),
+                len(outcome.get("failed", [])),
+                bool(outcome.get("store")),
             )
             logger.debug(
                 "chat turn merged_json session=%s json=%s",
                 session.get("id"),
                 merged_json,
             )
+            yield sse("complete", payload)
 
     except Exception as e:
         logger.exception("chat endpoint stream failed")

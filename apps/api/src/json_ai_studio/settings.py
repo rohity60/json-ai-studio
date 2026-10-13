@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Ollama endpoint (env: OLLAMA_BASE_URL), e.g. http://localhost:11434
     # or a tunnel/hosted URL. Unset disables the ollama deployment.
     ollama_base_url: str | None = None
+    # Context window requested from Ollama per call (env: OLLAMA_NUM_CTX).
+    # Ollama's own default is small and silently truncates long prompts.
+    ollama_num_ctx: int = 32_768
 
     # Max output tokens per LLM call (env: LLM_MAX_TOKENS). Generic across
     # providers (litellm normalizes the param). Prevents silent truncation
@@ -51,6 +54,22 @@ class Settings(BaseSettings):
     # full document. The old 60k cap was tuned for local Ollama freezes;
     # hosted models tolerate more, so more docs get full-fidelity values.
     llm_max_inline_chars: int = 120_000
+
+    # Chat history (multi-turn context). Prior user/assistant turns are
+    # replayed to the LLM with per-diff status so follow-ups ("do it for all
+    # such elements") resolve. Bounded by pairs and tokens; oldest pairs are
+    # dropped first. Disabled → single-turn [system, user] calls.
+    chat_history_enabled: bool = True
+    chat_history_max_turns: int = 10  # user/assistant pairs replayed
+    chat_history_max_tokens: int = 8_000
+    chat_history_value_max_chars: int = 300  # per new_value in replay
+    chat_history_max_diffs_per_turn: int = 20
+    chat_history_max_stored_turns: int = 200  # pruned from the session
+
+    # Bulk edits: the model may emit a pattern op ("/records/*/field" + where)
+    # that the server expands against the full JSON (bulk_edits.py). Caps
+    # matches per op so a bad pattern can't rewrite a whole huge document.
+    bulk_max_matches: int = 5_000
 
     # Anonymous (shared pool) quota defaults — match pre-login behavior.
     # Token limit sized for large-JSON editing: one inline doc at the

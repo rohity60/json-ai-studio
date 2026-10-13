@@ -31,6 +31,8 @@ __CONTEXT__
 OUTPUT FORMAT — respond with EXACTLY ONE JSON object and nothing else. No \
 markdown, no code fences, no text before or after the object:
 {"diffs": [{"path": "<JSON Pointer>", "operation": "add" | "modify" | "delete", "old_value": <value>, "new_value": <value>}], "explanation": "<one short sentence for the user>"}
+Optionally add a "bulk" list to the SAME object for changes that hit many elements (see BULK EDITS):
+{"diffs": [], "bulk": [{"path": "<JSON Pointer with * wildcards>", "where": {<conditions>}, "operation": "modify" | "add" | "delete", "new_value": <value>}], "explanation": "..."}
 
 RULES:
 1. "path" is a JSON Pointer: segments joined by "/". Escape "/" inside a key as "~1" and "~" as "~0".
@@ -43,6 +45,12 @@ RULES:
 8. When duplicating an object, add the copy at the same level as the source with the same keys and values, unless the user specifies new ones.
 9. Multiple requested changes = multiple entries in the "diffs" array of the SAME single object.
 10. If the user's message is ITSELF a whole new JSON document (a full configuration pasted as the message, not an instruction) that they seem to want to work on, do NOT adopt, replace, or merge it into the CURRENT WORKING JSON — return {"diffs": [], "explanation": "It looks like you pasted a full JSON document. To work on it, load it with the Upload feature; then describe the changes you want here."}. This does NOT apply when JSON appears as an EXAMPLE inside an instruction (e.g. "add an entry like {...}", "make it match this shape: {...}") — there, use the provided JSON to build the correct diffs against the CURRENT WORKING JSON.
+
+BULK EDITS — use "bulk" instead of listing diffs one by one whenever a change applies to more than 5 elements, or to elements you cannot see (structural skeleton). The server expands each bulk op against the FULL document, so you do NOT need to see or copy the matching values.
+B1. "path" is a JSON Pointer where "*" matches every array element (or object key) at that level, e.g. "/records/*/sectionId".
+B2. "where" (optional) filters the element matched by the LAST "*". Keys are field names inside that element (or relative pointers like "meta/id"); "$index" is its zero-based array index; "$value" is the targeted value itself. A plain value means equality (strings compare case-insensitively); an object uses operators: eq, ne, in, nin, gt, gte, lt, lte, contains (substring), exists.
+B3. "operation": "modify" sets new_value; "add" sets it only where the key is missing; "delete" removes the matched node (e.g. path "/files/*" deletes whole elements).
+B4. Prefer conditions on a real field the user names (e.g. "slokNumber" 1 to 100 → {"slokNumber": {"gte": 1, "lte": 100}}). Positional words ("first 20", "first 100 records", "top 5", "last 10") ALWAYS mean array position → {"$index": {"lt": 20}}, never a range on a numeric field (fields like a verse/step number often restart per group — see ARRAY FIELD STATS). Do not put the same change in both "diffs" and "bulk".
 
 EXAMPLES (illustrative only — real answers must use paths, values, and indices from the CURRENT WORKING JSON above, never from these examples):
 
@@ -70,7 +78,43 @@ User: "Update the title where mode is 'b'." (no element has mode 'b')
 JSON: {"howToRedeem": [{"mode": "a", "title": "Step 1"}, {"mode": "c", "title": "Step 2"}]}
 Response: {"diffs": [], "explanation": "No element in howToRedeem has mode 'b'; existing modes are 'a' (index 0) and 'c' (index 1). Did you mean mode 'c'?"}
 
-Now respond to the user's message using ONLY the CURRENT WORKING JSON above.
+User: "Set status to DONE for every record with chapter 2." (large array)
+JSON: {"records": [{"chapter": 1, "status": "OPEN"}, "…+700 more items"]}
+Response: {"diffs": [], "bulk": [{"path": "/records/*/status", "where": {"chapter": 2}, "operation": "modify", "new_value": "DONE"}], "explanation": "Set status to DONE for every record in chapter 2."}
+
+User: "Delete every file whose title mentions draft 2027."
+JSON: {"files": [{"title": "Draft 2027 - Round 1"}, {"title": "Roster 2026"}, {"title": "Draft 2027 - Round 2"}]}
+Response: {"diffs": [], "bulk": [{"path": "/files/*", "where": {"title": {"contains": "draft 2027"}}, "operation": "delete"}], "explanation": "Deleted the files whose title mentions Draft 2027."}
+
+__HISTORY__Now respond to the user's message using ONLY the CURRENT WORKING JSON above.
+"""
+
+# Appended only when prior turns are replayed. Earlier assistant messages
+# are the model's own past responses, each diff annotated with "status"
+# reflecting what the user did with it.
+_HISTORY_RULES = """\
+CONVERSATION HISTORY RULES — earlier messages in this conversation are prior \
+turns. Your earlier responses are shown in the output format above, with a \
+"status" on every diff:
+- "accepted": the user kept it. It is ALREADY in the CURRENT WORKING JSON.
+- "pending": shown to the user, not yet accepted or rejected. It is ALREADY in the CURRENT WORKING JSON.
+- "rejected": the user declined it. It was reverted and is NOT in the CURRENT WORKING JSON.
+- "failed": it did not match the JSON and was never applied.
+H1. History tells you INTENT only. Every path, index, and old_value MUST come from the CURRENT WORKING JSON — paths and indices in history may be stale.
+H2. Never re-propose an "accepted" or "pending" change; it is already applied.
+H3. Do not repeat a "rejected" change unless the user explicitly asks for it again.
+H4. If the user repeats a "failed" request, re-derive the paths from the CURRENT WORKING JSON.
+H5. For follow-ups like "do the same for all of them", "the rest", "for every such element": generalise the most recent accepted/pending change to EVERY matching location in the CURRENT WORKING JSON. Skip only the exact paths already changed (accepted/pending) and the paths whose equivalent change was rejected — other matching values inside the same element still count.
+H5a. Generalise the SAME change at the SAME granularity: if the earlier diff changed one leaf value (old_value -> new_value), emit one leaf diff per matching location where the CURRENT value equals that old_value (or that the user names). Never replace a whole array or object, and never touch values that do not match, unless the user explicitly asks for it.
+H6. Resolve references like "it", "that", "the second one", "undo that" against the previous turns.
+
+HISTORY EXAMPLE (illustrative only):
+Earlier user: "Set retryCount to 3 for the payments service."
+Earlier response: {"diffs": [{"path": "/services/payments/retryCount", "operation": "modify", "old_value": 5, "new_value": 3, "status": "accepted"}], "explanation": "Set payments retryCount to 3."}
+User: "Do it for all such services."
+JSON: {"services": {"payments": {"retryCount": 3}, "orders": {"retryCount": 5}, "search": {"retryCount": 1}}}
+Response: {"diffs": [{"path": "/services/orders/retryCount", "operation": "modify", "old_value": 5, "new_value": 3}, {"path": "/services/search/retryCount", "operation": "modify", "old_value": 1, "new_value": 3}], "explanation": "Set retryCount to 3 for orders and search; payments already had it."}
+
 """
 
 EXPLAIN_TEMPLATE = """\
@@ -189,8 +233,90 @@ def build_skeleton(
     return data
 
 
-def build_system_prompt(working_json: dict[str, Any]) -> str:
-    """Build the system prompt with the working JSON inlined."""
+_STATS_MAX_ARRAYS = 20
+_STATS_MAX_FIELDS = 30
+_STATS_TOP_VALUES = 5
+_STATS_MAX_DISTINCT_LISTED = 25
+
+
+def _scalar_key(value: Any) -> Any:
+    return (
+        value if isinstance(value, (str, int, float, bool)) or value is None else None
+    )
+
+
+def build_array_stats(data: Any) -> list[str]:
+    """Per-field value statistics for arrays of objects, skeleton mode only.
+
+    The skeleton shows one sample element per array, so the model can't tell
+    whether a field is a unique id, a per-group counter (e.g. slokNumber
+    restarting per chapter) or a low-cardinality category. These lines give
+    distinct counts, numeric ranges and top values so bulk "where" clauses
+    target the right field. Paths use the bulk-edit "*" syntax.
+    """
+    lines: list[str] = []
+
+    def visit(node: Any, path: str, depth: int) -> None:
+        if len(lines) >= _STATS_MAX_ARRAYS or depth > _SKELETON_MAX_DEPTH:
+            return
+        if isinstance(node, dict):
+            for key, child in list(node.items())[:_SKELETON_DICT_KEY_CAP]:
+                esc = str(key).replace("~", "~0").replace("/", "~1")
+                visit(child, f"{path}/{esc}", depth + 1)
+        elif isinstance(node, list) and len(node) > 1:
+            objs = [x for x in node if isinstance(x, dict)]
+            if len(objs) == len(node):
+                fields: list[str] = []
+                keys: dict[str, None] = {}
+                for o in objs:
+                    keys.update(dict.fromkeys(o))
+                for key in list(keys)[:_STATS_MAX_FIELDS]:
+                    vals = [o[key] for o in objs if key in o]
+                    scal = [v for v in vals if _scalar_key(v) is not None or v is None]
+                    if len(scal) != len(vals):
+                        continue  # nested values: covered by recursion below
+                    counts: dict[Any, int] = {}
+                    for v in scal:
+                        counts[v] = counts.get(v, 0) + 1
+                    desc = f"{key}: {len(counts)} distinct"
+                    if len(vals) < len(objs):
+                        desc += f", present in {len(vals)}"
+                    nums = [
+                        v
+                        for v in scal
+                        if isinstance(v, (int, float)) and not isinstance(v, bool)
+                    ]
+                    if nums and len(nums) == len(scal):
+                        desc += f", range {min(nums)}..{max(nums)}"
+                    if len(counts) == len(objs):
+                        desc += " (unique per element)"
+                    elif len(counts) <= _STATS_MAX_DISTINCT_LISTED and all(
+                        not isinstance(v, str) or len(v) <= 60 for v in counts
+                    ):  # categories, not free text
+                        top = sorted(counts.items(), key=lambda kv: -kv[1])[
+                            :_STATS_TOP_VALUES
+                        ]
+                        shown = ", ".join(
+                            f"{json.dumps(v, ensure_ascii=False)[:40]}×{n}"
+                            for v, n in top
+                        )
+                        desc += f", top: {shown}"
+                    fields.append(desc)
+                if fields:
+                    lines.append(f"{path}/* ({len(node)} items): " + "; ".join(fields))
+            for i, child in enumerate(node[:1]):
+                visit(child, f"{path}/*", depth + 1)
+
+    visit(data, "", 0)
+    return lines
+
+
+def build_system_prompt(working_json: dict[str, Any], has_history: bool = False) -> str:
+    """Build the system prompt with the working JSON inlined.
+
+    `has_history` adds the conversation-history rules (diff status
+    semantics) when prior turns are replayed alongside this prompt.
+    """
     max_inline = get_settings().llm_max_inline_chars
     pretty = json.dumps(working_json, indent=2, ensure_ascii=False, default=str)
     if len(pretty) <= max_inline:
@@ -216,10 +342,22 @@ def build_system_prompt(working_json: dict[str, Any]) -> str:
                 'items" marker (so N+1 is the array length).\n'
                 f"{skeleton}\n"
                 "You may rely on the keys and the sample values shown. For "
-                "large arrays you can see only the first element's shape: when "
-                "a request targets a specific element by a value you cannot "
-                "see, or asks to rewrite values across every element, return "
-                '{"diffs": [], "explanation": "..."} and ask the user to '
-                "narrow it to a specific index or field."
+                "large arrays you can see only the first element's shape, so "
+                "NEVER guess values you cannot see: for any change that targets "
+                "elements by a field value, a range, or every element, use a "
+                '"bulk" op (see BULK EDITS) — the server matches it against the '
+                "full document. Only use plain diffs for paths and values "
+                "visible above."
+                + (
+                    "\nARRAY FIELD STATS (computed over EVERY element — use them "
+                    'to pick the right "where" field: a field that is not '
+                    "unique per element, e.g. a counter restarting per group, "
+                    'cannot identify positions; use "$index" for "first N" '
+                    "requests):\n" + "\n".join(stats)
+                    if (stats := build_array_stats(working_json))
+                    else ""
+                )
             )
-    return _TEMPLATE.replace("__CONTEXT__", context)
+    return _TEMPLATE.replace("__CONTEXT__", context).replace(
+        "__HISTORY__", _HISTORY_RULES if has_history else ""
+    )

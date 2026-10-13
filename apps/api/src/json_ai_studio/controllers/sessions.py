@@ -5,12 +5,12 @@ from __future__ import annotations
 import json as _json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from ..auth import require_api_key
 from ..models import CreateSessionRequest, SeedFromTemplateRequest
-from ..services import session_service
-from ..services.errors import NotFoundError
+from ..services import chat_history_service, session_service
+from ..services.errors import ConflictError, NotFoundError
 from ..settings import get_settings
 
 logger = logging.getLogger("json_ai_studio.controllers.sessions")
@@ -67,3 +67,19 @@ async def endpoint_get_session(
         return await session_service.get_session(session_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/sessions/{session_id}/chat", status_code=204)
+async def endpoint_clear_chat(
+    session_id: str,
+    _auth=Depends(require_api_key),
+):
+    """Clear the chat thread (LLM context). 409 while diffs are pending."""
+    logger.info("DELETE /api/sessions/%s/chat principal=%s", session_id, _auth.kind)
+    try:
+        await chat_history_service.clear_chat(session_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return Response(status_code=204)

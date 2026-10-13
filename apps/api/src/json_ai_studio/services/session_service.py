@@ -80,6 +80,8 @@ async def upload_json(data: Any, session_id: str | None) -> dict[str, Any]:
     # metadata is stripped in the controller, never here.
     session["working_json"] = data if isinstance(data, dict) else {}
     session["baseline_json"] = data if isinstance(data, dict) else {}
+    # New document → old turns' paths and diff ids no longer apply.
+    session["conversation_history"] = []
     session["updated_at"] = now_iso()
     await store.save_session(session)
     logger.info(

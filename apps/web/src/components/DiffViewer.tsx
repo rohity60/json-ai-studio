@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { JsonView } from 'react-json-view-lite';
 import 'react-json-view-lite/dist/index.css';
 import { Check, X, Code, Columns } from 'lucide-react';
@@ -8,14 +8,7 @@ import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer';
 import { toast } from 'sonner';
 import { useSession } from '@/context/SessionContext';
 import Button from '@/components/ui/Button';
-
-type DiffEntry = {
-  id: string;
-  path: string;
-  operation: 'add' | 'modify' | 'delete';
-  old_value?: unknown;
-  new_value?: unknown;
-};
+import { pendingDiffs } from '@/lib/chatHistory';
 
 type DiffViewerProps = {
   before: Record<string, unknown>;
@@ -30,34 +23,23 @@ const opColors: Record<string, string> = {
 };
 
 export default function DiffViewer({ before, after, onResolved }: DiffViewerProps) {
-  const [localDiffs, setLocalDiffs] = useState<DiffEntry[]>([]);
-  const [accepted, setAccepted] = useState<Set<number>>(new Set());
-  const [rejected, setRejected] = useState<Set<number>>(new Set());
+  // In-flight clicks only; resolved diffs drop out of the pending list once
+  // the server confirms the new status.
+  const [busy, setBusy] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'diffviewer' | 'sidebyside'>('diffviewer');
 
   const { acceptDiff, removeDiff, acceptAllDiffs, rejectAllDiffs, state } = useSession();
 
-  // Sync diffs from conversation history
-  useEffect(() => {
-    const entries: DiffEntry[] = [];
-    for (const turn of [...state.conversationHistory].reverse()) {
-      if (turn.role === 'assistant' && turn.diffs?.length) {
-        for (const d of turn.diffs) {
-          entries.push({
-            id: String(d.id ?? ''),
-            path: String(d.path ?? ''),
-            operation: (d.operation as DiffEntry['operation']) || 'modify',
-            old_value: d.old_value,
-            new_value: d.new_value,
-          });
-        }
-        break;
-      }
+  // Pending diffs from every turn: the user may have kept chatting without
+  // resolving earlier proposals, which are still previewed in working_json.
+  const localDiffs = useMemo(() => pendingDiffs(state.conversationHistory), [state.conversationHistory]);
+
+  const resolve = async (id: string, fn: (id: string) => Promise<void>) => {
+    setBusy((prev) => new Set(prev).add(id));
+    try { await fn(id); } finally {
+      setBusy((prev) => { const n = new Set(prev); n.delete(id); return n; });
     }
-    setLocalDiffs(entries);
-    setAccepted(new Set());
-    setRejected(new Set());
-  }, [state.conversationHistory]);
+  };
 
   const hasDiffs = localDiffs.length > 0;
 
@@ -138,10 +120,10 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
       {hasDiffs && (
         <div className='border-t pt-4'>
           <p className='text-sm font-semibold mb-2'>Change List ({localDiffs.length})</p>
-          {localDiffs.map((diff, i) => (
+          {localDiffs.map((diff) => (
             <div
               key={diff.id}
-              className={`flex items-center justify-between p-2 rounded-lg mb-1 ${opColors[diff.operation]}`}
+              className={`flex items-center justify-between p-2 rounded-lg mb-1 ${opColors[diff.operation] || ''}`}
             >
               <span className='text-xs font-mono flex gap-2'>
                 {diff.path}{' '}
@@ -151,11 +133,8 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => {
-                    acceptDiff(diff.id);
-                    setAccepted((prev) => new Set([...prev, i]));
-                  }}
-                  disabled={accepted.has(i)}
+                  onClick={() => resolve(diff.id, acceptDiff)}
+                  disabled={busy.has(diff.id)}
                   className='hover:bg-black/10'
                   title='Accept'
                 >
@@ -164,11 +143,8 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => {
-                    removeDiff(diff.id);
-                    setRejected((prev) => new Set([...prev, i]));
-                  }}
-                  disabled={rejected.has(i)}
+                  onClick={() => resolve(diff.id, removeDiff)}
+                  disabled={busy.has(diff.id)}
                   className='hover:bg-black/10'
                   title='Reject'
                 >
@@ -193,11 +169,10 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
           size="md"
           onClick={async () => {
             await acceptAllDiffs();
-            setAccepted(new Set(localDiffs.map((_, i) => i)));
             toast.success('All changes applied');
             onResolved?.();
           }}
-          disabled={accepted.size === localDiffs.length && rejected.size === 0}
+          disabled={!hasDiffs}
         >
           Accept All
         </Button>
@@ -206,11 +181,10 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
           size="md"
           onClick={async () => {
             await rejectAllDiffs();
-            setRejected(new Set(localDiffs.map((_, i) => i)));
             toast.success('All changes rejected');
             onResolved?.();
           }}
-          disabled={rejected.size === localDiffs.length && accepted.size === 0}
+          disabled={!hasDiffs}
         >
           Reject All
         </Button>

@@ -11,6 +11,7 @@
  */
 
 import { openDB, type IDBPDatabase } from 'idb';
+import type { ChatTurn } from './api';
 
 const DB_NAME = 'json-ai-studio';
 const DB_VERSION = 1;
@@ -31,8 +32,14 @@ export type CachedWorkspace = {
     workingJson: Record<string, any>;
     baselineJson: Record<string, any>;
     activeVersionId: string | null;
+    // Chat thread with diff statuses; optional so pre-chat-history cache
+    // records still load (no DB_VERSION bump needed).
+    conversationHistory?: ChatTurn[];
     updatedAt: string;
 };
+
+// Matches backend chat_history_max_stored_turns.
+export const MAX_CACHED_TURNS = 200;
 
 function available(): boolean {
     return typeof indexedDB !== 'undefined';

@@ -44,6 +44,32 @@ async function httpError(res: Response, prefix: string): Promise<Error> {
     return err;
 }
 
+/** Diff lifecycle (server-authoritative): pending = previewed in
+ *  working_json; accepted = promoted to baseline; rejected = reverted;
+ *  failed = proposed but did not resolve against the JSON. */
+export type DiffStatus = 'pending' | 'accepted' | 'rejected' | 'failed';
+
+export type DiffEntry = {
+    id: string;
+    path: string;
+    operation: 'add' | 'modify' | 'delete';
+    old_value?: unknown;
+    new_value?: unknown;
+    status?: DiffStatus;
+    failure_reason?: string | null;
+};
+
+/** One stored chat turn. `boundary` = context reset (version switch):
+ *  earlier turns stay visible but are no longer sent to the model. */
+export type ChatTurn = {
+    id: string;
+    role: 'user' | 'assistant';
+    kind?: 'message' | 'boundary';
+    content: string;
+    diffs?: DiffEntry[] | null;
+    created_at?: string | null;
+};
+
 export async function createSession(name: string, apiKey: string) {
     const res = await fetch(`${BASE}/sessions`, {
         method: 'POST',
@@ -81,6 +107,7 @@ export async function restoreVersions(
         working_json?: Record<string, any>;
         baseline_json?: Record<string, any>;
         active_version_id?: string | null;
+        conversation_history?: ChatTurn[];
     },
     apiKey: string,
 ) {
@@ -147,7 +174,7 @@ export async function acceptDiff(sessionId: string, diffId: string, apiKey: stri
         method: 'POST',
         headers: await authHeaders(apiKey),
     });
-    if (!res.ok) throw new Error('Failed to accept diff');
+    if (!res.ok) throw await httpError(res, 'Failed to accept diff');
     return await res.json();
 }
 
@@ -156,7 +183,7 @@ export async function rejectDiff(sessionId: string, diffId: string, apiKey: stri
         method: 'POST',
         headers: await authHeaders(apiKey),
     });
-    if (!res.ok) throw new Error('Failed to reject diff');
+    if (!res.ok) throw await httpError(res, 'Failed to reject diff');
     return await res.json();
 }
 
@@ -184,7 +211,7 @@ export async function selectVersion(
     baseline_json: Record<string, any>;
     active_version_id: string | null;
     versions: any[];
-    conversation_history: any[];
+    conversation_history: ChatTurn[];
 }> {
     const res = await fetch(`${BASE}/sessions/${sessionId}/versions/select`, {
         method: 'POST',
@@ -502,6 +529,15 @@ export async function rejectDiffBatch(sessionId: string, apiKey: string) {
     });
     if (!res.ok) throw new Error('Failed to reject all diffs');
     return await res.json();
+}
+
+/** Clear the chat thread (model context). 409 while diffs are pending. */
+export async function clearChat(sessionId: string, apiKey: string): Promise<void> {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/chat`, {
+        method: 'DELETE',
+        headers: await authHeaders(apiKey),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to clear chat');
 }
 
 /** Seed a new session from a static template (Open in Workspace, ADR-0020).
