@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Sparkles, FileJson2, Brain } from 'lucide-react';
+import { Send, Loader2, Sparkles, FileJson2, Brain, Eraser, CheckCircle2, XCircle, Clock, AlertTriangle } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
+import { contextPairCount, diffStatus } from '@/lib/chatHistory';
+import type { DiffEntry, DiffStatus } from '@/lib/api';
 import { peekStarterPrompts, clearStarterPrompts } from '@/lib/openInWorkspace';
 import { trackEvent } from '@/lib/gtagConversion';
 import Button from '@/components/ui/Button';
@@ -20,12 +22,58 @@ const EXAMPLE_PROMPTS = [
   'remove all occurrences of timeout',
 ];
 
+const STATUS_STYLE: Record<DiffStatus, { label: string; cls: string; Icon: typeof Clock }> = {
+  pending: { label: 'Pending', cls: 'bg-amber-50 text-amber-700 border-amber-200', Icon: Clock },
+  accepted: { label: 'Accepted', cls: 'bg-green-50 text-green-700 border-green-200', Icon: CheckCircle2 },
+  rejected: { label: 'Rejected', cls: 'bg-gray-50 text-gray-500 border-gray-200 line-through', Icon: XCircle },
+  failed: { label: "Couldn't apply", cls: 'bg-red-50 text-red-700 border-red-200', Icon: AlertTriangle },
+};
+
+// Per-diff status list inside an assistant bubble. Failed diffs collapse
+// behind a summary so the thread stays readable.
+function DiffStatusList({ diffs }: { diffs: DiffEntry[] }) {
+  const [showFailed, setShowFailed] = useState(false);
+  const applied = diffs.filter((d) => diffStatus(d) !== 'failed');
+  const failed = diffs.filter((d) => diffStatus(d) === 'failed');
+  const row = (d: DiffEntry) => {
+    const st = STATUS_STYLE[diffStatus(d)];
+    return (
+      <li key={d.id} className="flex items-center gap-2 min-w-0" title={d.failure_reason || undefined}>
+        <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${st.cls}`}>
+          <st.Icon className="w-3 h-3" />
+          {st.label}
+        </span>
+        <span className="truncate font-mono text-[11px] text-gray-600">
+          {d.operation} {d.path}
+        </span>
+      </li>
+    );
+  };
+  return (
+    <div className="mt-2 space-y-1">
+      {applied.length > 0 && <ul className="space-y-1">{applied.map(row)}</ul>}
+      {failed.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowFailed((v) => !v)}
+            className="text-[11px] text-red-700 hover:underline"
+          >
+            {failed.length} change(s) couldn&apos;t be applied {showFailed ? '▴' : '▾'}
+          </button>
+          {showFailed && <ul className="mt-1 space-y-1">{failed.map(row)}</ul>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
   onGoToUpload?: () => void;
   onNewJson?: () => void;
   suggestions?: string[];
 }) {
-  const { state, sendMessage } = useSession();
+  const { state, sendMessage, clearChat } = useSession();
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [thinking, setThinking] = useState(false);
@@ -34,6 +82,7 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const hasJson = Object.keys(state.workingJson || {}).length > 0;
+  const contextPairs = contextPairCount(state.conversationHistory);
 
   // One-shot starter prompts stashed by an "Open in Workspace" click (ADR-0020).
   useEffect(() => {
@@ -87,6 +136,17 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
            <span className="hidden sm:inline truncate text-xs text-muted-foreground">
              {state.sessionId ? `Session: ${state.sessionId.slice(0, 8)}` : 'No session'}
            </span>
+           {state.conversationHistory.length > 0 && (
+             <Button
+              variant="secondary"
+              onClick={() => clearChat()}
+              disabled={isStreaming}
+              title="Clear the conversation so the AI starts without earlier context"
+             >
+               <Eraser className="w-3.5 h-3.5" />
+               Clear chat
+             </Button>
+           )}
            {onNewJson && hasJson && (
              <Button variant="secondary" onClick={onNewJson} title="Start over with a different JSON">
                <FileJson2 className="w-3.5 h-3.5" />
@@ -134,8 +194,14 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
              </div>
           )}
 
-         {state.conversationHistory.map((msg, i) => (
-             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+         {state.conversationHistory.map((msg, i) => msg.kind === 'boundary' ? (
+             <div key={msg.id || i} className="flex items-center gap-2 py-1 text-[11px] text-muted-foreground">
+              <span className="h-px flex-1 bg-gray-200" />
+              <span className="text-center">{msg.content} — earlier messages are not used as context</span>
+              <span className="h-px flex-1 bg-gray-200" />
+             </div>
+          ) : (
+             <div key={msg.id || i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[80%] rounded-lg p-3 text-sm ${
                  msg.role === 'user'
                   ? 'bg-purple-600 text-white'
@@ -148,6 +214,7 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
                    </div>
                 )}
                 {msg.content}
+                {msg.role === 'assistant' && !!msg.diffs?.length && <DiffStatusList diffs={msg.diffs} />}
               </div>
              </div>
           ))}
@@ -183,7 +250,7 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
               <Send className="w-4 h-4" />
              </Button>
            </div>
-           <div className="mt-2 flex items-center">
+           <div className="mt-2 flex items-center gap-3">
              <button
               type="button"
               role="switch"
@@ -201,6 +268,11 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
               <Brain className="w-3.5 h-3.5" />
               Thinking {thinking ? 'On' : 'Off'}
              </button>
+             {contextPairs > 0 && (
+               <span className="text-[11px] text-muted-foreground" title="Earlier messages and what you accepted/rejected help the AI understand follow-ups">
+                Using last {contextPairs} message{contextPairs === 1 ? '' : 's'} as context
+               </span>
+             )}
            </div>
          </form>
        </div>

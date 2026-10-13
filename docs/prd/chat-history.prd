@@ -1,0 +1,180 @@
+# PRD: Chat History (Multi-Turn Context + Diff Outcome Awareness)
+
+## Feature Name
+
+**Chat History — the model remembers the conversation and what happened to its diffs**
+
+## Goal
+
+Make chat edits conversational. A follow-up message ("do the same for all of them", "no, the second one", "try again but skip the ones I rejected") must be understood in the context of previous turns **and** of what the user did with each proposed diff (accepted, rejected, left pending).
+
+---
+
+# Problem
+
+Every chat turn is **stateless** from the model's point of view, and diff outcomes are never fed back.
+
+Observed user report:
+
+1. User: *"Set `retryCount` to 3 for the `payments` service."* → correct diff, accepted.
+2. User: *"Do it for all such services."* → model fails. It never saw turn 1.
+
+Root cause (verified in code, branch `chat-history`):
+
+| Where | What happens today |
+|-------|--------------------|
+| `gateway.py` `GatewayService.invoke()` | LLM call is always `messages=[system, user]`. Prior turns never sent. |
+| `services/chat_service.py` `chat_event_stream()` | Appends **only** an assistant turn with `content: ""` + diffs, **only** when diffs exist. User messages, explanations, no-diff turns (clarifications/refusals) and failed (skipped) diffs never stored. |
+| `services/diff_service.py` `accept_one` / `reject_one` | Push the id into flat `session["applied_diffs"]` / `session["rejected_diffs"]` lists. Not tied to a turn. Never read by anything. |
+| `services/diff_service.py` `accept_all` / `reject_all` | Reset `applied_diffs = []`. Per-diff outcome is **erased**; reject-all records nothing as rejected. |
+| (user sends next message without acting) | Diffs stay applied in `working_json` as preview. Nothing distinguishes *pending* from *accepted*. |
+| `services/version_service.py` `select_version()` | Wipes `conversation_history`. |
+| `models.py` `ChatRequest.conversation_history` | Field exists but `/api/chat` (Form fields) never reads it. Dead contract. |
+| `context/SessionContext.tsx` | History only in React state. Not in the IndexedDB mirror (ADR-0014). Lost on reload / backend restart. |
+
+The only reader of `conversation_history` is `_find_diff_in_history()` (diff lookup for accept/reject). It is a write-mostly diff ledger, not chat memory.
+
+---
+
+# User Stories
+
+* After one successful edit I can say *"apply that to every similar element"* and the model generalises the accepted change.
+* If I accepted some diffs and rejected others, the next turn does **not** re-propose accepted ones and does **not** repeat rejected ones unless I ask.
+* If I left diffs pending and keep chatting, the model knows those changes are already in the current JSON.
+* I can answer a clarifying question (*"Which timeout — api or worker?"* → *"worker"*) and the model continues.
+* After reload or backend restart my thread is still there and the model still remembers it.
+* I can clear chat context when starting an unrelated task.
+
+---
+
+# Scope
+
+## In scope (MVP)
+
+* Server-authoritative, session-scoped chat history: every user turn and every assistant turn (explanation + diffs) stored.
+* **Per-diff status lifecycle** stored on each diff inside its turn: `pending | accepted | rejected | failed`, updated by all accept/reject paths.
+* Last-N turns replayed to the LLM under a token budget, assistant turns in the model's own output format **with per-diff status**.
+* System prompt rules for interpreting status.
+* Current working JSON stays the single source of truth; history is intent context only.
+* History mirrored to IndexedDB and restored after backend restart (extends ADR-0014).
+* "Clear chat" action + endpoint. History kept across version select (boundary marker), cleared on New Session / new upload.
+
+## Phase 2
+
+* **Read-only LLM tools** (function calling) for context that does not fit the prompt:
+  * `get_diff_history(path_prefix?, status?, limit)` — diffs from turns dropped by the budget.
+  * `get_json_at_path(pointer)` — exact values when only the skeleton was inlined (`llm_max_inline_chars` exceeded).
+  * `find_paths(key_or_value_pattern)` — "all such elements" lookups in large documents.
+  * Enabled only for deployments with `supports_tools: true` (config flag mirroring `supports_thinking`, cross-checked with `litellm.supports_function_calling`). Max 3 tool rounds per turn. Tools never mutate state.
+* Postgres `chat_messages` persistence per workspace document for logged-in users (ADR-0018).
+* Optional LLM summary of dropped turns.
+
+## Out of scope
+
+* Long-term cross-session memory.
+* Including `/api/explain` output in chat context.
+* Editing / branching past messages.
+
+---
+
+# Solution Overview
+
+```
+User msg ─▶ /api/chat ─▶ ChatHistoryService.build_messages(session, new_message, budget)
+                              ├─ system: build_system_prompt(CURRENT working JSON) + history rules
+                              ├─ history (oldest dropped first, pairs kept intact):
+                              │     user:      "<original message>"
+                              │     assistant: {"diffs":[{path,operation,new_value,status}...],"explanation":"..."}
+                              └─ user: "<new message>"
+                       ─▶ GatewayService.invoke(messages=…)  ─▶ SSE (unchanged events)
+                       ─▶ on complete: append user turn + assistant turn (diffs status=pending, skipped=failed)
+
+Accept/Reject endpoints ─▶ update status on the matching diff inside its turn
+```
+
+### Diff status lifecycle
+
+| Status | Meaning | In working_json? | In baseline_json? | Set by |
+|--------|---------|------------------|-------------------|--------|
+| `pending` | Proposed, previewed, user hasn't acted | yes | no | chat turn complete |
+| `accepted` | User accepted | yes | yes | accept_one / accept_all |
+| `rejected` | User rejected, reverted | no | no | reject_one / reject_all |
+| `failed` | Model proposed but it did not resolve against JSON | no | no | chat turn complete (skipped diffs) |
+
+### Prompt rules (added to system prompt when history present)
+
+1. History is for understanding intent. Every path, index and `old_value` MUST be resolved against the CURRENT WORKING JSON — history paths/indices may be stale.
+2. `accepted` and `pending` diffs are already in the CURRENT WORKING JSON. Never re-propose them.
+3. `rejected` diffs were declined by the user. Do not repeat them unless the user explicitly asks again.
+4. `failed` diffs did not apply; if the user repeats the request, re-derive paths from the CURRENT WORKING JSON.
+5. For "do it for all / same for others" requests, generalise from the most recent `accepted`/`pending` diffs to every matching element not yet changed, and skip elements whose equivalent diff was `rejected`.
+
+### Compaction & budget
+
+* History diffs keep `old_value` (the change's condition, e.g. 99 → 60); `old_value`/`new_value` truncated to 300 chars; diff list per turn capped at 20 + `"…and N more"` note.
+* Budget: `chat_history_max_turns` (default 10 pairs) and `chat_history_max_tokens` (default 8 000, counted with `litellm.token_counter`). Oldest whole pairs dropped first.
+* `litellm.utils.trim_messages` as last-resort safety net against model context window.
+
+### Server authoritative
+
+Client never sends history or status to `/api/chat` (prevents forged assistant turns / token abuse). Client sends history only to the restore endpoint after backend restart.
+
+---
+
+# Library Evaluation — reuse what already exists
+
+| Option | What it gives | Fit | Decision |
+|--------|---------------|-----|----------|
+| **LiteLLM** (already a dependency, v1.89.3) | `acompletion(messages=[...])` natively multi-turn for all our providers. `token_counter(model, messages)`, `utils.trim_messages(messages, model, max_tokens)`, `get_model_info()`, `supports_function_calling()`; tool calling via OpenAI-style `tools=` for Phase 2. | Zero new deps, matches ADR-0002 gateway. | **Adopt.** |
+| LangChain (`langchain-core` `trim_messages`, `RunnableWithMessageHistory`; `langchain-postgres` `PostgresChatMessageHistory`) | Mature history abstractions, trimming strategies, DB stores. | Wraps the runnable stack around a gateway we own (custom SSE, credits, deployment registry). We'd use ~2 functions. | **Reject** — borrow the pattern (last-N, pairs intact, system pinned). |
+| LlamaIndex `ChatMemoryBuffer` / `ChatSummaryMemoryBuffer` | Token-limited buffer, optional summarisation. | Heavy dep for a buffer. | **Reject.** Revisit summary in Phase 2. |
+| Mem0 / Zep / Letta | Long-term semantic memory, vector retrieval, often external. | Overkill; ships user JSON (possibly secrets) to another store. | **Reject.** |
+| Provider-native threads (OpenAI Responses `previous_response_id`, Conversations API) | Provider keeps the thread. | Provider-specific; breaks round-robin across deployments. | **Reject.** |
+| Vercel AI SDK `useChat` / assistant-ui (frontend) | Client message state, streaming, UI primitives. | Expects AI SDK stream protocol; our SSE has domain events (`diff`, `rate_limit`, `credit_limit`, `deployment`). Migration = rewrite of `sendMessage` + stream format. | **Defer** to a separate UI-refactor ADR. |
+| `idb` (already in `versionCache.ts`) | IndexedDB wrapper. | Extend `CachedWorkspace`. | **Adopt.** |
+| SQLAlchemy + Alembic (already used) | Postgres persistence. | `chat_messages` table. | **Adopt in Phase 2.** |
+
+Net: **no new dependencies** for MVP. Thin `ChatHistoryService` (~150 LOC) on top of LiteLLM helpers.
+
+### Why status inline (MVP) instead of tools first
+
+* History is small and bounded → status adds few tokens.
+* Tool calls add LLM round trips (latency + credits) on exactly the follow-up turns we want to improve.
+* Tool support uneven across deployments (small Ollama / NIM models); inline works everywhere.
+* Current SSE pipeline assumes one LLM call per turn; a tool loop is a bigger change, scoped to Phase 2.
+
+---
+
+# Success Metrics
+
+* Follow-up eval set (20 two/three-turn scenarios: "do it for all", "the second one", "undo the last change", partial accept + "do the rest", reject + "try again"): ≥ 85 % correct diffs (baseline ≈ 0 %).
+* 0 re-proposals of `accepted`/`pending` diffs and 0 unrequested repeats of `rejected` diffs in the eval set.
+* No regression on single-turn eval set.
+* Median prompt tokens per chat turn +≤ 25 %.
+
+---
+
+# Risks
+
+| Risk | Mitigation |
+|------|-----------|
+| Model copies stale paths/indices from history | Rule 1 (resolve against CURRENT JSON); rule H5a (same leaf granularity, only matching values); live eval `tests/test_chat_history_live.py`. |
+| Token cost → credits drain faster | Turn + token budget in Settings; shrink history first when JSON near `llm_max_inline_chars`. |
+| Context window overflow | Budget = context − system − `llm_max_tokens` reserve; `trim_messages` safety net. |
+| Status drift (frontend vs backend) | Backend authoritative; accept/reject responses return updated turn statuses. |
+| Prompt injection via JSON values echoed in history | History never client-supplied on `/api/chat`. |
+| Secrets in diffs persisted to IndexedDB / logs | Same exposure as working JSON today; full payloads DEBUG-only (ADR-0017). |
+
+---
+
+# Rollout
+
+1. Backend: full-turn storage, status lifecycle, `build_messages`, prompt rules, clear endpoint, restore with history. Flag `CHAT_HISTORY_ENABLED` (default on).
+2. Frontend: render history from session, status badges per diff, IndexedDB mirror/restore, Clear chat.
+3. ADR-0021: *Server-authoritative session chat history with per-diff status via LiteLLM messages (no memory framework)*.
+4. Phase 2: read-only tools, Postgres `chat_messages`, optional summaries.
+
+Detailed requirements:
+
+* Backend: `apps/api/ai/feature/chat-history/requirements.md`
+* Web: `apps/web/ai/feature/chat-history/requirements.md`

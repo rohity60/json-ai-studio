@@ -31,7 +31,7 @@ from fastapi import HTTPException
 from .auth import Principal, mask_secret
 from .deployment import DeploymentRegistry
 from .providers import DeploymentProvider
-from .services import credit_service
+from .services import chat_history_service, credit_service
 from .settings import get_settings
 
 logger = logging.getLogger("json_ai_studio.gateway")
@@ -258,8 +258,13 @@ class GatewayService:
         model: str | None = None,
         profile: str | None = None,
         reasoning: str | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Full LLM pipeline: credit check -> stream -> diff -> cost -> deduct -> log.
+
+        `history` is prior user/assistant messages replayed between the
+        system prompt and the new message (chat history); trimmed oldest
+        pair first if it would overflow the model's input window.
 
         `reasoning` is the per-request thinking override from the UI switch
         (None = deployment default); backends that don't support_thinking
@@ -316,14 +321,18 @@ class GatewayService:
                 }
             ) + "\n\n"
 
+            messages = chat_history_service.fit_to_context(
+                litellm_model,
+                system_prompt,
+                list(history or []),
+                message,
+                reserve_output=get_settings().llm_max_tokens,
+            )
             response = await litellm.acompletion(
                 model=litellm_model,
                 base_url=deployment.base_url,
                 api_key=deployment.api_key or None,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message},
-                ],
+                messages=messages,
                 stream=True,
                 timeout=120.0,
                 num_retries=0,

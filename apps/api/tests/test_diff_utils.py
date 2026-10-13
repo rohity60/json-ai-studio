@@ -438,7 +438,9 @@ class TestParseLlmResponse:
     def test_garbage_json_like_text(self):
         diffs, explanation = parse_llm_response("{not valid json at all")
         assert diffs == []
-        assert explanation == "{not valid json at all"
+        # JSON-looking but unparseable output gets a friendly message, never
+        # raw model JSON (df8a7b8).
+        assert "couldn't apply that cleanly" in explanation
 
 
 class TestNormalizeEntry:

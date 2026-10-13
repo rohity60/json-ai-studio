@@ -4,7 +4,8 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import ReactDOM from 'react-dom';
 import { toast } from 'sonner';
 import * as api from '../lib/api';
-import { saveWorkspace, loadWorkspace, clearWorkspace } from '../lib/versionCache';
+import { saveWorkspace, loadWorkspace, clearWorkspace, MAX_CACHED_TURNS } from '../lib/versionCache';
+import { pendingDiffs, syncStatuses, type UiChatTurn } from '../lib/chatHistory';
 import { showRateLimitModal } from '../components/RateLimitModal';
 import { trackEvent } from '../lib/gtagConversion';
 
@@ -71,7 +72,7 @@ type SessionState = {
   workingJson: Record<string, any>;
   baselineJson: Record<string, any>;
   versions: SessionVersion[];
-  conversationHistory: Array<{ role: string; content: string; diffs?: any[]; explanation?: string }>;
+  conversationHistory: UiChatTurn[]; // server-authoritative thread + diff statuses
   activeVersionId: string | null;
   loading: boolean;
   error: string | null;
@@ -102,6 +103,7 @@ type SessionContextValue = {
     activeVersionId: string | null;
   }) => Promise<void>;
   clearSession: () => Promise<void>;
+  clearChat: () => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -158,7 +160,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       workingJson: (data.working_json as Record<string, any>) || {},
       baselineJson: (data.baseline_json as Record<string, any>) || {},
       versions: mapVersions(data.versions),
-      conversationHistory: [],
+      conversationHistory: (data.conversation_history as UiChatTurn[]) || [],
       activeVersionId: (data.active_version_id as string) || null,
       loading: false,
       error: null,
@@ -209,6 +211,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             working_json: cached!.workingJson,
             baseline_json: cached!.baselineJson,
             active_version_id: cached!.activeVersionId,
+            conversation_history: cached!.conversationHistory || [],
             }, apiKey);
           localStorage.setItem('json-ai-studio-session', JSON.stringify({ sessionId: sess.id }));
           hydrated(sess.id, data);
@@ -250,11 +253,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         workingJson: state.workingJson,
         baselineJson: state.baselineJson,
         activeVersionId: state.activeVersionId,
+        conversationHistory: state.conversationHistory
+          .filter((t) => !t.ephemeral)
+          .slice(-MAX_CACHED_TURNS)
+          .map(({ ephemeral: _e, ...t }) => t),
         updatedAt: new Date().toISOString(),
         });
       }, 500);
     return () => clearTimeout(t);
-    }, [state.sessionId, state.versions, state.workingJson, state.baselineJson, state.activeVersionId, state.loading]);
+    }, [state.sessionId, state.versions, state.workingJson, state.baselineJson, state.activeVersionId, state.conversationHistory, state.loading]);
 
   const updateSessionStorage = (sessionId: string) => {
     localStorage.setItem('json-ai-studio-session', JSON.stringify({ sessionId }));
@@ -303,6 +310,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         sessionId: data.session_id || prev.sessionId,
         workingJson: data.after || data.parsed_json || prev.workingJson,
         baselineJson: data.before || data.parsed_json || {},
+        conversationHistory: [], // new document → backend dropped the thread
         error: null,
         loading: false,
         explainMarkdown: null,
@@ -329,11 +337,19 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
          // 1. Snapshot the initial payload variables
     const currentWorkingJson = JSON.parse(JSON.stringify(state.workingJson));
+    // Optimistic turns get temp ids; the `complete` event swaps in the
+    // server ids. Stays ephemeral (never mirrored) if the server didn't
+    // store the turn (quota stop / error).
+    const tempUserId = `local-u-${Date.now()}`;
+    const tempAssistantId = `local-a-${Date.now()}`;
 
     setState((prev) => ({
         ...prev,
       loading: false,
-      conversationHistory: [...prev.conversationHistory, { role: 'user', content: message }]
+      conversationHistory: [
+        ...prev.conversationHistory,
+        { id: tempUserId, role: 'user', content: message, ephemeral: true },
+      ]
       }));
 
     try {
@@ -342,13 +358,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       let baselineJson = state.baselineJson || {};
       const diffs: any[] = [];
       let textAccumulator = '';
+      let stored: { userId: string; assistantId: string } | null = null;
+      let quotaStopped = false;
 
         // Initialize the assistant message container in UI history
       setState((prev) => ({
           ...prev,
         conversationHistory: [
             ...prev.conversationHistory,
-            { role: 'assistant', content: '', diffs: [] }
+            { id: tempAssistantId, role: 'assistant', content: '', diffs: [], ephemeral: true }
           ]
         }));
 
@@ -376,6 +394,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             retryAfter: chunk.data?.retry_after,
             loginAvailable: chunk.data?.login_available === true,
           });
+          quotaStopped = true;
           break;
           }
 
@@ -393,6 +412,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             // Also extract explanation text from the complete event payload
           if (chunk.data.explanation) {
             textAccumulator += String(chunk.data.explanation);
+            }
+          if (chunk.data.user_turn_id && chunk.data.assistant_turn_id) {
+            stored = { userId: chunk.data.user_turn_id, assistantId: chunk.data.assistant_turn_id };
             }
           structureChanged = true;
           } else if (chunk.type === 'content' || chunk.type === 'text') {
@@ -430,13 +452,22 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
          }
          }
 
-        // 4. Stream finalized successfully
+        // 4. Stream finalized: adopt server ids, or drop/keep-local the
+        // optimistic pair when the backend did not store the turn.
+      const storedIds = stored as { userId: string; assistantId: string } | null;
       ReactDOM.flushSync(() => {
-        setState((prev) => ({
-            ...prev,
-          loading: false,
-          error: null
-          }));
+        setState((prev) => {
+          let history = prev.conversationHistory;
+          if (quotaStopped) {
+            history = history.filter((t) => t.id !== tempUserId && t.id !== tempAssistantId);
+            } else if (storedIds) {
+            history = history.map((t) =>
+              t.id === tempUserId ? { ...t, id: storedIds.userId, ephemeral: false }
+                : t.id === tempAssistantId ? { ...t, id: storedIds.assistantId, ephemeral: false }
+                : t);
+            }
+          return { ...prev, conversationHistory: history, loading: false, error: null };
+          });
         });
 
       } catch (err: any) {
@@ -456,16 +487,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!state.sessionId) return;
     try {
       const data = await api.acceptDiff(state.sessionId, diffId, apiKey);
-      setState(prev => {
-        const history = [...prev.conversationHistory];
-        if (history.length > 0) {
-          const last = { ...history[history.length - 1] };
-          last.diffs = (last.diffs || []).filter((d: any) => d.id !== diffId);
-          history[history.length - 1] = last;
-          }
-        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: [...history] };
-        });
-      } catch (err: any) { toast.error(String(err)); }
+      setState(prev => ({
+        ...prev,
+        workingJson: data.working_json,
+        baselineJson: data.baseline_json || prev.baselineJson,
+        conversationHistory: syncStatuses(prev.conversationHistory, data.conversation_history),
+        }));
+      } catch (err: any) {
+      toast.error(err?.status === 409 ? 'That change was already resolved.' : String(err));
+      }
     }, [state.sessionId, apiKey]);
 
   const createVersion = useCallback(async ( label: string) => {
@@ -487,48 +517,45 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!state.sessionId) return;
     try {
       const data = await api.rejectDiff(state.sessionId, diffId, apiKey);
-      setState(prev => {
-        const history = [...prev.conversationHistory];
-        if (history.length > 0) {
-          const last = { ...history[history.length - 1] };
-          last.diffs = (last.diffs || []).filter((d: any) => d.id !== diffId);
-          history[history.length - 1] = last;
-          }
-        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: [...history] };
-        });
-      } catch (err: any) { toast.error(String(err)); }
+      setState(prev => ({
+        ...prev,
+        workingJson: data.working_json,
+        baselineJson: data.baseline_json || prev.baselineJson,
+        conversationHistory: syncStatuses(prev.conversationHistory, data.conversation_history),
+        }));
+      } catch (err: any) {
+      toast.error(err?.status === 409 ? 'That change was already resolved.' : String(err));
+      }
     }, [state.sessionId, apiKey]);
 
   const acceptAllDiffs = useCallback(async () => {
     if (!state.sessionId) return;
     try {
       const data = await api.acceptDiffBatch(state.sessionId, apiKey);
-      setState(prev => {
-        const history = [...prev.conversationHistory];
-        if (history.length > 0) {
-          const last = { ...history[history.length - 1] };
-          last.diffs = [];
-          history[history.length - 1] = last;
-          }
-        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: [...history] };
-        });
-      } catch (err: any) { toast.error(String(err)); }
+      setState(prev => ({
+        ...prev,
+        workingJson: data.working_json,
+        baselineJson: data.baseline_json || prev.baselineJson,
+        conversationHistory: syncStatuses(prev.conversationHistory, data.conversation_history),
+        }));
+      } catch (err: any) {
+      toast.error(err?.status === 409 ? 'That change was already resolved.' : String(err));
+      }
     }, [state.sessionId, apiKey]);
 
   const rejectAllDiffs = useCallback(async () => {
     if (!state.sessionId) return;
     try {
       const data = await api.rejectDiffBatch(state.sessionId, apiKey);
-      setState(prev => {
-        const history = [...prev.conversationHistory];
-        if (history.length > 0) {
-          const last = { ...history[history.length - 1] };
-          last.diffs = [];
-          history[history.length - 1] = last;
-          }
-        return { ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson, conversationHistory: [...history] };
-        });
-      } catch (err: any) { toast.error(String(err)); }
+      setState(prev => ({
+        ...prev,
+        workingJson: data.working_json,
+        baselineJson: data.baseline_json || prev.baselineJson,
+        conversationHistory: syncStatuses(prev.conversationHistory, data.conversation_history),
+        }));
+      } catch (err: any) {
+      toast.error(err?.status === 409 ? 'That change was already resolved.' : String(err));
+      }
     }, [state.sessionId, apiKey]);
 
 
@@ -599,6 +626,36 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [apiKey]);
 
+  // Clear the chat thread (model context). Backend refuses (409) while
+  // diffs are pending — offer to resolve them first, then retry.
+  const clearChat = useCallback(async () => {
+    if (!state.sessionId) return;
+    const sessionId = state.sessionId;
+    const doClear = async () => {
+      await api.clearChat(sessionId, apiKey);
+      setState((prev) => ({ ...prev, conversationHistory: [] }));
+      toast.success('Chat cleared');
+      };
+    try {
+      await doClear();
+      } catch (err: any) {
+      if (err?.status !== 409) { toast.error(String(err)); return; }
+      const n = pendingDiffs(state.conversationHistory).length;
+      const resolveThen = (fn: typeof api.acceptDiffBatch) => async () => {
+        try {
+          const data = await fn(sessionId, apiKey);
+          setState((prev) => ({ ...prev, workingJson: data.working_json, baselineJson: data.baseline_json || prev.baselineJson }));
+          await doClear();
+          } catch (e: any) { toast.error(String(e)); }
+        };
+      toast.warning(`${n || 'Some'} change(s) still pending. Resolve them before clearing.`, {
+        action: { label: 'Accept all', onClick: resolveThen(api.acceptDiffBatch) },
+        cancel: { label: 'Reject all', onClick: resolveThen(api.rejectDiffBatch) },
+        duration: 10000,
+        });
+      }
+    }, [state.sessionId, state.conversationHistory, apiKey]);
+
   const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false);
   const [pendingVersionId, setPendingVersionId] = useState<string | null>(null);
 
@@ -614,7 +671,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           ...state,
         workingJson: data.working_json || {},
         baselineJson: data.baseline_json || {},
-        conversationHistory: [],
+        conversationHistory: (data.conversation_history as UiChatTurn[]) || [],
         activeVersionId: data.active_version_id,
         loading: false,
         error: null,
@@ -712,7 +769,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   if (state.loading) return null;
 
   return (
-      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson, clearCache, loadSnapshot, clearSession }}>
+      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson, clearCache, loadSnapshot, clearSession, clearChat }}>
         {children}
       </SessionContext.Provider>
     );

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..settings import Settings
+from ..settings import Settings, get_settings
 from .base import DeploymentProvider
 
 
@@ -24,3 +24,21 @@ class OllamaProvider(DeploymentProvider):
 
     def _resolve_base_url(self, cfg: dict[str, Any], settings: Settings) -> str:
         return settings.ollama_base_url or ""
+
+    def completion_params(
+        self, model: str, reasoning: str | None = None
+    ) -> dict[str, Any]:
+        """Ollama-native controls instead of OpenAI reasoning_effort.
+
+        - ``think``: Ollama runs thinking-capable models (Gemma 4, Qwen 3)
+          with thinking ON unless told otherwise; with reasoning "none" that
+          used to burn the whole timeout on hidden thinking and return no
+          content. Map the generic level to an explicit on/off.
+        - ``num_ctx``: Ollama's default context window is small and silently
+          truncates long prompts (system prompt + history); set it.
+        """
+        level = self.resolve_reasoning(reasoning)
+        return {
+            "think": not (level is None or level.lower() == "none"),
+            "num_ctx": get_settings().ollama_num_ctx,
+        }

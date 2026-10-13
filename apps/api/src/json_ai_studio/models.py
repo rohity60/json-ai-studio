@@ -42,12 +42,24 @@ class VersionSnapshot(BaseModel):
     created_at: datetime
 
 
-class ChatTurn(BaseModel):
-    """Single chat message with role and optional attached diffs."""
+DiffStatus = Literal["pending", "accepted", "rejected", "failed"]
 
+
+class ChatTurn(BaseModel):
+    """Single chat message with role and optional attached diffs.
+
+    `kind="boundary"` marks a context reset (e.g. version switch): turns
+    before it stay visible but are not replayed to the LLM.
+    """
+
+    id: str = Field(default_factory=lambda: uuid4().hex)
     role: Literal["user", "assistant"]
+    kind: Literal["message", "boundary"] = "message"
     content: str
     diffs: list[DiffEntry] | None = None
+    # Bulk ops the model emitted (pattern + where), expanded into `diffs`.
+    bulk: list[dict[str, Any]] | None = None
+    created_at: datetime | None = None
 
 
 # -- Wire Contracts --
@@ -61,6 +73,10 @@ class DiffEntry(BaseModel):
     old_value: Any | None = None
     new_value: Any | None = None
     id: str = ""  # UNIQUE ID — backend generates, frontend uses for accept/reject
+    # Lifecycle: pending (previewed in working_json) -> accepted | rejected.
+    # failed = proposed but did not resolve against the JSON (never applied).
+    status: DiffStatus = "pending"
+    failure_reason: str | None = None
 
 
 class ValidationErrorItem(BaseModel):
@@ -118,8 +134,8 @@ class SelectVersionRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    # History is server-authoritative: never accepted from the client here.
     session_id: str
-    conversation_history: list[ChatTurn] = []
     working_json: dict[str, Any]
     message: str
 
@@ -170,6 +186,9 @@ class RestoreVersionsRequest(BaseModel):
     working_json: dict[str, Any] | None = None
     baseline_json: dict[str, Any] | None = None
     active_version_id: str | None = None
+    # Mirrored chat thread (with diff statuses). The only path where
+    # client-held history enters the server.
+    conversation_history: list[ChatTurn] | None = None
 
 
 class QuotaErrorDetail(BaseModel):

@@ -97,9 +97,8 @@ class TestGetPrincipalAnonymous:
 
 class TestGetPrincipalBearer:
     @pytest.mark.asyncio
-    async def test_bearer_without_auth_configured_returns_503(self):
+    async def test_bearer_without_auth_configured_returns_503(self, auth_disabled):
         # No AUTH0_* / DATABASE_URL => auth disabled.
-        get_settings.cache_clear()
         req = make_request(headers={"authorization": "Bearer something"})
         with pytest.raises(HTTPException) as exc:
             await get_principal(req)

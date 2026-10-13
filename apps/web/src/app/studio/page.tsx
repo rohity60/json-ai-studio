@@ -9,6 +9,7 @@ import DiffViewer from '@/components/DiffViewer';
 import JSONTree from '@/components/JSONTree';
 import WorkspaceSidebar from '@/components/WorkspaceSidebar';
 import { useSession } from '@/context/SessionContext';
+import { pendingDiffs } from '@/lib/chatHistory';
 import { useWorkspace } from '@/context/WorkspaceContext';
 import { FileJson2, MessageSquare, Code2, History, Sparkles, Download, Copy, Check, Plus, Save } from 'lucide-react';
 import ExplainPanel from '@/components/ExplainPanel';
@@ -37,15 +38,6 @@ function TabButton({ active, onClick, children }: {
   );
 }
 
-// Pending diffs live on the latest assistant message (same source DiffViewer reads)
-function pendingDiffCount(history: Array<{ role: string; diffs?: any[] }>): number {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const turn = history[i];
-    if (turn.role === 'assistant' && turn.diffs?.length) return turn.diffs.length;
-  }
-  return 0;
-}
-
 export default function Home() {
   const { state, uploadJson, explainJson, exportJson, createVersion } = useSession();
   const { dirty, loggedIn, guardDirty, startNewDocument } = useWorkspace();
@@ -65,7 +57,7 @@ export default function Home() {
    // Derive displayed json from context workingJson.
    // On first mount workingJson is {} — fall back to an empty object.
   const json: Record<string, any> = state.workingJson || {};
-  const diffCount = pendingDiffCount(state.conversationHistory);
+  const diffCount = pendingDiffs(state.conversationHistory).length;
 
   // Auto-open the Diff Viewer when a new assistant message carries diffs.
   // Ref guard: accepts/rejects mutate history without adding messages and
@@ -74,7 +66,8 @@ export default function Home() {
   useEffect(() => {
     const idx = state.conversationHistory.length - 1;
     const last = state.conversationHistory[idx];
-    if (last?.role === 'assistant' && last.diffs?.length && idx !== lastDiffMsgRef.current) {
+    const lastHasPending = (last?.diffs || []).some((d) => (d.status ?? 'pending') === 'pending');
+    if (last?.role === 'assistant' && lastHasPending && idx !== lastDiffMsgRef.current) {
       lastDiffMsgRef.current = idx;
       setPreviewTab('diff');
     }

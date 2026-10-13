@@ -49,6 +49,8 @@ Links to relevant discussions, PRDs, prior ADRs.
 | [0012](0012-openapi-yaml-as-machine-readable-contract-spec-at-project-root.md) | OpenAPI YAML monolith at `openapi/spec.yaml` as machine-readable contract | Accepted | 2026-06-21 |
 | [0019](0019-static-git-content-for-templates-and-blog-hub.md) | Static git content (SSG) for templates & blog hub; no CMS/DB | Accepted | 2026-07-15 |
 | [0020](0020-seed-session-from-template-via-backend-endpoint.md) | Seed session from template via `POST /api/sessions/from-template` | Accepted | 2026-07-15 |
+| [0021](0021-server-authoritative-chat-history-with-diff-status.md) | Server-authoritative chat history with per-diff status via LiteLLM messages | Accepted | 2026-10-10 |
+| [0022](0022-server-side-bulk-edits-for-large-json.md) | Server-side bulk edits (`*` pattern + where) for large JSON | Accepted | 2026-10-11 |
 
 ## Adding a New ADR
 

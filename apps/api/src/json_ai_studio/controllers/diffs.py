@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..auth import require_api_key
 from ..diff_utils import DiffApplyError
 from ..services import diff_service
-from ..services.errors import NotFoundError
+from ..services.errors import ConflictError, NotFoundError
 
 logger = logging.getLogger("json_ai_studio.controllers.diffs")
 
@@ -61,6 +61,8 @@ async def endpoint_accept_single_diff(
         return await diff_service.accept_one(session_id, diff_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except DiffApplyError as exc:
         raise HTTPException(
             status_code=422, detail=f"Cannot accept diff {diff_id}: {exc}"
@@ -84,6 +86,8 @@ async def endpoint_reject_single_diff(
         return await diff_service.reject_one(session_id, diff_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except DiffApplyError as exc:
         raise HTTPException(
             status_code=422, detail=f"Cannot reject diff {diff_id}: {exc}"

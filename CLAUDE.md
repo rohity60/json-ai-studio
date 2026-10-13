@@ -18,14 +18,14 @@ cd apps/web && npm install && npm run dev
 # → http://localhost:3000
 ```
 
-No tests, no linting, no CI. Run `pytest` or `ruff` manually if installed.
+API tests: `apps/api/tests/` (pytest + pytest-asyncio, FastAPI TestClient; LLM stubbed at `GatewayService.invoke`). Run: `cd apps/api && PYTHONPATH=. uv run pytest`. Workspace DB tests need the compose Postgres (`json_ai_studio_test` on :5433). No frontend tests, no linting, no CI.
 Python files: always format with `black .` after editing (install via `uv add --dev black`).
 
 ## Structure
 
 ```
 json-ai-studio/
-├── openapi/spec.yaml            ← Single source of truth. 26 endpoints, 33 schemas. OpenAPI 3.1 YAML.
+├── openapi/spec.yaml            ← Single source of truth. 27 endpoints, 33 schemas. OpenAPI 3.1 YAML.
 ├── apps/api/                    ← FastAPI backend, layered per ADR-0013
 │     └── src/json_ai_studio/
 │           ├── main.py              ← Thin app factory: FastAPI init, lifespan (DB engine), CORS, include_router per controller.
@@ -65,9 +65,11 @@ json-ai-studio/
 
 ## Key facts
 
-- **OpenAPI-first contract**: `openapi/spec.yaml` (26 endpoints, 33 schemas) is the contract source. Pydantic models in `models.py` implement it verbatim (ADR-0011). Frontend TS types are hand-written mirrors — not auto-generated.
+- **OpenAPI-first contract**: `openapi/spec.yaml` (27 endpoints, 33 schemas) is the contract source. Pydantic models in `models.py` implement it verbatim (ADR-0011). Frontend TS types are hand-written mirrors — not auto-generated.
 - **Session model**: In-memory store behind async `SessionStore` ABC (`db/session_store.py`, ADR-0013). Each session = working_json + version snapshots + conversation history. No TTL. Browser mirrors versions + working JSON to IndexedDB and bulk-restores into a fresh session after backend restart (ADR-0014).
 - **Chat flow**: User NL message → LiteLLM call → field-level diffs → SSE stream: thinking → diff(s) → complete (ADR-0002, ADR-0004). The system prompt in `main.py` embeds the current working JSON as few-shot examples (ADR-0005).
+- **Chat history (ADR-0021)**: server-authoritative. Each turn stores user + assistant turns; diffs carry `status` (pending/accepted/rejected/failed) updated by accept/reject. `services/chat_history_service.py` replays recent turns (with statuses) to the LLM under a turn/token budget (`CHAT_HISTORY_*` settings). Client never sends history to `/api/chat`; only via versions/restore.
+- **Bulk edits (ADR-0022)**: model may return `bulk` ops (`/records/*/field` + `where`) alongside `diffs`; `bulk_edits.py` expands them against the full JSON into normal diffs. Skeleton prompt (large docs) adds ARRAY FIELD STATS. Live evals: `LIVE_LLM=1 PYTHONPATH=. uv run pytest tests/test_chat_history_live.py` — pinned to local Ollama (`LIVE_DEPLOYMENT` / `LIVE_MODEL` to override).
 - **Diff engine**: `deepdiff` for backend (ADR-0003); client-side `deep-diff` for DiffViewer. Business rules only (timeout > 0, retryCount <= 10). No JSON Schema validation yet.
 - **Error handling**: Fail-fast with 500 + hint string (ADR-0007). No retry logic at MVP.
 - **Logging (ADR-0017)**: Env-driven via `Settings` LOG_* fields. Console (stderr) + size-rotating file handler (`logs/app.log`, `RotatingFileHandler`). Plain text. `LOG_LEVEL=DEBUG` → full-payload debug logs (working JSON, prompts, LLM output, diffs). Secrets never logged (masked keys, claims-only, no bearer tokens). Docker bind-mounts `./logs/api`. API-only; frontend logging out of scope.
@@ -92,6 +94,7 @@ From `openapi/spec.yaml`, implemented in `controllers/`:
 | POST   | `/api/sessions/{id}/diffs/{diffId}/reject` | Reject one diff |
 | POST   | `/api/sessions/{id}/diffs/accept-all` | Accept all diffs |
 | POST   | `/api/sessions/{id}/diffs/reject-all` | Reject all diffs |
+| DELETE | `/api/sessions/{id}/chat` | Clear chat history (409 while diffs pending, ADR-0021) |
 | POST   | `/api/explain` | LLM markdown explanation of working JSON |
 | GET    | `/api/me` | Logged-in user profile + credit quota (Auth0 bearer only) |
 | GET/POST | `/api/workspaces` | List / create workspaces (bearer only, ADR-0018) |

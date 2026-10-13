@@ -79,6 +79,18 @@ def clean_settings_cache():
     get_settings.cache_clear()
 
 
+@pytest.fixture
+def auth_disabled(monkeypatch):
+    """Force auth off regardless of apps/api/.env.
+
+    Settings reads `.env`, so a dev checkout with real AUTH0_*/DATABASE_URL
+    would otherwise enable auth. Empty env vars override dotenv values.
+    """
+    for var in ("AUTH0_DOMAIN", "AUTH0_AUDIENCE", "DATABASE_URL"):
+        monkeypatch.setenv(var, "")
+    get_settings.cache_clear()
+
+
 # ---------------------------------------------------------------------------
 # Workspace DB fixtures (ADR-0018)
 #
@@ -156,3 +168,36 @@ async def user_id(ws_db):
 async def other_user_id(ws_db):
     """A second user, for cross-tenant isolation tests."""
     return await _make_user(ws_db, "o@test.com")
+
+
+# ---------------------------------------------------------------------------
+# Live LLM pinning (opt-in live evals, LIVE_LLM=1)
+#
+# Local runs must not burn cloud free-tier quota: pin the registry to ONE
+# deployment (default the local Ollama, `ollama_local`, which needs
+# OLLAMA_BASE_URL in apps/api/.env) instead of round-robining every enabled
+# cloud deployment. Override with LIVE_DEPLOYMENT=<name> and/or
+# LIVE_MODEL=<model> (defaults to that deployment's base_model).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def pinned_deployment(monkeypatch):
+    import os
+
+    from src.json_ai_studio.deployment import DeploymentRegistry
+
+    target = os.environ.get("LIVE_DEPLOYMENT", "ollama_local")
+    DeploymentRegistry.reload()  # fresh providers with current settings
+    providers = {p.name: p for p in DeploymentRegistry.list_deployments()}
+    if target not in providers:
+        pytest.skip(f"unknown deployment {target!r}")
+    chosen = providers[target]
+    if not chosen.base_url:
+        pytest.skip(f"{target} has no endpoint configured (e.g. OLLAMA_BASE_URL)")
+    for p in providers.values():
+        monkeypatch.setattr(p, "enabled", p.name == target)
+    if os.environ.get("LIVE_MODEL"):
+        monkeypatch.setattr(chosen, "base_model", os.environ["LIVE_MODEL"])
+    yield chosen
+    DeploymentRegistry.reload()
