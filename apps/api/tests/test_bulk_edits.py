@@ -370,3 +370,49 @@ def test_ollama_disables_thinking_and_sets_context(monkeypatch):
     assert p.completion_params("gemma4:12b") == {"think": False, "num_ctx": 32768}
     p.supports_thinking = True
     assert p.completion_params("gemma4:12b", "high")["think"] is True
+
+
+class TestCopyFromField:
+    """Prod 2026-10-14: 'i want all of the modifiedDate to match the
+    creationDate' on a 600-entry doc wrote the placeholder
+    'REPLACE_WITH_CORRESPONDING_CREATION_DATE' into every entry."""
+
+    DOC = {
+        "entries": [
+            {"creationDate": "2025-01-10", "modifiedDate": "2026-01-20"},
+            {"creationDate": "2025-02-11", "modifiedDate": "2025-02-11"},
+            {"modifiedDate": "2026-03-22"},  # no source field
+            {"creationDate": {"d": "2025-04-13"}, "modifiedDate": "x"},
+        ]
+    }
+
+    def test_copies_each_elements_own_value(self):
+        diffs = expand_bulk(
+            {
+                "path": "/entries/*/modifiedDate",
+                "operation": "modify",
+                "new_value": {"$from": "creationDate"},
+            },
+            self.DOC,
+            100,
+        )
+        # [1] already equal (no-op), [2] has no creationDate (skipped)
+        assert [(d["path"], d["new_value"]) for d in diffs] == [
+            ("/entries/0/modifiedDate", "2025-01-10"),
+            ("/entries/3/modifiedDate", {"d": "2025-04-13"}),
+        ]
+        assert diffs[0]["old_value"] == "2026-01-20"
+
+    def test_copied_objects_are_independent(self):
+        _, diff = expand_bulk(
+            {"path": "/entries/*/modifiedDate", "new_value": {"$from": "creationDate"}},
+            self.DOC,
+            100,
+        )
+        diff["new_value"]["d"] = "mutated"
+        assert self.DOC["entries"][3]["creationDate"] == {"d": "2025-04-13"}
+
+    def test_prompt_documents_from(self):
+        from src.json_ai_studio.prompting import build_system_prompt
+
+        assert '{"$from":' in build_system_prompt({"a": 1})

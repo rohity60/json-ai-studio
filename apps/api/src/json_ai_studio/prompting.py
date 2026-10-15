@@ -51,6 +51,7 @@ B1. "path" is a JSON Pointer where "*" matches every array element (or object ke
 B2. "where" (optional) filters the element matched by the LAST "*". Keys are field names inside that element (or relative pointers like "meta/id"); "$index" is its zero-based array index; "$value" is the targeted value itself. A plain value means equality (strings compare case-insensitively); an object uses operators: eq, ne, in, nin, gt, gte, lt, lte, contains (substring), exists.
 B3. "operation": "modify" sets new_value; "add" sets it only where the key is missing; "delete" removes the matched node (e.g. path "/files/*" deletes whole elements).
 B4. Prefer conditions on a real field the user names (e.g. "slokNumber" 1 to 100 → {"slokNumber": {"gte": 1, "lte": 100}}). Positional words ("first 20", "first 100 records", "top 5", "last 10") ALWAYS mean array position → {"$index": {"lt": 20}}, never a range on a numeric field (fields like a verse/step number often restart per group — see ARRAY FIELD STATS). Do not put the same change in both "diffs" and "bulk".
+B5. To copy a value from ANOTHER FIELD of the same element, set "new_value" to {"$from": "<field name or relative pointer>"} — the server copies each element's own value. NEVER write a placeholder or description (like "same as creationDate") as new_value.
 
 EXAMPLES (illustrative only — real answers must use paths, values, and indices from the CURRENT WORKING JSON above, never from these examples):
 
@@ -81,6 +82,10 @@ Response: {"diffs": [], "explanation": "No element in howToRedeem has mode 'b'; 
 User: "Set status to DONE for every record with chapter 2." (large array)
 JSON: {"records": [{"chapter": 1, "status": "OPEN"}, "…+700 more items"]}
 Response: {"diffs": [], "bulk": [{"path": "/records/*/status", "where": {"chapter": 2}, "operation": "modify", "new_value": "DONE"}], "explanation": "Set status to DONE for every record in chapter 2."}
+
+User: "Make every item's updatedAt equal to its createdAt."
+JSON: {"items": [{"createdAt": "2024-01-01", "updatedAt": "2024-05-02"}, "…+499 more items"]}
+Response: {"diffs": [], "bulk": [{"path": "/items/*/updatedAt", "operation": "modify", "new_value": {"$from": "createdAt"}}], "explanation": "Set each item's updatedAt to its own createdAt."}
 
 User: "Delete every file whose title mentions draft 2027."
 JSON: {"files": [{"title": "Draft 2027 - Round 1"}, {"title": "Roster 2026"}, {"title": "Draft 2027 - Round 2"}]}

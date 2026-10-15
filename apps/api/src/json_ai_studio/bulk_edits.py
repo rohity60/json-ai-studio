@@ -26,10 +26,16 @@ Pattern rules:
   exists.
 - ``operation``: modify (set), add (set only where the key is missing),
   delete (remove the matched node).
+- ``new_value`` may be ``{"$from": "<field>"}`` to copy, per element, the
+  value of another field of the element matched by the last ``*`` (e.g.
+  "set modifiedDate to its creationDate"). Elements lacking that field are
+  skipped. Without this the model used to write a placeholder string into
+  every element.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, Iterator
 
@@ -226,6 +232,13 @@ def expand_bulk(op: dict[str, Any], doc: Any, max_matches: int) -> list[dict[str
         if where and not _matches(where, anchor, value if exists else _MISSING):
             continue
         new_value = None if operation == "delete" else op.get("new_value")
+        if isinstance(new_value, dict) and set(new_value) == {"$from"}:
+            if not anchor:
+                raise BulkEditError("'$from' needs a '*' element to copy from")
+            new_value = _resolve(anchor[0], str(new_value["$from"]))
+            if new_value is _MISSING:
+                continue  # this element has no source field
+            new_value = copy.deepcopy(new_value)
         if operation == "modify" and value == new_value:
             continue  # already has the target value
         diffs.append(
