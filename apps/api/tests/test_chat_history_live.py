@@ -333,3 +333,28 @@ def test_gita_all_records_same_change(client, gita_after_first_ten):
         all(doc["records"][i]["sectionId"] == "bhagavad_gita_ch_1" for i in changed)
         or len(changed) == len(ids) - 1
     ), "changed a mix of chapters that matches neither reading"
+
+
+def test_copy_field_across_large_array(client):
+    """Prod 2026-10-14: 'i want all of the modifiedDate to match the
+    creationDate' on a skeleton-sized doc wrote a placeholder string into
+    every entry. Must copy each entry's own creationDate."""
+    doc = {
+        "source": "cms-export",
+        "entries": [
+            {
+                "id": f"e{i}",
+                "title": f"Entry {i} " + "text " * 30,
+                "creationDate": f"2025-0{1 + i % 9}-1{i % 10}T10:00:00Z",
+                "modifiedDate": f"2026-0{1 + i % 9}-2{i % 10}T12:30:00Z",
+            }
+            for i in range(600)
+        ],
+    }
+    done = chat(
+        client,
+        seed(client, doc),
+        "i want all of the modifiedDate to match the creationDate",
+    )
+    entries = done["working_json"]["entries"]
+    assert all(e["modifiedDate"] == e["creationDate"] for e in entries), entries[:2]
