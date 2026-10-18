@@ -39,8 +39,12 @@ deployments:
     models:
         - "google/gemma-4-31b-it"
 
+  # Disabled 2026-10-18: the shared free pool for this model 429s on most
+  # calls (upstream_provider_shared_pool), so round-robin failed roughly
+  # every other chat request in prod. Re-enable with a BYOK/paid key or once
+  # gateway failover exists.
   openrouter:
-    enabled: true
+    enabled: false
     base_model: "google/gemma-4-26b-a4b-it:free"
     reasoning: "none"
     supports_thinking: false
