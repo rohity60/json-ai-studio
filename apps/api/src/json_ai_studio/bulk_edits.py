@@ -143,10 +143,35 @@ def _norm(value: Any) -> Any:
     return value.casefold() if isinstance(value, str) else value
 
 
+# Spellings small models emit for the canonical operators.
+_OPERATOR_ALIASES = {
+    "neq": "ne",
+    "!=": "ne",
+    "not_eq": "ne",
+    "not_equal": "ne",
+    "==": "eq",
+    "equals": "eq",
+    "equal": "eq",
+    ">": "gt",
+    ">=": "gte",
+    "ge": "gte",
+    "<": "lt",
+    "<=": "lte",
+    "le": "lte",
+    "not_in": "nin",
+    "includes": "contains",
+}
+
+
+def _container(value: Any) -> bool:
+    return isinstance(value, (dict, list))
+
+
 def _check(actual: Any, cond: Any) -> bool:
     if not isinstance(cond, dict):
         return actual is not _MISSING and _norm(actual) == _norm(cond)
-    for op, expected in cond.items():
+    for raw_op, expected in cond.items():
+        op = _OPERATOR_ALIASES.get(str(raw_op).strip().lower(), raw_op)
         if op == "exists":
             if (actual is not _MISSING) != bool(expected):
                 return False
@@ -232,7 +257,8 @@ def expand_bulk(op: dict[str, Any], doc: Any, max_matches: int) -> list[dict[str
         if where and not _matches(where, anchor, value if exists else _MISSING):
             continue
         new_value = None if operation == "delete" else op.get("new_value")
-        if isinstance(new_value, dict) and set(new_value) == {"$from"}:
+        copied = isinstance(new_value, dict) and set(new_value) == {"$from"}
+        if copied:
             if not anchor:
                 raise BulkEditError("'$from' needs a '*' element to copy from")
             new_value = _resolve(anchor[0], str(new_value["$from"]))
@@ -241,6 +267,22 @@ def expand_bulk(op: dict[str, Any], doc: Any, max_matches: int) -> list[dict[str
             new_value = copy.deepcopy(new_value)
         if operation == "modify" and value == new_value:
             continue  # already has the target value
+        if (
+            operation == "modify"
+            and not copied  # $from copies the element's own data verbatim
+            and _container(value) != _container(new_value)
+        ):
+            # e.g. writing 60 over a whole parameters array — almost always a
+            # pattern one level too shallow; never destroy structure in bulk.
+            raise BulkEditError(
+                "would replace a "
+                + (
+                    "list/object with a single value"
+                    if _container(value)
+                    else "single value with a list/object"
+                )
+                + f" at {'/' + '/'.join(concrete)}; target the elements (add '/*') instead"
+            )
         diffs.append(
             {
                 "path": "/" + "/".join(_escape(p) for p in concrete),

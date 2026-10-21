@@ -29,6 +29,8 @@ import { post as claudeCodeSettingsGuide } from './claude-code-settings-guide';
 import { post as continueDevConfigGuide } from './continue-dev-config-guide';
 import { post as vscodeLaunchGuide } from './vscode-launch-json-guide';
 import { post as vscodeTasksGuide } from './vscode-tasks-json-guide';
+// Phase 6 (AV / Room Systems)
+import { post as zoomRoomsQsysGuide } from './zoom-rooms-qsys-json-profile';
 
 export const posts: BlogPost[] = [
   whatIsIamPolicy,
@@ -58,4 +60,6 @@ export const posts: BlogPost[] = [
   continueDevConfigGuide,
   vscodeLaunchGuide,
   vscodeTasksGuide,
+  // Phase 6 (AV / Room Systems)
+  zoomRoomsQsysGuide,
 ];

@@ -416,3 +416,49 @@ class TestCopyFromField:
         from src.json_ai_studio.prompting import build_system_prompt
 
         assert '{"$from":' in build_system_prompt({"a": 1})
+
+
+class TestBulkRobustness:
+    """Live replays 2026-10-21 (gemma4:12b): `neq` was rejected as unknown, and
+    a pattern one level too shallow wrote 60 over a whole parameters array."""
+
+    DOC = {"players": [{"p": [99, 70, 99]}, {"p": [55, 99, 1]}]}
+
+    @pytest.mark.parametrize("op", ["neq", "!=", "not_equal"])
+    def test_operator_aliases(self, op):
+        diffs = expand_bulk(
+            {"path": "/players/*/p/*", "where": {"$value": {op: 99}}, "new_value": 0},
+            self.DOC,
+            100,
+        )
+        assert [d["path"] for d in diffs] == [
+            "/players/0/p/1",
+            "/players/1/p/0",
+            "/players/1/p/2",
+        ]
+
+    def test_refuses_replacing_container_with_scalar(self):
+        diffs, notes = expand_all(
+            [{"path": "/players/*/p", "new_value": 60}], self.DOC, 100
+        )
+        assert diffs == []
+        assert "target the elements" in notes[0]
+
+    def test_element_level_pattern_works(self):
+        diffs = expand_bulk(
+            {"path": "/players/*/p/*", "where": {"$value": 99}, "new_value": 60},
+            self.DOC,
+            100,
+        )
+        assert [d["path"] for d in diffs] == [
+            "/players/0/p/0",
+            "/players/0/p/2",
+            "/players/1/p/1",
+        ]
+
+    def test_from_may_copy_containers(self):
+        doc = {"items": [{"a": [1], "b": [2]}]}
+        diffs = expand_bulk(
+            {"path": "/items/*/b", "new_value": {"$from": "a"}}, doc, 100
+        )
+        assert diffs[0]["new_value"] == [1]

@@ -37,6 +37,8 @@ import { template as claudeCodeSettings } from './claude-code-settings';
 import { template as continueDevConfig } from './continue-dev-config';
 import { template as vscodeLaunch } from './vscode-launch-json';
 import { template as vscodeTasks } from './vscode-tasks-json';
+// Phase 6 (AV / Room Systems)
+import { template as zoomRoomsQsys } from './zoom-rooms-qsys-controls';
 
 export const templates: Template[] = [
   // Phase 1
@@ -74,4 +76,6 @@ export const templates: Template[] = [
   continueDevConfig,
   vscodeLaunch,
   vscodeTasks,
+  // Phase 6 (AV / Room Systems)
+  zoomRoomsQsys,
 ];

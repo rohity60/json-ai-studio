@@ -30,6 +30,12 @@ export interface TemplateMeta {
   optionalFields: string[];
   bestPractices: string[];
   security: string[];
+  /** JSON Pointer patterns ("*" = any array element / key) that identify a
+   *  document of this format. When ALL resolve in an uploaded document, the
+   *  chat prompt gets this template's requiredFields/optionalFields/
+   *  bestPractices as FORMAT NOTES (exported to the API by
+   *  scripts/export-format-notes.mjs). Omit for formats with no clear shape. */
+  formatSignature?: string[];
 }
 
 export interface Template {
