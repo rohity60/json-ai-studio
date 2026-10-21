@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .format_hints import format_notes_block
 from .settings import get_settings
 
 # The verbatim-inline threshold now lives in Settings
@@ -45,6 +46,7 @@ RULES:
 8. When duplicating an object, add the copy at the same level as the source with the same keys and values, unless the user specifies new ones.
 9. Multiple requested changes = multiple entries in the "diffs" array of the SAME single object.
 10. If the user's message is ITSELF a whole new JSON document (a full configuration pasted as the message, not an instruction) that they seem to want to work on, do NOT adopt, replace, or merge it into the CURRENT WORKING JSON — return {"diffs": [], "explanation": "It looks like you pasted a full JSON document. To work on it, load it with the Upload feature; then describe the changes you want here."}. This does NOT apply when JSON appears as an EXAMPLE inside an instruction (e.g. "add an entry like {...}", "make it match this shape: {...}") — there, use the provided JSON to build the correct diffs against the CURRENT WORKING JSON.
+11. FORMAT CORRECTNESS — on EVERY request, besides what the user asked, also propose fixes for values or structure in the CURRENT WORKING JSON that are wrong for the document's format: anything that breaks the FORMAT NOTES (when given), or a well-known rule of the format the document evidently follows (a value the target system rejects, a key in the wrong place, placeholder syntax the system does not support, a wrong port or protocol). Make each fix its own diff, and in "explanation" list EACH fix and why — the rule it breaks — in a sentence or two per fix ("explanation" may be longer than one sentence for this). EXCEPTION: when the user explicitly asks for a specific key or value, apply exactly that even if it breaks the format, and warn in "explanation" why it is likely wrong — never silently override the user. Only fix what you are confident about; never invent model names, ports, commands or IDs that neither FORMAT NOTES nor the user gave — if the correct value is unknown, leave it and say what is wrong. If nothing is wrong, propose no extra fixes.
 
 BULK EDITS — use "bulk" instead of listing diffs one by one whenever a change applies to more than 5 elements, or to elements you cannot see (structural skeleton). The server expands each bulk op against the FULL document, so you do NOT need to see or copy the matching values.
 B1. "path" is a JSON Pointer where "*" matches every array element (or object key) at that level, e.g. "/records/*/sectionId".
@@ -78,6 +80,14 @@ Response: {"diffs": [{"path": "/howToRedeem/1", "operation": "delete", "old_valu
 User: "Update the title where mode is 'b'." (no element has mode 'b')
 JSON: {"howToRedeem": [{"mode": "a", "title": "Step 1"}, {"mode": "c", "title": "Step 2"}]}
 Response: {"diffs": [], "explanation": "No element in howToRedeem has mode 'b'; existing modes are 'a' (index 0) and 'c' (index 1). Did you mean mode 'c'?"}
+
+User: "Add a test script using vitest." (rule 11: fix format problems too)
+JSON: {"name": "My App", "version": "1.0", "scripts": {"start": "node index.js"}}
+Response: {"diffs": [{"path": "/scripts/test", "operation": "add", "old_value": null, "new_value": "vitest"}, {"path": "/name", "operation": "modify", "old_value": "My App", "new_value": "my-app"}, {"path": "/version", "operation": "modify", "old_value": "1.0", "new_value": "1.0.0"}], "explanation": "Added a vitest test script. Also fixed 2 issues: name 'My App' → 'my-app' because npm package names must be lowercase with no spaces; version '1.0' → '1.0.0' because npm requires full semver (major.minor.patch)."}
+
+User: "Set the name to My App." (explicit request — apply it, but warn)
+JSON: {"name": "my-app", "version": "1.0.0"}
+Response: {"diffs": [{"path": "/name", "operation": "modify", "old_value": "my-app", "new_value": "My App"}], "explanation": "Set name to 'My App' as requested. Note: npm rejects package names with uppercase letters or spaces, so publishing or installing this package will fail."}
 
 User: "Set status to DONE for every record with chapter 2." (large array)
 JSON: {"records": [{"chapter": 1, "status": "OPEN"}, "…+700 more items"]}
@@ -363,6 +373,9 @@ def build_system_prompt(working_json: dict[str, Any], has_history: bool = False)
                     else ""
                 )
             )
+    notes = format_notes_block(working_json)
+    if notes:
+        context = f"{context}\n\n{notes.rstrip()}"
     return _TEMPLATE.replace("__CONTEXT__", context).replace(
         "__HISTORY__", _HISTORY_RULES if has_history else ""
     )

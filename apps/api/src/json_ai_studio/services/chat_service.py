@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from ..db.session_store import store
 from ..bulk_edits import expand_all, extract_bulk
-from ..diff_utils import DiffUtils, parse_llm_response
+from ..diff_utils import DiffApplyError, DiffUtils, _split_path, parse_llm_response
 from ..settings import get_settings
 from ..gateway import GatewayService
 from ..prompting import build_system_prompt
@@ -26,6 +26,34 @@ logger = logging.getLogger("json_ai_studio.chat")
 def sse(event: str, payload: dict[str, Any]) -> str:
     """Format one spec-compliant SSE event block."""
     return f"event: {event}\ndata: {_json.dumps(payload)}\n\n"
+
+
+_MISSING = object()
+
+
+def _value_at(doc: Any, path: str) -> Any:
+    """Value at a JSON Pointer, or _MISSING if it does not resolve."""
+    try:
+        parts = _split_path(path)
+    except DiffApplyError:
+        return _MISSING
+    current = doc
+    for part in parts:
+        if isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
+        elif isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return _MISSING
+    return current
+
+
+def _is_noop(diff: dict[str, Any], doc: Any) -> bool:
+    """A modify whose new_value equals the document's current value."""
+    if diff.get("operation") != "modify" or not diff.get("path"):
+        return False
+    current = _value_at(doc, diff["path"])
+    return current is not _MISSING and current == diff.get("new_value")
 
 
 def parse_sse(event_text: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -199,6 +227,12 @@ async def _stream_llm(
         )
 
         outcome.update(store=True, applied=[], failed=[])
+        # Drop modifies that set a value to what it already is (prod: the
+        # model re-emitted an unchanged "ip", which reads as "nothing changed").
+        kept = [d for d in diffs if not _is_noop(d, working_json)]
+        if len(kept) < len(diffs):
+            logger.info("dropped no-op diffs=%d", len(diffs) - len(kept))
+        diffs = kept
         if not diffs and bulk_notes:
             # The model claimed a bulk change but nothing matched / it was
             # rejected — report that, not the model's optimistic sentence.

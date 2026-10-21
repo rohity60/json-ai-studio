@@ -1,0 +1,27 @@
+{
+  "generatedFrom": "apps/web/src/content/templates",
+  "formats": [
+    {
+      "id": "zoom-rooms-qsys-controls",
+      "title": "Zoom Rooms Controls profile for Q-SYS",
+      "signature": [
+        "/adapters/*/model",
+        "/adapters/*/ip"
+      ],
+      "notes": [
+        "adapters — one entry per control endpoint; for Q-SYS use model \"GenericNetworkAdapter\"",
+        "adapters[].ip — \"tcp://<core-ip>:1702\" (the Q-SYS ECP port; private IPs only)",
+        "adapters[].ports[] — the device: unique id, name and its methods",
+        "ports[].methods[] — id, name, command, type (\"action\" or \"actions\" with params)",
+        "methods[].params — choices substituted for % in command (e.g. 1/0 for mute)",
+        "styles — main button, names and icons, e.g. \"qsys_core.main_method=mute\"",
+        "rules — Zoom events → device commands: meeting_started, meeting_ended, microphone_muted, microphone_unmuted, video_started, video_stopped, operation_time_started, operation_time_ended",
+        "Export every control the profile uses as a Named Control in Q-SYS Designer — ECP addresses controls by that exact, case-sensitive name.",
+        "End each ECP command with \\n (LF). A \\r before it is ignored, so \\r\\n also works.",
+        "Use % in command plus params for on/off or up/down variants instead of duplicating methods.",
+        "Keep model exactly \"GenericNetworkAdapter\" — Zoom only accepts iTachIP2SL, iTachIP2CC and GenericNetworkAdapter.",
+        "Test commands with a telnet session to the Core on port 1702 before pasting the profile into Zoom."
+      ]
+    }
+  ]
+}
