@@ -45,6 +45,9 @@ deployments:
     base_model: "google/gemma-4-31b-it"
     reasoning: "none"
     supports_thinking: true
+    # Tool calls unverified: live probe 2026-10-24 got no response (3 × 90 s
+    # timeouts). Re-probe before enabling tools.
+    supports_tools: false
     models:
         - "google/gemma-4-31b-it"
 
@@ -57,6 +60,10 @@ deployments:
     base_model: "google/gemma-4-26b-a4b-it:free"
     reasoning: "none"
     supports_thinking: false
+    # OpenRouter's models API lists tools/tool_choice for this model, but the
+    # live probe 2026-10-24 hit 429s (free shared pool). Set true once
+    # re-enabled on a paid/BYOK route and one live tool call succeeds.
+    supports_tools: false
     models:
         - "google/gemma-4-26b-a4b-it:free"
 
