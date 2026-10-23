@@ -32,6 +32,8 @@ __CONTEXT__
 OUTPUT FORMAT — respond with EXACTLY ONE JSON object and nothing else. No \
 markdown, no code fences, no text before or after the object:
 {"diffs": [{"path": "<JSON Pointer>", "operation": "add" | "modify" | "delete", "old_value": <value>, "new_value": <value>}], "explanation": "<one short sentence for the user>"}
+Optionally add a "question" to the SAME object when you must ask the user (rule 12):
+{"diffs": [], "question": {"text": "<one short question>", "options": ["<option 1>", "<option 2>"]}, "explanation": "..."}
 Optionally add a "bulk" list to the SAME object for changes that hit many elements (see BULK EDITS):
 {"diffs": [], "bulk": [{"path": "<JSON Pointer with * wildcards>", "where": {<conditions>}, "operation": "modify" | "add" | "delete", "new_value": <value>}], "explanation": "..."}
 
@@ -47,6 +49,8 @@ RULES:
 9. Multiple requested changes = multiple entries in the "diffs" array of the SAME single object.
 10. If the user's message is ITSELF a whole new JSON document (a full configuration pasted as the message, not an instruction) that they seem to want to work on, do NOT adopt, replace, or merge it into the CURRENT WORKING JSON — return {"diffs": [], "explanation": "It looks like you pasted a full JSON document. To work on it, load it with the Upload feature; then describe the changes you want here."}. This does NOT apply when JSON appears as an EXAMPLE inside an instruction (e.g. "add an entry like {...}", "make it match this shape: {...}") — there, use the provided JSON to build the correct diffs against the CURRENT WORKING JSON.
 11. FORMAT CORRECTNESS — on EVERY request, besides what the user asked, also propose fixes for values or structure in the CURRENT WORKING JSON that are wrong for the document's format: anything that breaks the FORMAT NOTES (when given), or a well-known rule of the format the document evidently follows (a value the target system rejects, a key in the wrong place, placeholder syntax the system does not support, a wrong port or protocol). Make each fix its own diff, and in "explanation" list EACH fix and why — the rule it breaks — in a sentence or two per fix ("explanation" may be longer than one sentence for this). EXCEPTION: when the user explicitly asks for a specific key or value, apply exactly that even if it breaks the format, and warn in "explanation" why it is likely wrong — never silently override the user. Only fix what you are confident about; never invent model names, ports, commands or IDs that neither FORMAT NOTES nor the user gave — if the correct value is unknown, leave it and say what is wrong. If nothing is wrong, propose no extra fixes.
+12. QUESTIONS — ask only when the request has more than one reasonable reading you cannot resolve from the JSON (or with tools, when you have them), or a value you need is missing. Return "question" with "text" and 2-4 short "options" covering the readings (e.g. {"text": "Apply 'abc' to which records?", "options": ["Only chapter 1 (47 records)", "All 701 records"]}), no diffs for the ambiguous part, and say in "explanation" why you are asking. Never ask instead of looking something up, never ask about something the user already said, and never ask when one reading is clearly intended.
+13. ANALYSIS — when the user asks you to analyze, explain, trace, find or check something before (or instead of) editing, you may return no diffs and a longer "explanation" (up to ~8 sentences) that cites the exact JSON paths you relied on. If they asked for a proposal "before editing", describe the change and its paths in "explanation" and do not emit diffs yet.
 
 BULK EDITS — use "bulk" instead of listing diffs one by one whenever a change applies to more than 5 elements, or to elements you cannot see (structural skeleton). The server expands each bulk op against the FULL document, so you do NOT need to see or copy the matching values.
 B1. "path" is a JSON Pointer where "*" matches every array element (or object key) at that level, e.g. "/records/*/sectionId".
@@ -203,6 +207,14 @@ _SKELETON_STR_CAP = 80  # truncate long string values to this many chars
 _SKELETON_DICT_KEY_CAP = 300  # cap keys shown per object
 
 
+_SKELETON_MAX_TYPES = 12  # $type variants shown per array
+
+
+def short_type(value: Any) -> str:
+    """'UAssetAPI.Kismet.Bytecode.Expressions.EX_Return, UAssetAPI' -> 'EX_Return'."""
+    return str(value).split(",")[0].rsplit(".", 1)[-1]
+
+
 def build_skeleton(
     data: Any,
     depth: int = 0,
@@ -213,39 +225,81 @@ def build_skeleton(
 ) -> Any:
     """Compact, size-bounded structural skeleton of a JSON value.
 
-    Unlike a bare key list, this preserves the full nested key structure
-    AND representative values so the model can reason about a document too
-    large to inline verbatim:
+    Shows EVERY key that occurs anywhere, with representative values:
       - dict  -> every key mapped to its child skeleton (capped at key_cap).
-      - list  -> the first element's skeleton plus a "…+N more items" marker,
-                 so array length is conveyed without dumping every element.
+      - list  -> ONE sample element whose keys are the UNION over all
+                 elements (keys only some elements have are listed under
+                 "…keys in only some items"), plus a "…+N more items" marker.
+                 Arrays whose elements carry "$type" (e.g. UAssetAPI) show one
+                 merged sample per $type plus counts — the first element alone
+                 hid whole sections (no ScriptBytecode when Exports[0] was a
+                 ClassExport).
       - str   -> the value, truncated to str_cap chars.
       - number/bool/null -> kept as-is (small, high-signal).
+    Nested arrays are merged across their parents (counts say so).
     """
-    if isinstance(data, dict):
+    caps = (max_depth, str_cap, key_cap)
+    return _skel_values([data], depth, caps)
+
+
+def _skel_values(vals: list[Any], depth: int, caps: tuple[int, int, int]) -> Any:
+    """Skeleton for sibling values that sit at the same position."""
+    max_depth, str_cap, key_cap = caps
+    dicts = [v for v in vals if isinstance(v, dict)]
+    if dicts and len(dicts) == len(vals):
         if depth >= max_depth:
-            return {"…": f"<{len(data)} keys, depth capped>"}
+            return {"…": f"<{len(dicts[0])} keys, depth capped>"}
+        children: dict[str, list[Any]] = {}
+        for obj in dicts:
+            for key, value in obj.items():
+                children.setdefault(str(key), []).append(value)
         out: dict[str, Any] = {}
-        for i, (key, value) in enumerate(data.items()):
+        partial: list[str] = []
+        for i, (key, values) in enumerate(children.items()):
             if i >= key_cap:
-                out["…"] = f"+{len(data) - key_cap} more keys"
+                out["…"] = f"+{len(children) - key_cap} more keys"
                 break
-            out[str(key)] = build_skeleton(
-                value, depth + 1, max_depth=max_depth, str_cap=str_cap, key_cap=key_cap
-            )
+            out[key] = _skel_values(values, depth + 1, caps)
+            if len(values) < len(dicts):
+                partial.append(f"{key} ({len(values)}/{len(dicts)})")
+        if partial:
+            out["…keys in only some items"] = ", ".join(partial)
         return out
-    if isinstance(data, list):
-        if not data:
-            return []
-        head = build_skeleton(
-            data[0], depth + 1, max_depth=max_depth, str_cap=str_cap, key_cap=key_cap
-        )
-        if len(data) == 1:
-            return [head]
-        return [head, f"…+{len(data) - 1} more items"]
-    if isinstance(data, str):
-        return data if len(data) <= str_cap else data[:str_cap] + "…"
-    return data
+    lists = [v for v in vals if isinstance(v, list)]
+    if lists and len(lists) == len(vals):
+        return _skel_list([x for lst in lists for x in lst], len(lists), depth, caps)
+    first = vals[0]
+    if isinstance(first, (dict, list)):  # mixed shapes: fall back to a sample
+        return _skel_values([first], depth, caps)
+    if isinstance(first, str):
+        return first if len(first) <= str_cap else first[:str_cap] + "…"
+    return first
+
+
+def _skel_list(
+    items: list[Any], n_arrays: int, depth: int, caps: tuple[int, int, int]
+) -> Any:
+    if not items:
+        return []
+    total = len(items)
+    scope = f" across {n_arrays} arrays" if n_arrays > 1 else ""
+    if all(isinstance(x, dict) for x in items) and any("$type" in x for x in items):
+        groups: dict[str, list[Any]] = {}
+        for obj in items:
+            groups.setdefault(str(obj.get("$type", "<no $type>")), []).append(obj)
+        out = [
+            _skel_values(group, depth + 1, caps)
+            for group in list(groups.values())[:_SKELETON_MAX_TYPES]
+        ]
+        counts = ", ".join(f"{short_type(t)}×{len(g)}" for t, g in groups.items())
+        out.append(f"…{total} items{scope} by $type: {counts}")
+        return out
+    head = _skel_values(items, depth + 1, caps)
+    if total == 1:
+        return [head]
+    if n_arrays > 1:
+        return [head, f"…{total} items{scope}"]
+    return [head, f"…+{total - 1} more items"]
 
 
 _STATS_MAX_ARRAYS = 20
@@ -287,6 +341,8 @@ def build_array_stats(data: Any) -> list[str]:
                     keys.update(dict.fromkeys(o))
                 for key in list(keys)[:_STATS_MAX_FIELDS]:
                     vals = [o[key] for o in objs if key in o]
+                    if key == "$type":
+                        vals = [short_type(v) for v in vals]
                     scal = [v for v in vals if _scalar_key(v) is not None or v is None]
                     if len(scal) != len(vals):
                         continue  # nested values: covered by recursion below
@@ -326,6 +382,16 @@ def build_array_stats(data: Any) -> list[str]:
     return lines
 
 
+def is_skeleton_mode(working_json: Any) -> bool:
+    """True when the document is too large to inline even compactly, so the
+    prompt carries a skeleton (and lookup tools are offered, ADR-0024)."""
+    max_inline = get_settings().llm_max_inline_chars
+    compact = json.dumps(
+        working_json, separators=(",", ":"), ensure_ascii=False, default=str
+    )
+    return len(compact) > max_inline
+
+
 def build_system_prompt(working_json: dict[str, Any], has_history: bool = False) -> str:
     """Build the system prompt with the working JSON inlined.
 
@@ -351,10 +417,13 @@ def build_system_prompt(working_json: dict[str, Any], has_history: bool = False)
             )
             context = (
                 "The working JSON is too large to inline in full. Below is a "
-                "STRUCTURAL SKELETON: the complete nested key structure with "
-                "SAMPLE values — long strings are truncated with an ellipsis, "
-                'and arrays show only their first element plus a "…+N more '
-                'items" marker (so N+1 is the array length).\n'
+                "STRUCTURAL SKELETON: EVERY key that occurs anywhere in the "
+                "document, with SAMPLE values — long strings are truncated with "
+                "an ellipsis. Each array shows ONE sample element whose keys are "
+                'merged from ALL its elements ("…keys in only some items" lists '
+                'keys that only some elements have) plus a "…+N more items" '
+                "marker (so N+1 is the array length); arrays whose elements "
+                'carry "$type" show one merged sample per $type, with counts.\n'
                 f"{skeleton}\n"
                 "You may rely on the keys and the sample values shown. For "
                 "large arrays you can see only the first element's shape, so "

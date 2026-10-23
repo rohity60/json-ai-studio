@@ -163,6 +163,8 @@ def _assistant_payload(turn: dict[str, Any]) -> str:
     payload: dict[str, Any] = {"diffs": out}
     if turn.get("bulk"):
         payload["bulk"] = turn["bulk"]
+    if turn.get("question"):
+        payload["question"] = turn["question"]
     payload["explanation"] = turn.get("content", "")
     return json.dumps(
         payload,

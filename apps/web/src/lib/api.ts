@@ -68,6 +68,9 @@ export type ChatTurn = {
     content: string;
     diffs?: DiffEntry[] | null;
     created_at?: string | null;
+    /** Clarifying question (ADR-0024): options render as buttons; a click
+     *  sends the option as the next message. */
+    question?: { text: string; options: string[] } | null;
 };
 
 export async function createSession(name: string, apiKey: string) {

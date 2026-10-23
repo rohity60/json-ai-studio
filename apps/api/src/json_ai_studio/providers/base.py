@@ -74,6 +74,13 @@ class DeploymentProvider(ABC):
         # 400s on reasoning_effort). The deployment's own `reasoning` default
         # still applies regardless of this flag.
         self.supports_thinking: bool = bool(cfg.get("supports_thinking", False))
+        # Native function calling verified for this backend (ADR-0024). A
+        # config flag, not litellm.supports_function_calling: LiteLLM's
+        # registry does not know local Ollama models.
+        self.supports_tools: bool = bool(cfg.get("supports_tools", False))
+        # Stream tool rounds by default; opt out only for backends where
+        # streamed tool calls are proven broken.
+        self.tool_streaming: bool = bool(cfg.get("tool_streaming", True))
 
         # Empty base_url = endpoint env var not set -> deployment disabled
         # (warning, not an error). Non-empty must be a valid http(s) URL.
@@ -153,6 +160,11 @@ class DeploymentProvider(ABC):
         return {"reasoning_effort": level}
 
     # --- shared behavior -----------------------------------------------------
+
+    def tool_litellm_model(self, litellm_model: str) -> str:
+        """LiteLLM model id for tool-calling rounds (ADR-0024). Default: same
+        as for chat; override when the backend needs another route."""
+        return litellm_model
 
     def litellm_model(self, model: str) -> str:
         """Fully-prefixed model id for litellm."""

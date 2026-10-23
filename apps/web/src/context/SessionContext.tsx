@@ -59,6 +59,15 @@ function handleQuotaError(err: any): boolean {
   return false;
 }
 
+// "search" / "read" tool calls → a short progress line for the chat bubble.
+function describeToolCall(name: string, rawArgs?: string): string {
+  let args: Record<string, any> = {};
+  try { args = JSON.parse(rawArgs || '{}'); } catch { /* truncated args */ }
+  if (name === 'search') return `Searching the document for “${args.query ?? '…'}”…`;
+  if (name === 'read') return `Reading ${args.path || 'the document'}…`;
+  return `Looking up ${name}…`;
+}
+
 type SessionVersion = {
   id: string;
   label: string;
@@ -360,6 +369,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       let textAccumulator = '';
       let stored: { userId: string; assistantId: string } | null = null;
       let quotaStopped = false;
+      let question: { text: string; options: string[] } | null = null;
+      // Progress line while the backend runs lookup tools on a large doc
+      // (ADR-0024); replaced by the explanation on `complete`.
+      let toolStatus = '';
 
         // Initialize the assistant message container in UI history
       setState((prev) => ({
@@ -416,6 +429,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           if (chunk.data.user_turn_id && chunk.data.assistant_turn_id) {
             stored = { userId: chunk.data.user_turn_id, assistantId: chunk.data.assistant_turn_id };
             }
+          if (chunk.data.question?.text) {
+            question = chunk.data.question;
+            }
+          structureChanged = true;
+          } else if (chunk.type === 'tool' && chunk.data?.name) {
+          toolStatus = describeToolCall(chunk.data.name, chunk.data.args);
           structureChanged = true;
           } else if (chunk.type === 'content' || chunk.type === 'text') {
           textAccumulator += chunk.data.text || '';
@@ -435,8 +454,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                 const lastIndex = historyCopy.length - 1;
                 historyCopy[lastIndex] = {
                     ...historyCopy[lastIndex],
-                  content: textAccumulator,
-                  diffs: [...diffs]
+                  content: textAccumulator || toolStatus,
+                  diffs: [...diffs],
+                  question,
                   };
                 }
 

@@ -63,6 +63,7 @@ class FakeLLM:
         profile=None,
         reasoning=None,
         history=None,
+        **_kw,
     ):
         self.calls.append(
             {

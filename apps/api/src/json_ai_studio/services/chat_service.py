@@ -12,11 +12,12 @@ from typing import Any, AsyncGenerator
 from uuid import uuid4
 
 from ..db.session_store import store
-from ..bulk_edits import expand_all, extract_bulk
+from ..bulk_edits import expand_all, extract_bulk, extract_question
 from ..diff_utils import DiffApplyError, DiffUtils, _split_path, parse_llm_response
 from ..settings import get_settings
 from ..gateway import GatewayService
-from ..prompting import build_system_prompt
+from ..json_tools import JsonToolbox
+from ..prompting import build_system_prompt, is_skeleton_mode
 from . import chat_history_service
 from .session_service import now_iso
 
@@ -138,6 +139,13 @@ async def _stream_llm(
         content_parts: list[str] = []
         error_payload: dict[str, Any] | None = None
         quota_hit = False
+        # Lookup tools only when the model sees a skeleton (ADR-0024);
+        # inline documents keep the single streaming call.
+        toolbox = (
+            JsonToolbox(working_json, get_settings().chat_tool_result_max_chars)
+            if is_skeleton_mode(working_json)
+            else None
+        )
         async for event_text in GatewayService.invoke(
             session_id,
             message,
@@ -145,6 +153,7 @@ async def _stream_llm(
             system_prompt,
             reasoning=reasoning,
             history=history,
+            toolbox=toolbox,
         ):
             yield event_text
             event, payload = parse_sse(event_text)
@@ -186,6 +195,10 @@ async def _stream_llm(
         # full document into ordinary diffs — the model may only have seen a
         # skeleton, and listing hundreds of diffs would blow the output cap.
         bulk_ops, bulk_explanation = extract_bulk(combined)
+        # Clarifying question with options (ADR-0024); rendered as buttons.
+        question = extract_question(combined)
+        if question:
+            outcome["question"] = question
         bulk_notes: list[str] = []
         if bulk_ops:
             bulk_diffs, bulk_notes = expand_all(
@@ -253,6 +266,7 @@ async def _stream_llm(
                     # explanation. parse_llm_response returns prose or a
                     # friendly message; "" only for a genuinely empty parse.
                     "explanation": explanation or "The model returned no changes.",
+                    **({"question": question} if question else {}),
                 },
             )
             return
@@ -308,6 +322,7 @@ async def _stream_llm(
             {
                 "working_json": merged,
                 "explanation": outcome["explanation"],
+                **({"question": question} if question else {}),
             },
         )
 
@@ -390,6 +405,8 @@ async def chat_event_stream(
                     # Replayed instead of the (possibly hundreds of) expanded
                     # diffs' detail, so follow-ups see the intent.
                     assistant_turn["bulk"] = outcome["bulk"]
+                if outcome.get("question"):
+                    assistant_turn["question"] = outcome["question"]
                 chat_history_service.append_turns(session, user_turn, assistant_turn)
                 payload["user_turn_id"] = user_turn["id"]
                 payload["assistant_turn_id"] = assistant_turn["id"]

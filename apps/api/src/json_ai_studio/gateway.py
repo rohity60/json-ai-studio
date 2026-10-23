@@ -18,8 +18,10 @@ Quota errors are never raised after the stream has started: pre-stream
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -31,6 +33,7 @@ from fastapi import HTTPException
 from .auth import Principal, mask_secret
 from .deployment import DeploymentRegistry
 from .providers import DeploymentProvider
+from .json_tools import JsonToolbox
 from .services import chat_history_service, credit_service
 from .settings import get_settings
 
@@ -97,6 +100,38 @@ def _quota_sse_event(exc: HTTPException) -> str:
         )
         + "\n\n"
     )
+
+
+_RETRY_IN_RE = re.compile(r"retry in ([0-9.]+)s", re.IGNORECASE)
+_RETRY_DELAY_RE = re.compile(r'"retryDelay":\s*"([0-9.]+)s"')
+
+
+def _transient_retry_wait(exc: Exception, attempt: int, settings: Any) -> float | None:
+    """Seconds to wait before retrying a tool round, or None to give up.
+
+    Rate limits (429) use the provider's retry hint when it is short enough;
+    5xx / connection errors back off briefly. LiteLLM sometimes wraps the
+    real error (MidStreamFallbackError), so the message is checked too.
+    """
+    if attempt >= settings.chat_tool_retry_attempts:
+        return None
+    text = f"{type(exc).__name__}: {exc}"
+    if (
+        isinstance(exc, litellm.RateLimitError)
+        or "RateLimitError" in text
+        or " 429" in text
+    ):
+        match = _RETRY_IN_RE.search(text) or _RETRY_DELAY_RE.search(text)
+        wait = float(match.group(1)) + 0.5 if match else 5.0
+        return wait if wait <= settings.chat_tool_retry_max_wait_s else None
+    transient = (
+        litellm.InternalServerError,
+        litellm.ServiceUnavailableError,
+        litellm.APIConnectionError,
+    )
+    if isinstance(exc, transient) or "InternalServerError" in text or " 500" in text:
+        return 2.0
+    return None
 
 
 class GatewayService:
@@ -259,8 +294,14 @@ class GatewayService:
         profile: str | None = None,
         reasoning: str | None = None,
         history: list[dict[str, str]] | None = None,
+        toolbox: JsonToolbox | None = None,
     ) -> AsyncGenerator[str, None]:
         """Full LLM pipeline: credit check -> stream -> diff -> cost -> deduct -> log.
+
+        `toolbox` (documents too large to inline) enables the read-only
+        search/read lookup loop on deployments with supports_tools; the
+        final answer is emitted as a single `thinking` event and usage is
+        summed over all rounds (ADR-0024).
 
         `history` is prior user/assistant messages replayed between the
         system prompt and the new message (chat history); trimmed oldest
@@ -328,88 +369,126 @@ class GatewayService:
                 message,
                 reserve_output=get_settings().llm_max_tokens,
             )
-            response = await litellm.acompletion(
-                model=litellm_model,
-                base_url=deployment.base_url,
-                api_key=deployment.api_key or None,
-                messages=messages,
-                stream=True,
-                timeout=120.0,
-                num_retries=0,
-                max_tokens=get_settings().llm_max_tokens,
-                stream_options={"include_usage": True},
-                **deployment.completion_params(resolved_model, reasoning),
+            settings = get_settings()
+            use_tools = (
+                toolbox is not None
+                and settings.chat_tools_enabled
+                and deployment.supports_tools
             )
-
-            content_parts: list[str] = []
-            last_chunk = None
-            async for chunk in response:
-                last_chunk = chunk
-                if not getattr(chunk, "choices", None):
-                    continue
-                delta = chunk.choices[0].delta
-                if isinstance(delta, dict):
-                    text = delta.get("content")
-                else:
-                    text = getattr(delta, "content", None)
-                if text:
-                    content_parts.append(text)
-                    yield "event: thinking\ndata: " + json.dumps(
-                        {"text": text}
-                    ) + "\n\n"
-
-            combined = "".join(content_parts)
-            logger.info("invoke session=%s response_len=%d", session_id, len(combined))
-            logger.debug("invoke response (full) session=%s: %s", session_id, combined)
-
-            # Extract usage from last streaming chunk.
-            # litellm streaming: usage is on each chunk (Usage pydantic model),
-            # not on the response wrapper. Last chunk has the full token counts.
-            prompt_tokens = 0
-            completion_tokens = 0
-            model_name = resolved_model
-            cost_usd = 0.0
-            if last_chunk is not None:
-                chunk_usage = getattr(last_chunk, "usage", None)
-                if chunk_usage is not None:
-                    if isinstance(chunk_usage, dict):
-                        prompt_tokens = chunk_usage.get("prompt_tokens", 0) or 0
-                        completion_tokens = chunk_usage.get("completion_tokens", 0) or 0
-                        model_name = chunk_usage.get("model", resolved_model)
-                        cost_usd = chunk_usage.get("response_cost")
-                    else:
-                        # chunk_usage is a pydantic model (Usage)
-                        try:
-                            usage_dict = vars(chunk_usage)
-                            prompt_tokens = usage_dict.get("prompt_tokens", 0) or 0
-                            completion_tokens = (
-                                usage_dict.get("completion_tokens", 0) or 0
-                            )
-                            model_name = usage_dict.get("model", resolved_model)
-                            cost_usd = usage_dict.get("response_cost")
-                        except Exception:
-                            pass
-                    logger.info(
-                        "invoke session=%s usage=%s",
-                        session_id,
-                        {
-                            "prompt_tokens": prompt_tokens,
-                            "completion_tokens": completion_tokens,
-                        },
-                    )
-
-                if cost_usd is None or cost_usd == 0:
-                    cost_usd = GatewayService._calculate_cost(
-                        prompt_tokens,
-                        completion_tokens,
-                        model_name or resolved_model,
-                        deployment,
-                    )
-            else:
-                # No chunks received — fallback to zero
-                cost_usd = GatewayService._calculate_cost(
-                    0, 0, resolved_model, deployment
+            if use_tools:
+                usage: dict[str, int] = {"prompt": 0, "completion": 0}
+                async for event_text in GatewayService._tool_loop(
+                    session_id,
+                    litellm_model,
+                    deployment,
+                    messages,
+                    toolbox,
+                    usage,
+                    deployment.completion_params(resolved_model, reasoning),
+                ):
+                    yield event_text
+                prompt_tokens = usage["prompt"]
+                completion_tokens = usage["completion"]
+                logger.info(
+                    "invoke session=%s usage=%s",
+                    session_id,
+                    {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                    },
                 )
+                cost_usd = GatewayService._calculate_cost(
+                    prompt_tokens, completion_tokens, resolved_model, deployment
+                )
+            else:
+                response = await litellm.acompletion(
+                    model=litellm_model,
+                    base_url=deployment.base_url,
+                    api_key=deployment.api_key or None,
+                    messages=messages,
+                    stream=True,
+                    timeout=120.0,
+                    num_retries=0,
+                    max_tokens=get_settings().llm_max_tokens,
+                    stream_options={"include_usage": True},
+                    **deployment.completion_params(resolved_model, reasoning),
+                )
+
+                content_parts: list[str] = []
+                last_chunk = None
+                async for chunk in response:
+                    last_chunk = chunk
+                    if not getattr(chunk, "choices", None):
+                        continue
+                    delta = chunk.choices[0].delta
+                    if isinstance(delta, dict):
+                        text = delta.get("content")
+                    else:
+                        text = getattr(delta, "content", None)
+                    if text:
+                        content_parts.append(text)
+                        yield "event: thinking\ndata: " + json.dumps(
+                            {"text": text}
+                        ) + "\n\n"
+
+                combined = "".join(content_parts)
+                logger.info(
+                    "invoke session=%s response_len=%d", session_id, len(combined)
+                )
+                logger.debug(
+                    "invoke response (full) session=%s: %s", session_id, combined
+                )
+
+                # Extract usage from last streaming chunk.
+                # litellm streaming: usage is on each chunk (Usage pydantic model),
+                # not on the response wrapper. Last chunk has the full token counts.
+                prompt_tokens = 0
+                completion_tokens = 0
+                model_name = resolved_model
+                cost_usd = 0.0
+                if last_chunk is not None:
+                    chunk_usage = getattr(last_chunk, "usage", None)
+                    if chunk_usage is not None:
+                        if isinstance(chunk_usage, dict):
+                            prompt_tokens = chunk_usage.get("prompt_tokens", 0) or 0
+                            completion_tokens = (
+                                chunk_usage.get("completion_tokens", 0) or 0
+                            )
+                            model_name = chunk_usage.get("model", resolved_model)
+                            cost_usd = chunk_usage.get("response_cost")
+                        else:
+                            # chunk_usage is a pydantic model (Usage)
+                            try:
+                                usage_dict = vars(chunk_usage)
+                                prompt_tokens = usage_dict.get("prompt_tokens", 0) or 0
+                                completion_tokens = (
+                                    usage_dict.get("completion_tokens", 0) or 0
+                                )
+                                model_name = usage_dict.get("model", resolved_model)
+                                cost_usd = usage_dict.get("response_cost")
+                            except Exception:
+                                pass
+                        logger.info(
+                            "invoke session=%s usage=%s",
+                            session_id,
+                            {
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": completion_tokens,
+                            },
+                        )
+
+                    if cost_usd is None or cost_usd == 0:
+                        cost_usd = GatewayService._calculate_cost(
+                            prompt_tokens,
+                            completion_tokens,
+                            model_name or resolved_model,
+                            deployment,
+                        )
+                else:
+                    # No chunks received — fallback to zero
+                    cost_usd = GatewayService._calculate_cost(
+                        0, 0, resolved_model, deployment
+                    )
 
             credits_used = GatewayService._calculate_credits(cost_usd)
             latency_ms = int((time.monotonic() - start_time) * 1000)
@@ -498,6 +577,176 @@ class GatewayService:
                     "retry_after": SERVICE_BUSY_RETRY_AFTER,
                 }
             ) + "\n\n"
+
+    @staticmethod
+    async def _tool_loop(
+        session_id: str,
+        litellm_model: str,
+        deployment: DeploymentProvider,
+        messages: list[dict[str, Any]],
+        toolbox: JsonToolbox,
+        usage: dict[str, int],
+        extra_params: dict[str, Any],
+    ) -> AsyncGenerator[str, None]:
+        """Non-streaming rounds: model calls search/read until it answers.
+
+        Tool results go back as `tool` messages; each call is surfaced as a
+        `tool` SSE event (progress only — chat_service ignores it). After
+        chat_tool_max_rounds, or past the turn deadline, the model is told to
+        answer now. The final content is yielded as one `thinking` event so
+        the existing parse/apply path is unchanged.
+        """
+        settings = get_settings()
+        messages = list(messages)
+        messages[0] = {
+            **messages[0],
+            "content": messages[0]["content"] + "\n\n" + JsonToolbox.INSTRUCTIONS,
+        }
+        deadline = time.monotonic() + settings.chat_tool_turn_timeout_s
+        tool_model = (
+            deployment.tool_litellm_model(litellm_model)
+            if hasattr(deployment, "tool_litellm_model")
+            else litellm_model
+        )
+        max_rounds = max(0, settings.chat_tool_max_rounds)
+        content = ""
+        round_no = 0
+        for round_no in range(max_rounds + 1):
+            final = round_no == max_rounds or time.monotonic() > deadline
+            if final and round_no > 0:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Tool budget used up. Reply NOW with the final "
+                        "single JSON object; do not call tools.",
+                    }
+                )
+            request = dict(
+                model=tool_model,
+                base_url=deployment.base_url,
+                api_key=deployment.api_key or None,
+                messages=messages,
+                tools=JsonToolbox.schemas(),
+                timeout=120.0,
+                num_retries=0,
+                max_tokens=settings.llm_max_tokens,
+                **extra_params,
+            )
+            # Retry THIS round on transient provider errors (ADR-0024,
+            # relaxes ADR-0007 inside the loop): nothing has reached the user
+            # as an answer yet, and re-running one round is far cheaper than
+            # failing — or re-running — the whole multi-round turn.
+            attempt = 0
+            while True:
+                try:
+                    if getattr(deployment, "tool_streaming", True):
+                        # Stream by default: text goes out live as `draft` events
+                        # (keeps proxies like Cloudflare from idling out; not parsed
+                        # as the answer, since the round may still end in a tool
+                        # call), tool-call fragments are rebuilt at the end.
+                        chunks: list[Any] = []
+                        stream = await litellm.acompletion(
+                            stream=True,
+                            stream_options={"include_usage": True},
+                            **request,
+                        )
+                        async for chunk in stream:
+                            chunks.append(chunk)
+                            if not getattr(chunk, "choices", None):
+                                continue
+                            delta = chunk.choices[0].delta
+                            text = getattr(delta, "content", None)
+                            if text:
+                                yield "event: draft\ndata: " + json.dumps(
+                                    {"text": text}
+                                ) + "\n\n"
+                        response = litellm.stream_chunk_builder(
+                            chunks, messages=messages
+                        )
+                        if response is None:
+                            raise RuntimeError("empty streamed tool response")
+                    else:
+                        response = await litellm.acompletion(stream=False, **request)
+                    break
+                except Exception as exc:
+                    wait = _transient_retry_wait(exc, attempt, settings)
+                    if wait is None:
+                        raise
+                    attempt += 1
+                    logger.warning(
+                        "tool loop session=%s round=%d transient error, retry %d in %.1fs: %s",
+                        session_id,
+                        round_no + 1,
+                        attempt,
+                        wait,
+                        type(exc).__name__,
+                    )
+                    await asyncio.sleep(wait)
+            u = getattr(response, "usage", None)
+            usage["prompt"] += int(getattr(u, "prompt_tokens", 0) or 0)
+            usage["completion"] += int(getattr(u, "completion_tokens", 0) or 0)
+            message = response.choices[0].message
+            calls = list(getattr(message, "tool_calls", None) or [])
+            content = message.content or ""
+            if not calls or final:
+                if calls:
+                    logger.warning(
+                        "tool loop session=%s model still calling tools at final round",
+                        session_id,
+                    )
+                break
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": [
+                        {
+                            "id": c.id,
+                            "type": "function",
+                            "function": {
+                                "name": c.function.name,
+                                "arguments": c.function.arguments,
+                            },
+                        }
+                        for c in calls
+                    ],
+                }
+            )
+            for c in calls:
+                result = toolbox.call(c.function.name, c.function.arguments)
+                logger.info(
+                    "tool call session=%s round=%d name=%s args=%s result_chars=%d",
+                    session_id,
+                    round_no + 1,
+                    c.function.name,
+                    str(c.function.arguments)[:200],
+                    len(result),
+                )
+                logger.debug("tool result session=%s %s", session_id, result)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": c.id,
+                        "name": c.function.name,
+                        "content": result,
+                    }
+                )
+                yield "event: tool\ndata: " + json.dumps(
+                    {
+                        "round": round_no + 1,
+                        "name": c.function.name,
+                        "args": str(c.function.arguments)[:200],
+                        "result_chars": len(result),
+                    }
+                ) + "\n\n"
+        logger.info(
+            "tool loop session=%s rounds=%d answer_len=%d",
+            session_id,
+            round_no + 1,
+            len(content),
+        )
+        if content:
+            yield "event: thinking\ndata: " + json.dumps({"text": content}) + "\n\n"
 
     @classmethod
     async def explain(

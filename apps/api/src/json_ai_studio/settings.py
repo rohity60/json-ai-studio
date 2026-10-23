@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     chat_history_max_diffs_per_turn: int = 20
     chat_history_max_stored_turns: int = 200  # pruned from the session
 
+    # Lookup tools (ADR-0024): read-only search/read offered to the model when
+    # the document is too large to inline and the deployment supports_tools.
+    chat_tools_enabled: bool = True
+    chat_tool_max_rounds: int = 4  # tool rounds before a forced final answer
+    chat_tool_result_max_chars: int = 4_000  # per tool result
+    chat_tool_turn_timeout_s: float = 150.0  # whole tool loop wall clock
+    chat_tool_retry_attempts: int = 2  # per round, transient provider errors
+    chat_tool_retry_max_wait_s: float = 10.0  # longer provider retry hints → fail
+
     # Bulk edits: the model may emit a pattern op ("/records/*/field" + where)
     # that the server expands against the full JSON (bulk_edits.py). Caps
     # matches per op so a bad pattern can't rewrite a whole huge document.

@@ -21,6 +21,14 @@
 # override. false = ignore the override (never send a reasoning param the
 # backend rejects — e.g. OpenRouter's free Gemma 400s on reasoning_effort).
 # The `reasoning` default above still applies regardless of this flag.
+#
+# supports_tools: backend handles native function calling through LiteLLM
+# (ADR-0024). Enables the read-only search/read lookup loop for documents too
+# large to inline. ollama gemma4:12b verified with a live tool call;
+# google_ai_studio gemma-4-26b verified non-streaming (2026-10-23).
+#
+# tool_streaming (default true): stream tool rounds; set false only where
+# streamed tool calls are proven broken. Verified streamed: ollama gemma4:12b.
 
 deployments:
   google_ai_studio:
@@ -28,6 +36,7 @@ deployments:
     base_model: "gemma-4-26b-a4b-it"
     reasoning: "minimal"
     supports_thinking: true
+    supports_tools: true
     models:
         - "gemma-4-26b-a4b-it"
 
@@ -56,6 +65,7 @@ deployments:
     base_model: "gemma4:12b"
     reasoning: "none"
     supports_thinking: false
+    supports_tools: true
     models:
         - "qwen3.6:35b-mlx"
         - "gemma4:12b"

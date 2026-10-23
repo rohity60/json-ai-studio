@@ -1,0 +1,153 @@
+# PRD: Model Tools for Large JSON (DRAFT — for discussion)
+
+**Status**: v1 implemented on `feat/json-tools` (2026-10-24) — see ADR-0024 for the final design and live-eval findings. Remaining **[D#]** open.
+**Related**: ADR-0021 (chat history; tools deferred there), ADR-0022 (bulk edits), ADR-0023 (format hints, PR #12).
+
+---
+
+# Problem
+
+When a document exceeds `LLM_MAX_INLINE_CHARS` (120k), the chat model gets a **skeleton**: every key, but only the first element of each array and strings cut at 80 chars. The model can no longer see the values it is asked to edit or reason about.
+
+What we already have for large documents:
+
+| Capability | Solves | Does not solve |
+|---|---|---|
+| Skeleton + ARRAY FIELD STATS | Shape, field ranges, top category values | Any specific hidden element |
+| Bulk ops (`/x/*/y` + `where`, `$from`) | "Change every element matching a filter" | Finding the right path/filter in the first place |
+| Format hints (PR #12) | Knowing a format's rules | Knowing this document's contents |
+| Chat history | Follow-up intent | Data the model never saw |
+
+## Evidence (prod logs)
+
+| Date | Document | Request | What happened |
+|---|---|---|---|
+| 2026-10-11 | gita.json, 701 records, 491k chars | "first 100 / first 20 / all records" | Refused: only `records[0]` visible. "First 10" worked only by guessing hidden values. |
+| 2026-10-15 | Unreal **UAssetAPI** dump, 53 top-level keys (`NameMap`, `Imports`, `Exports`, `ScriptBytecode`…) | "Trace what ends the ability through Imports/Exports and ScriptBytecode; propose the smallest patch with exact paths **before** editing" | Impossible: the targets are deep inside arrays; answering needs search → follow references → read → decide. Follow-up "make this move last forever" → "couldn't find a property named 'move'". |
+| 2026-10-15 | Amazon Connect flow (`Content` = 26k-char escaped JSON string) | "clean to readable" | Model can't express "parse this string"; would have to retype 26k chars. |
+| 2026-10-19 | Zoom Rooms profile (small, inline) | "make this work with qsys" | Solved by format hints (PR #12), not tools — listed to show the boundary. |
+
+## Goal
+
+Let the model **look things up in the full document before it answers**, so that on large documents it can (a) edit specific hidden elements with exact paths and values, (b) follow references across sections, and (c) answer "where / how many / what is" questions, without ever guessing values.
+
+## Non-goals (this phase)
+
+- Tools that **change** the document. Edits stay in the final `diffs` / `bulk` answer and go through the existing accept/reject pipeline.
+- Agent-style long-running tasks, background jobs, multi-document work.
+- Replacing the skeleton or bulk ops; tools complement them.
+- Chat-driven accept/reject (parked earlier: needs result feedback; may reuse this loop later).
+
+---
+
+# User stories
+
+1. *Large list, specific item*: "Change sectionId to abc for slok 23 of chapter 3" in a 701-record file → the model finds the record, reads it, emits one exact diff.
+2. *Positional range*: "first 100 records" → one bulk op on `$index`, after checking the field with a tool if needed.
+3. *Reference tracing*: "What ends the ability?" in a UAssetAPI dump → the model searches `BPStartUseAmmoSec`, follows Export/Import indices, reads the bytecode around it, and **explains** before proposing any patch.
+4. *Questions*: "how many entries have no modifiedDate?", "where is the timeout for the payments service?" → a correct answer with paths, no diffs.
+5. *Embedded JSON*: "make Content readable" → handled by a transform (see T-group "Transform"); possibly not a tool.
+
+---
+
+# v1 scope (agreed 2026-10-23)
+
+Mental model: *if I cannot see the whole JSON, I scan the key tree, then search values, then read what I found.*
+
+| # | Piece | Kind | Purpose |
+|---|---|---|---|
+| 1 | **Full key tree** — skeleton built from the UNION of keys across all array elements, grouped by `$type` when elements carry one, with counts and "keys in only some items" | prompt, no tool | The "scan the tree for keys" step, complete even for heterogeneous arrays |
+| 2 | `search(query, scope=values\|keys, path_prefix?, context_levels?, limit?)` | tool | Value (or key) search → paths + values; `context_levels` returns the enclosing object(s) too |
+| 2b | `query(path_with_*, where, limit?)` | tool | **Added during implementation**: field conditions in the bulk-edit grammar — several fields at once (`slokNumber` + `sectionId`) and reverse reference lookups (`StackNode == -2`). Live evals showed the model putting `"field: value"` pairs into `search`, which matches single values only. |
+| 3 | `read(path)` | tool | Exact full values when previews are cut, and **reference hops** (e.g. an index → `/Imports/4`) |
+| 4 | `question: {text, options[]}` in the final answer | answer format, no tool | Clarify ambiguous / vague requests; UI renders options as buttons, click sends the option as the next message |
+| 5 | Analysis-only answers (no diffs, longer `explanation`) | answer format | "Analyze before editing" requests (UAssetAPI case) |
+
+Tools are offered **only when the document is too large to inline** (skeleton mode) — small docs keep today's single streaming call.
+
+Why `question` is not a tool: asking always ends the turn (the server must wait for the user), so it is not a lookup whose result can be fed back; as an answer field it needs no extra round and works on deployments without tool support. Rule: ask only when a request has more than one reasonable reading or a needed value is missing — never instead of looking something up.
+
+## Why a key-union tree (verified on a synthetic UAssetAPI dump)
+
+Today's skeleton shows each array's **first element only**. In UAssetAPI, `Exports[0]` is typically a `ClassExport`; only `FunctionExport`s have `ScriptBytecode`. Today's prompt for the synthetic dump never contains the string `ScriptBytecode`. The key-union prototype shows all three export types and the bytecode structure (`EX_FinalFunction → Parameters → EX_FloatConst`). For uniform arrays (gita.json) the output is unchanged. Prototype: scratch `union_skeleton.py` (not in repo).
+
+Known prototype gap: counts on nested arrays are totals across all parents ("…242 items total" = all `ScriptBytecode` entries of 61 functions) — the label must say "across all <parent>".
+
+## Coverage of the prod cases
+
+| Case | Blocked by | v1 piece |
+|---|---|---|
+| gita "slok 23 of chapter 3" | hidden record | search + read (bulk `where` already works) |
+| gita "apply to all records" | ambiguity (chapter 1 or all 701?) | `question` |
+| UAssetAPI "trace what ends the ability" | hidden keys, hidden values, reference hops | key tree + search + read + analysis-only answer — multi-hop reliability on Gemma untested |
+| UAssetAPI "make this move last forever" | vague; turn 1 lost to 429 | `question`; *(keep failed turns' messages — separate)* |
+| Connect "clean to readable" | can't express "parse this string" | ❌ — `$parseJson` (separate) |
+| Zoom / Turkish players / 99s | format knowledge / small model | ➖ — format hints (PR #12), history |
+
+## Out of v1 (tracked separately)
+
+- `$parseJson` / `$stringifyJson` server-side values (Connect case).
+- Gateway failover + one retry; keep the user's message when a turn fails.
+- Aggregates (`count`, `distinct_values`) — ARRAY FIELD STATS covers most; revisit.
+- Format-specific `resolve_reference` (UAssetAPI import/export index rules) — revisit after v1 evals.
+- `get_diff_history`, `list_children` (key tree + `$index` + `read` cover positional access).
+
+# How the loop would work (proposed)
+
+1. Chat request → gateway picks a deployment.
+2. If the document is in **skeleton mode** and the deployment supports tools, call the model **with tool schemas, non-streaming**.
+3. Model returns tool calls → server runs them over the working JSON → results appended as `tool` messages → repeat.
+4. Model returns its normal final JSON (`diffs` / `bulk` / `explanation`) → existing parse/apply/history path, unchanged.
+5. Cap: **N rounds** (proposal 4); on the last round, force a final answer without tools.
+6. Each tool call emits an SSE `tool` event (name, short args, result size) for UI progress.
+
+Verified 2026-10-22: tool calling works through LiteLLM for local `ollama/gemma4:12b` (returned a correct search call) and LiteLLM reports support for prod `gemini/gemma-4-26b-a4b-it`. LiteLLM's registry does not know local Ollama models → use a `supports_tools` flag in `deployments.yaml`, not `litellm.supports_function_calling`.
+
+---
+
+# Implementation notes (2026-10-24)
+
+- Tool rounds **stream by default** (`tool_streaming`), text as `draft` SSE events; tool calls reassembled from chunks.
+- Ollama tool rounds use LiteLLM's `ollama_chat/` route (the `ollama/` route dropped tool calls on long prompts).
+- Failed rounds are retried in-loop on 429 (short provider hint) and 5xx.
+- Google free tier caps this model at **16k input tokens/minute**; ~4k-token skeleton prompts × rounds hit it — prod needs a paid key for reliable multi-round turns.
+- UI: tool calls show as a progress line ("Searching the document for …"), questions as option buttons (D7, D13 partly resolved).
+
+# Open decisions
+
+- ~~[D1–D5]~~ resolved — see v1 scope.
+- ~~[D6]~~ resolved: skeleton mode only.
+- **[D7]** Streaming & UX: tool rounds are non-streaming. Show progress ("Searching for BPStartUseAmmoSec…") in the chat, or keep the current spinner?
+- ~~[D8]~~ resolved: yes, analysis-only answers allowed.
+- **[D13]** `question` UX: max options (4?), free-text "Other" always available, and does clicking an option auto-send or fill the input?
+- **[D14]** Key-union caps: max `$type` variants per array (12?), and how to label nested counts.
+- **[D9]** Limits: max rounds (4?), max tool result size (4k chars?), max total tool tokens per turn, timeout per turn (gateway timeout is 120s per call).
+- **[D10]** Cost & quota: each round is a billed call. Charge credits for the summed usage (proposal), and/or cap rounds lower for anonymous users?
+- **[D11]** Provider fallback: deployment without tool support → today's skeleton behaviour (proposal), or route tool-needing requests to a tool-capable deployment?
+- **[D12]** Safety: tools are read-only over the session's own document; any reason to also hide secret-looking values from tool results (they're already in the model's context when inline)?
+
+---
+
+# Success metrics / evals
+
+Live evals (local Ollama, `LIVE_LLM=1`) built from the prod cases:
+
+| Case | Pass condition |
+|---|---|
+| gita 701 records: "slok 23 of chapter 3 → abc" | exactly one diff at the correct index, real `old_value` |
+| gita: "first 100" / "first 20" | `$index` bulk op, exact count |
+| synthetic UAssetAPI: "what calls MagazineStop?" | correct export path(s) cited, no diffs |
+| synthetic UAssetAPI: patch request | explanation-first answer; no edits to bytecode offsets |
+| "how many entries lack modifiedDate?" | correct number |
+| small inline doc, ordinary edit | no tool calls |
+| gita "apply to all records" | `question` with options (chapter 1 only / all 701) |
+| UAssetAPI "make this move last forever" | `question`, not a guessed path |
+
+Plus: median latency per large-doc turn, rounds per turn, tool-call error rate, credits per turn.
+
+# Risks
+
+- Latency: each round is a full model call (prod Gemma ≈ 2–20 s).
+- Free-tier rate limits: more calls per turn → more 429s (prod already suffers; failover still missing).
+- Small models looping or calling tools with bad paths → round cap + tool errors returned as data.
+- Context growth: tool results accumulate; cap result size and rounds.
