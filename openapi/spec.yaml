@@ -663,6 +663,9 @@ paths:
                 event: diff
                 data: {"entry":{"id":"d2","path":"/services/payment/timeout","operation":"modify","old_value":30,"new_value":60,"status":"pending"}}
 
+                event: tool
+                data: {"round":1,"name":"search","args":"{\"query\":\"timeout\"}","result_chars":812}
+
                 event: complete
                 data: {"working_json":{"services":{"api":{"timeout":60},"payment":{"timeout":60}}},"explanation":"Done — 2 changes applied.","user_turn_id":"u1","assistant_turn_id":"a1"}
          '401':
@@ -1352,6 +1355,19 @@ components:
             Bulk ops the model emitted ({path with * wildcards, where, operation,
             new_value}); the server expanded them into `diffs` against the full
             document. Replayed to the model on follow-ups.
+        question:
+          type: object
+          nullable: true
+          description: Clarifying question the model asked (ADR-0024); the UI renders options as buttons and a click sends the option as the next message.
+          properties:
+            text:
+              type: string
+            options:
+              type: array
+              maxItems: 4
+              items:
+                type: string
+          required: [text]
       required: [role, content]
 
      # -- Wire Contracts --

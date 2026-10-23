@@ -51,11 +51,11 @@ class BulkEditError(ValueError):
 # -- Parsing -----------------------------------------------------------------
 
 
-def extract_bulk(text: str | None) -> tuple[list[dict[str, Any]], str]:
-    """Pull the ``bulk`` list (and explanation) out of raw LLM output.
+def answer_object(text: str | None) -> dict[str, Any] | None:
+    """The model's top-level answer object from raw output, or None.
 
-    Returns ([], "") when the output has no bulk ops. Tolerates code fences
-    and prose around the JSON object, like ``parse_llm_response``.
+    Tolerates code fences and prose around the JSON, like
+    ``parse_llm_response``. Shared by bulk ops and clarifying questions.
     """
     raw = (text or "").strip()
     for prefix in _FENCE_PREFIXES:
@@ -70,12 +70,42 @@ def extract_bulk(text: str | None) -> tuple[list[dict[str, Any]], str]:
         except ValueError:
             start = raw.find("{", start + 1)
             continue
-        if isinstance(value, dict) and isinstance(value.get("bulk"), list):
-            ops = [op for op in value["bulk"] if isinstance(op, dict)]
-            explanation = value.get("explanation")
-            return ops, str(explanation) if explanation else ""
-        return [], ""
+        return value if isinstance(value, dict) else None
+    return None
+
+
+def extract_bulk(text: str | None) -> tuple[list[dict[str, Any]], str]:
+    """Pull the ``bulk`` list (and explanation) out of raw LLM output.
+
+    Returns ([], "") when the output has no bulk ops.
+    """
+    value = answer_object(text)
+    if value is not None and isinstance(value.get("bulk"), list):
+        ops = [op for op in value["bulk"] if isinstance(op, dict)]
+        explanation = value.get("explanation")
+        return ops, str(explanation) if explanation else ""
     return [], ""
+
+
+def extract_question(text: str | None) -> dict[str, Any] | None:
+    """Clarifying question from the answer: {"text", "options"} or None.
+
+    Options are trimmed to 4 short strings; a question without options is
+    allowed (the user answers in free text).
+    """
+    value = answer_object(text)
+    q = value.get("question") if value is not None else None
+    if not isinstance(q, dict):
+        return None
+    question = str(q.get("text", "")).strip()
+    if not question:
+        return None
+    options = [
+        str(o).strip()[:80]
+        for o in (q.get("options") or [])
+        if isinstance(o, (str, int, float)) and str(o).strip()
+    ][:4]
+    return {"text": question[:300], "options": options}
 
 
 # -- Matching ----------------------------------------------------------------

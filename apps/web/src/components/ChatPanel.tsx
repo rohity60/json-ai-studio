@@ -202,7 +202,7 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
              </div>
           ) : (
              <div key={msg.id || i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] rounded-lg p-3 text-sm ${
+              <div className={`max-w-[80%] rounded-lg p-3 text-sm whitespace-pre-wrap break-words ${
                  msg.role === 'user'
                   ? 'bg-purple-600 text-white'
                   : 'bg-gray-100 border'
@@ -215,6 +215,28 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
                 )}
                 {msg.content}
                 {msg.role === 'assistant' && !!msg.diffs?.length && <DiffStatusList diffs={msg.diffs} />}
+                {msg.role === 'assistant' && msg.question?.text && (
+                  <div className="mt-2 space-y-1.5">
+                    {!msg.content.includes(msg.question.text) && (
+                      <p className="font-medium">{msg.question.text}</p>
+                    )}
+                    {/* Options are only actionable on the latest turn. */}
+                    {i === state.conversationHistory.length - 1 && !!msg.question.options?.length && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {msg.question.options.map((option) => (
+                          <Button
+                            key={option}
+                            variant="chip"
+                            disabled={isStreaming}
+                            onClick={() => send(option)}
+                          >
+                            {option}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
              </div>
           ))}

@@ -59,6 +59,8 @@ class ChatTurn(BaseModel):
     diffs: list[DiffEntry] | None = None
     # Bulk ops the model emitted (pattern + where), expanded into `diffs`.
     bulk: list[dict[str, Any]] | None = None
+    # Clarifying question the model asked: {"text": str, "options": [str]}.
+    question: dict[str, Any] | None = None
     created_at: datetime | None = None
 
 

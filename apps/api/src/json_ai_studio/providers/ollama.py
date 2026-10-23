@@ -25,6 +25,15 @@ class OllamaProvider(DeploymentProvider):
     def _resolve_base_url(self, cfg: dict[str, Any], settings: Settings) -> str:
         return settings.ollama_base_url or ""
 
+    def tool_litellm_model(self, litellm_model: str) -> str:
+        """Use Ollama's chat API for tool rounds. LiteLLM's ``ollama/``
+        (generate) route lost native tool calls once the system prompt was
+        long (gemma4:12b, 2026-10-23: 0 calls on the full prompt via
+        ``ollama/``, a correct ``search`` call via ``ollama_chat/``)."""
+        if litellm_model.startswith("ollama/"):
+            return "ollama_chat/" + litellm_model[len("ollama/") :]
+        return litellm_model
+
     def completion_params(
         self, model: str, reasoning: str | None = None
     ) -> dict[str, Any]:

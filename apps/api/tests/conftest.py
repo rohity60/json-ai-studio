@@ -177,7 +177,9 @@ async def other_user_id(ws_db):
 # deployment (default the local Ollama, `ollama_local`, which needs
 # OLLAMA_BASE_URL in apps/api/.env) instead of round-robining every enabled
 # cloud deployment. Override with LIVE_DEPLOYMENT=<name> and/or
-# LIVE_MODEL=<model> (defaults to that deployment's base_model).
+# LIVE_MODEL=<model> (defaults to that deployment's base_model), and
+# LIVE_TOOL_STREAMING=0|1 to force the tool-round mode, and
+# LIVE_CALL_SPACING_S=<seconds> to pace every LLM call (per-minute caps).
 # ---------------------------------------------------------------------------
 
 
@@ -199,5 +201,27 @@ def pinned_deployment(monkeypatch):
         monkeypatch.setattr(p, "enabled", p.name == target)
     if os.environ.get("LIVE_MODEL"):
         monkeypatch.setattr(chosen, "base_model", os.environ["LIVE_MODEL"])
+    spacing = float(os.environ.get("LIVE_CALL_SPACING_S", "0") or 0)
+    if spacing > 0:
+        # Test-only pacing for free tiers with per-minute token caps (Google:
+        # 16k input tokens/min): every LLM call waits so each lands in a fresh
+        # window. Lives in the fixture — app code is never changed.
+        import asyncio
+
+        import litellm
+
+        from src.json_ai_studio import gateway as gw
+
+        real = litellm.acompletion
+
+        async def paced(*args, **kwargs):
+            await asyncio.sleep(spacing)
+            return await real(*args, **kwargs)
+
+        monkeypatch.setattr(gw.litellm, "acompletion", paced)
+    if os.environ.get("LIVE_TOOL_STREAMING") in ("0", "1"):
+        monkeypatch.setattr(
+            chosen, "tool_streaming", os.environ["LIVE_TOOL_STREAMING"] == "1"
+        )
     yield chosen
     DeploymentRegistry.reload()
