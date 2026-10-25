@@ -18,8 +18,10 @@ function Github({ className }: { className?: string }) {
 export const metadata: Metadata = {
   title: 'AI JSON Formatter & Editor — JSON AI Studio',
   description:
-    'Format, explain, edit, validate and transform JSON using AI. Upload any JSON, describe changes in plain English, review every modification with side-by-side diffs, and download valid JSON with confidence.',
+    'Your AI assistant for JSON: format, explain, edit, validate and transform JSON using AI. Describe changes in plain English, review every modification with side-by-side diffs, and download valid JSON with confidence.',
   keywords: [
+    'ai assistant for json',
+    'json ai',
     'ai json formatter',
     'ai json editor',
     'json editor',
@@ -244,7 +246,7 @@ export default async function LandingV2() {
           <div className="animate-fade-up mx-auto max-w-3xl">
             <span className="inline-flex items-center gap-2 rounded-full border border-purple-200 bg-purple-50 px-3 py-1 text-xs font-medium text-purple-700">
               <span className="h-1.5 w-1.5 rounded-full bg-purple-500" />
-              The AI workspace for JSON
+              Your AI assistant for JSON
             </span>
             <h1 className="mt-6 text-4xl font-bold tracking-tight md:text-6xl">
               AI JSON Formatter <span className="text-purple-600">&amp; Editor</span>
@@ -306,8 +308,11 @@ export default async function LandingV2() {
               JSON AI Studio isn&apos;t just another formatter.
             </p>
             <p className="mt-3 text-lg text-gray-600">
-              It&apos;s a complete AI-powered workspace built specifically for developers working
-              with JSON every day.
+              It&apos;s a complete AI-powered workspace — an{' '}
+              <Link href="/ai-json-assistant" className="text-purple-700 underline">
+                AI assistant for JSON
+              </Link>{' '}
+              — built specifically for developers working with JSON every day.
             </p>
           </div>
         </section>
@@ -578,7 +583,11 @@ export default async function LandingV2() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 md:flex-row">
           <Logo />
           <p className="text-center text-sm text-gray-500 md:text-right">
-            JSON AI Studio — the AI JSON formatter, editor, viewer, validator and diff tool. © 2026
+            JSON AI Studio — the{' '}
+            <Link href="/ai-json-assistant" className="hover:text-purple-700">
+              AI assistant for JSON
+            </Link>
+            : formatter, editor, viewer, validator and diff tool. © 2026
           </p>
           <a
             href={REPO_URL}

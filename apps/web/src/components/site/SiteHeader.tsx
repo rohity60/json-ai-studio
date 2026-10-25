@@ -6,6 +6,7 @@ const REPO_URL = 'https://github.com/rohity60/json-ai-studio';
 const NAV = [
   { label: 'Home', href: '/' },
   { label: 'Workspace', href: '/studio' },
+  { label: 'AI Assistant', href: '/ai-json-assistant' },
   { label: 'Templates', href: '/templates' },
   { label: 'Blog', href: '/blog' },
 ];
