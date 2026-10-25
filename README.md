@@ -1,4 +1,6 @@
-# JSON AI Studio
+# JSON AI Studio — AI assistant for JSON
+
+**[jsonaistudio.com](https://jsonaistudio.com)** · an AI assistant for JSON: edit, fix and explain JSON in plain English, review every change as a side-by-side diff, and download valid JSON. Free, no signup — [try it](https://jsonaistudio.com/ai-json-assistant).
 
 AI-powered configuration management platform — enable developers, product managers, and solution architects to create, modify, validate, and manage JSON configurations through natural language conversation.
 

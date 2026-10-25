@@ -19,11 +19,12 @@ const siteJsonLd = {
       '@id': `${SITE_URL}/#app`,
       name: 'JSON AI Studio',
       description:
-        'AI-powered JSON workspace to format, explain, edit, validate, diff and version JSON using natural language.',
+        'AI assistant for JSON: an AI-powered workspace to format, explain, edit, validate, diff and version JSON using natural language.',
       applicationCategory: 'DeveloperApplication',
       operatingSystem: 'Web',
       url: SITE_URL,
       featureList: [
+        'AI assistant for JSON',
         'AI JSON formatter',
         'Natural-language JSON editing',
         'AI JSON explanation',
@@ -63,6 +64,8 @@ export const metadata: Metadata = {
       'Format, explain, edit, validate and transform JSON using AI. Diffs, versions, multiple sessions — without ever breaking your JSON.',
   keywords: [
       'json formatter',
+      'ai assistant for json',
+      'json ai',
       'ai json formatter',
       'json formatter online',
       'format json online',
