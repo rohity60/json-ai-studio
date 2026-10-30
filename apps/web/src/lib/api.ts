@@ -454,7 +454,7 @@ function parseSseBlock(block: string): {type: string; data: any} | null {
     }
 }
 
-export async function* streamChat(sessionId: string, message: string, workingJson: object | null, apiKey: string, thinking: boolean = false) {
+export async function* streamChat(sessionId: string, message: string, workingJson: object | null, apiKey: string, thinking: boolean = false, focusPath?: string) {
 
     const formData = new FormData();
     formData.append('session_id', sessionId);
@@ -465,9 +465,21 @@ export async function* streamChat(sessionId: string, message: string, workingJso
     if (thinking) {
         formData.append('thinking', 'true');
     }
+    if (focusPath) {
+        // Model sees only this subtree; diffs come back as full-document paths (ADR-0025)
+        formData.append('focus_path', focusPath);
+    }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 120_000); // 2 min timeout to prevent infinite hangs
+    // Idle timeout, re-armed on every chunk: a turn may legitimately run for
+    // minutes (tool rounds waiting for model capacity, ADR-0025) as long as
+    // events keep arriving; only 2 min of silence counts as a hang.
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const armTimeout = () => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => controller.abort(), 120_000);
+    };
+    armTimeout();
     try {
         const res = await fetch(`${BASE}/chat`, {
             method: 'POST',
@@ -483,6 +495,7 @@ export async function* streamChat(sessionId: string, message: string, workingJso
 
         while (true) {
             const {done, value} = await reader.read();
+            armTimeout();
             if (done) {
                 buffer += decoder.decode(); // flush decoder state
                 break;

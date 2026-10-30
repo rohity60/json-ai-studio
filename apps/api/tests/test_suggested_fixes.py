@@ -9,6 +9,7 @@ explanation (no separate per-diff field), including in history replay.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -141,7 +142,12 @@ def replies(monkeypatch):
     calls: list[dict] = []
 
     async def fake_invoke(session_id, message, principal, system_prompt, **kw):
-        calls.append({"history": kw.get("history") or []})
+        history = kw.get("history") or []
+        if kw.get("planner"):  # ADR-0025: prompt comes from the turn planner
+            history = kw["planner"](SimpleNamespace(name="fake"), "fake/m").messages[
+                1:-1
+            ]
+        calls.append({"history": history})
         yield "event: thinking\ndata: " + json.dumps(
             {"text": json.dumps(queue.pop(0))}
         ) + "\n\n"

@@ -9,8 +9,8 @@ import Button from '@/components/ui/Button';
 export type RateLimitInfo = {
   message?: string;
   retryAfter?: number; // seconds until the caller may retry
-  scope?: string; // "api" | "model"
-  kind?: 'rate' | 'credits' | 'busy' | 'login'; // credits = monthly quota exhausted (402), no countdown; busy = deployment/provider failure (503); login = workspace persistence needs a bearer (ADR-0018), no countdown
+  scope?: string; // "api" | "user" | "model"
+  kind?: 'rate' | 'credits' | 'busy' | 'login' | 'capacity'; // credits = monthly quota exhausted (402), no countdown; busy = deployment/provider failure (503); login = workspace persistence needs a bearer (ADR-0018), no countdown; capacity = AI model per-minute limit (ADR-0025), login does not help
   loginAvailable?: boolean; // anonymous caller — logging in raises free limits
 };
 
@@ -65,13 +65,16 @@ export default function RateLimitModal() {
   const isCredits = info.kind === 'credits';
   const isBusy = info.kind === 'busy';
   const isLogin = info.kind === 'login';
+  const isCapacity = info.kind === 'capacity';
   const title = isLogin
     ? 'Log in to save your work'
     : isCredits
       ? 'Free credits used up'
       : isBusy
         ? 'Service busy'
-        : 'Rate limit reached';
+        : isCapacity
+          ? 'AI model at capacity'
+          : 'Rate limit reached';
   const message =
     info.message ||
     (isLogin
@@ -80,7 +83,9 @@ export default function RateLimitModal() {
         ? "You've used up the free credits for this month."
         : isBusy
           ? 'The service is experiencing flaky behavior due to high load. Please try again in a few moments.'
-          : "You've hit the rate limit. Please wait a moment before trying again.");
+          : isCapacity
+            ? 'The AI model is at its per-minute capacity. Please try again in a few seconds.'
+            : "You've hit the rate limit. Please wait a moment before trying again.");
 
   return (
     <div

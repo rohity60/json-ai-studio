@@ -457,6 +457,9 @@ def fake_invoke(monkeypatch):
     replies: list = []
 
     async def invoke(session_id, message, principal, system_prompt, **kw):
+        if kw.get("planner"):  # ADR-0025: prompt comes from the turn planner
+            plan = kw["planner"](SimpleNamespace(name="fake"), "fake/m")
+            kw = {**kw, "toolbox": plan.toolbox, "history": plan.messages[1:-1]}
         seen.append(kw)
         yield "event: thinking\ndata: " + json.dumps(
             {"text": json.dumps(replies.pop(0))}
@@ -562,7 +565,24 @@ def no_sleep(monkeypatch):
     return waits
 
 
-async def test_rate_limited_round_is_retried(gateway, no_sleep, monkeypatch):
+async def test_rate_limited_round_not_retried_by_default(
+    gateway, no_sleep, monkeypatch
+):
+    async def limited(**kw):
+        raise _rate_limited(3.7)
+
+    monkeypatch.setattr(gateway.gw.litellm, "acompletion", limited)
+    events = await _run(gateway.gw, JsonToolbox(RECORDS))
+    assert no_sleep == []  # 0 retries (ADR-0025)
+    event, payload = events[-1]
+    assert event == "rate_limit" and payload["scope"] == "model"
+
+
+async def test_rate_limited_round_retried_when_enabled(gateway, no_sleep, monkeypatch):
+    from src.json_ai_studio.settings import get_settings
+
+    monkeypatch.setenv("CHAT_TOOL_RETRY_ATTEMPTS", "1")
+    get_settings.cache_clear()
     final = '{"diffs": [], "explanation": "ok"}'
     gateway.script.extend(
         [_response(calls=[("search", {"query": "ch_3"})]), _response(content=final)]
@@ -576,7 +596,11 @@ async def test_rate_limited_round_is_retried(gateway, no_sleep, monkeypatch):
         return await real(**kw)
 
     monkeypatch.setattr(gateway.gw.litellm, "acompletion", flaky)
-    events = await _run(gateway.gw, JsonToolbox(RECORDS))
+    try:
+        events = await _run(gateway.gw, JsonToolbox(RECORDS))
+    finally:
+        monkeypatch.delenv("CHAT_TOOL_RETRY_ATTEMPTS")
+        get_settings.cache_clear()  # don't leak attempts=1 into later tests
     assert no_sleep == [pytest.approx(4.2)]  # provider hint + 0.5s
     assert [p["text"] for e, p in events if e == "thinking"] == [final]
 
@@ -588,10 +612,15 @@ async def test_long_retry_hint_gives_up(gateway, no_sleep, monkeypatch):
     monkeypatch.setattr(gateway.gw.litellm, "acompletion", always_limited)
     events = await _run(gateway.gw, JsonToolbox(RECORDS))
     assert no_sleep == []
-    assert [e for e, _ in events][-1] == "service_unavailable"
+    # Provider 429 is model capacity with its real delay, not "busy" (ADR-0025).
+    event, payload = events[-1]
+    assert event == "rate_limit"
+    assert payload["scope"] == "model"
+    assert payload["retry_after"] == 45
+    assert payload["login_available"] is False
 
 
-async def test_server_error_retried_then_gives_up(gateway, no_sleep, monkeypatch):
+async def test_server_error_not_retried(gateway, no_sleep, monkeypatch):
     import litellm
 
     async def broken(**kw):
@@ -601,5 +630,8 @@ async def test_server_error_retried_then_gives_up(gateway, no_sleep, monkeypatch
 
     monkeypatch.setattr(gateway.gw.litellm, "acompletion", broken)
     events = await _run(gateway.gw, JsonToolbox(RECORDS))
-    assert no_sleep == [2.0, 2.0]  # chat_tool_retry_attempts=2
+    # 5xx never retried: each retry would add to the provider's per-minute
+    # count (ADR-0025); pacing keeps load down instead.
+    assert no_sleep == []
+    assert len(gateway.calls) == 0  # broken() raised before recording
     assert [e for e, _ in events][-1] == "service_unavailable"

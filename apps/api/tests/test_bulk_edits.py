@@ -10,6 +10,7 @@ pattern the server expands against the full JSON. Production case
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -217,7 +218,11 @@ class FakeLLM:
         self.calls: list[dict] = []
 
     async def invoke(self, session_id, message, principal, system_prompt, **kw):
-        self.calls.append({"system": system_prompt, "history": kw.get("history") or []})
+        history = kw.get("history") or []
+        if kw.get("planner"):  # ADR-0025: prompt comes from the turn planner
+            msgs = kw["planner"](SimpleNamespace(name="fake"), "fake/m").messages
+            system_prompt, history = msgs[0]["content"], msgs[1:-1]
+        self.calls.append({"system": system_prompt, "history": history})
         yield "event: thinking\ndata: " + json.dumps(
             {"text": json.dumps(self.replies.pop(0))}
         ) + "\n\n"

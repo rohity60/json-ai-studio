@@ -53,6 +53,7 @@ Links to relevant discussions, PRDs, prior ADRs.
 | [0022](0022-server-side-bulk-edits-for-large-json.md) | Server-side bulk edits (`*` pattern + where) for large JSON | Accepted | 2026-10-11 |
 | [0023](0023-format-hints-and-proactive-format-fixes.md) | Format hints from template metadata + proactive format fixes | Accepted | 2026-10-21 |
 | [0024](0024-lookup-tools-for-large-json.md) | Lookup tools (search/query/read) + key-union skeleton for large JSON | Accepted | 2026-10-24 |
+| [0025](0025-deployment-token-budget-and-turn-planner.md) | Deployment token budget and turn planner (inline vs skeleton by budget) | Proposed | 2026-10-30 |
 
 ## Adding a New ADR
 

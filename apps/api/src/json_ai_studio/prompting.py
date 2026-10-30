@@ -392,56 +392,75 @@ def is_skeleton_mode(working_json: Any) -> bool:
     return len(compact) > max_inline
 
 
-def build_system_prompt(working_json: dict[str, Any], has_history: bool = False) -> str:
+def _inline_context(working_json: Any) -> str:
+    """Whole document, pretty-printed when that fits the inline cap."""
+    max_inline = get_settings().llm_max_inline_chars
+    pretty = json.dumps(working_json, indent=2, ensure_ascii=False, default=str)
+    if len(pretty) <= max_inline:
+        return f"CURRENT WORKING JSON:\n{pretty}"
+    compact = json.dumps(
+        working_json, separators=(",", ":"), ensure_ascii=False, default=str
+    )
+    return f"CURRENT WORKING JSON:\n{compact}"
+
+
+def _skeleton_context(working_json: Any) -> str:
+    skeleton = json.dumps(
+        build_skeleton(working_json),
+        indent=2,
+        ensure_ascii=False,
+        default=str,
+    )
+    return (
+        "The working JSON is too large to inline in full. Below is a "
+        "STRUCTURAL SKELETON: EVERY key that occurs anywhere in the "
+        "document, with SAMPLE values — long strings are truncated with "
+        "an ellipsis. Each array shows ONE sample element whose keys are "
+        'merged from ALL its elements ("…keys in only some items" lists '
+        'keys that only some elements have) plus a "…+N more items" '
+        "marker (so N+1 is the array length); arrays whose elements "
+        'carry "$type" show one merged sample per $type, with counts.\n'
+        f"{skeleton}\n"
+        "You may rely on the keys and the sample values shown. For "
+        "large arrays you can see only the first element's shape, so "
+        "NEVER guess values you cannot see: for any change that targets "
+        "elements by a field value, a range, or every element, use a "
+        '"bulk" op (see BULK EDITS) — the server matches it against the '
+        "full document. Only use plain diffs for paths and values "
+        "visible above."
+        + (
+            "\nARRAY FIELD STATS (computed over EVERY element — use them "
+            'to pick the right "where" field: a field that is not '
+            "unique per element, e.g. a counter restarting per group, "
+            'cannot identify positions; use "$index" for "first N" '
+            "requests):\n" + "\n".join(stats)
+            if (stats := build_array_stats(working_json))
+            else ""
+        )
+    )
+
+
+def build_system_prompt(
+    working_json: dict[str, Any],
+    has_history: bool = False,
+    *,
+    mode: str | None = None,
+) -> str:
     """Build the system prompt with the working JSON inlined.
 
     `has_history` adds the conversation-history rules (diff status
     semantics) when prior turns are replayed alongside this prompt.
+
+    `mode` is chosen by the turn planner (ADR-0025): "inline" or
+    "skeleton". None = size-based choice against LLM_MAX_INLINE_CHARS.
+    Format notes are always matched on the document given.
     """
-    max_inline = get_settings().llm_max_inline_chars
-    pretty = json.dumps(working_json, indent=2, ensure_ascii=False, default=str)
-    if len(pretty) <= max_inline:
-        context = f"CURRENT WORKING JSON:\n{pretty}"
+    if mode is None:
+        mode = "skeleton" if is_skeleton_mode(working_json) else "inline"
+    if mode == "skeleton":
+        context = _skeleton_context(working_json)
     else:
-        compact = json.dumps(
-            working_json, separators=(",", ":"), ensure_ascii=False, default=str
-        )
-        if len(compact) <= max_inline:
-            context = f"CURRENT WORKING JSON:\n{compact}"
-        else:
-            skeleton = json.dumps(
-                build_skeleton(working_json),
-                indent=2,
-                ensure_ascii=False,
-                default=str,
-            )
-            context = (
-                "The working JSON is too large to inline in full. Below is a "
-                "STRUCTURAL SKELETON: EVERY key that occurs anywhere in the "
-                "document, with SAMPLE values — long strings are truncated with "
-                "an ellipsis. Each array shows ONE sample element whose keys are "
-                'merged from ALL its elements ("…keys in only some items" lists '
-                'keys that only some elements have) plus a "…+N more items" '
-                "marker (so N+1 is the array length); arrays whose elements "
-                'carry "$type" show one merged sample per $type, with counts.\n'
-                f"{skeleton}\n"
-                "You may rely on the keys and the sample values shown. For "
-                "large arrays you can see only the first element's shape, so "
-                "NEVER guess values you cannot see: for any change that targets "
-                "elements by a field value, a range, or every element, use a "
-                '"bulk" op (see BULK EDITS) — the server matches it against the '
-                "full document. Only use plain diffs for paths and values "
-                "visible above."
-                + (
-                    "\nARRAY FIELD STATS (computed over EVERY element — use them "
-                    'to pick the right "where" field: a field that is not '
-                    "unique per element, e.g. a counter restarting per group, "
-                    'cannot identify positions; use "$index" for "first N" '
-                    "requests):\n" + "\n".join(stats)
-                    if (stats := build_array_stats(working_json))
-                    else ""
-                )
-            )
+        context = _inline_context(working_json)
     notes = format_notes_block(working_json)
     if notes:
         context = f"{context}\n\n{notes.rstrip()}"
