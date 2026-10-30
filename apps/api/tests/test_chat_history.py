@@ -14,6 +14,7 @@ budgets, boundaries, context fit) directly.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 import uuid
 from typing import Any
 
@@ -65,6 +66,9 @@ class FakeLLM:
         history=None,
         **_kw,
     ):
+        if _kw.get("planner"):  # ADR-0025: prompt comes from the turn planner
+            msgs = _kw["planner"](SimpleNamespace(name="fake"), "fake/m").messages
+            system_prompt, history = msgs[0]["content"], msgs[1:-1]
         self.calls.append(
             {
                 "system": system_prompt,

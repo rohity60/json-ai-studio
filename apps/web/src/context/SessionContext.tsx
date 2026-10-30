@@ -7,6 +7,7 @@ import * as api from '../lib/api';
 import { saveWorkspace, loadWorkspace, clearWorkspace, MAX_CACHED_TURNS } from '../lib/versionCache';
 import { pendingDiffs, syncStatuses, type UiChatTurn } from '../lib/chatHistory';
 import { showRateLimitModal } from '../components/RateLimitModal';
+import { showTooLargeModal } from '../components/TooLargeModal';
 import { trackEvent } from '../lib/gtagConversion';
 
 // A request is rate-limited when the backend answered HTTP 429 (status carried
@@ -95,7 +96,7 @@ type SessionContextValue = {
   state: SessionState;
   createSession: (name: string) => Promise<void>;
   uploadJson: (jsonData: Record<string, any>) => Promise<boolean>;
-  sendMessage: (message: string, thinking?: boolean) => Promise<void>;
+  sendMessage: (message: string, thinking?: boolean, focusPath?: string) => Promise<void>;
   acceptDiff: (diffId: string) => Promise<void>;
   createVersion: (label: string) => void;
   selectVersion: (versionId: string) => Promise<void>;
@@ -341,7 +342,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       }
     }, [state.sessionId, apiKey]);
 
-  const sendMessage = useCallback(async (message: string, thinking: boolean = false) => {
+  const sendMessage = useCallback(async (message: string, thinking: boolean = false, focusPath?: string) => {
     if (!state.sessionId) return;
 
          // 1. Snapshot the initial payload variables
@@ -357,7 +358,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       loading: false,
       conversationHistory: [
         ...prev.conversationHistory,
-        { id: tempUserId, role: 'user', content: message, ephemeral: true },
+        {
+          id: tempUserId,
+          role: 'user',
+          content: focusPath ? `${message}\n\n(Section: ${focusPath})` : message,
+          ephemeral: true,
+        },
       ]
       }));
 
@@ -384,7 +390,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         }));
 
         // 2. Stream loop
-      for await (const chunk of api.streamChat(state.sessionId, message, currentWorkingJson, apiKey, thinking)) {
+      for await (const chunk of api.streamChat(state.sessionId, message, currentWorkingJson, apiKey, thinking, focusPath)) {
 
         // Model-level quota/availability events: backend streams a
         // `rate_limit`, `credit_limit` or `service_unavailable` event
@@ -402,11 +408,21 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                 ? 'credits'
                 : chunk.type === 'service_unavailable'
                   ? 'busy'
-                  : 'rate',
+                  : chunk.data?.scope === 'model'
+                    ? 'capacity' // AI model per-minute limit, not the user's (ADR-0025)
+                    : 'rate',
             message: chunk.data?.message,
             retryAfter: chunk.data?.retry_after,
             loginAvailable: chunk.data?.login_available === true,
           });
+          quotaStopped = true;
+          break;
+          }
+
+        // Document cannot fit the model even trimmed (ADR-0025): nothing was
+        // sent and no credits used. Offer sections / a trimmed copy.
+        if (chunk.type === 'input_too_large') {
+          showTooLargeModal({ ...chunk.data, userMessage: message, thinking });
           quotaStopped = true;
           break;
           }
@@ -435,6 +451,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           structureChanged = true;
           } else if (chunk.type === 'tool' && chunk.data?.name) {
           toolStatus = describeToolCall(chunk.data.name, chunk.data.args);
+          structureChanged = true;
+          } else if (chunk.type === 'waiting') {
+          // Deployment budget wait (ADR-0025); the turn continues after it.
+          toolStatus = `Waiting for AI model capacity… ~${chunk.data?.retry_after ?? ''}s`;
           structureChanged = true;
           } else if (chunk.type === 'content' || chunk.type === 'text') {
           textAccumulator += chunk.data.text || '';

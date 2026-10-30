@@ -1,0 +1,26 @@
+{
+  "service": "web-app",
+  "environment": "production",
+  "flags": {
+    "darkMode": {
+      "enabled": false,
+      "rollout": 10,
+      "segments": [
+        "beta"
+      ]
+    },
+    "newCheckout": {
+      "enabled": true,
+      "rollout": 50,
+      "segments": []
+    },
+    "aiAssistant": {
+      "enabled": false,
+      "rollout": 0,
+      "segments": [
+        "staff"
+      ]
+    }
+  },
+  "refreshIntervalSeconds": 300
+}

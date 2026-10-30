@@ -29,6 +29,14 @@
 #
 # tool_streaming (default true): stream tool rounds; set false only where
 # streamed tool calls are proven broken. Verified streamed: ollama gemma4:12b.
+#
+# tpm_input_limit (ADR-0025): provider input tokens per minute, per model.
+# The turn planner sizes prompts and tool rounds to fit it, and the gateway
+# counter waits or rejects before the provider would 429. Omit = no limit.
+# context_tokens: model input window when LiteLLM does not know it.
+# min_call_interval_s: minimum spacing between LLM call starts on this
+# deployment, across all users and tool rounds (each waits for its slot,
+# countdown shown). Omit = no pacing.
 
 deployments:
   google_ai_studio:
@@ -37,6 +45,14 @@ deployments:
     reasoning: "minimal"
     supports_thinking: true
     supports_tools: true
+    # Streamed tool rounds fail mid-stream here (MidStreamFallbackError →
+    # 500/429 on most first attempts, 2026-10-30); non-streaming tool calls
+    # were the verified mode (ADR-0024).
+    tool_streaming: false
+    # Free tier: generate_content_free_tier_input_token_count = 16000/min.
+    tpm_input_limit: 16000
+    # ~4k input tokens per skeleton call → ~4 calls/min fit: one every 15 s.
+    min_call_interval_s: 15
     models:
         - "gemma-4-26b-a4b-it"
 

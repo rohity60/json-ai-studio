@@ -608,6 +608,29 @@ paths:
             data: {"scope":"model","message":"...","retry_after":null,"login_available":true}
         login_available is true only for anonymous callers (logging in raises
         the free-tier limits, ADR-0015).
+
+        scope says whose limit was hit: "user" = the caller's own quota
+        (ADR-0015); "model" = the AI deployment's per-minute capacity
+        (ADR-0025) — login_available is always false for "model". A "model"
+        rate_limit is emitted before the provider is called, or when the
+        provider itself returns 429 (retry_after = provider retry delay).
+
+        Deployment budget events (ADR-0025). Token counts are never sent:
+          - "waiting" — non-terminal; the turn waits for model capacity, then
+            continues. May repeat as the countdown updates.
+            data: {"retry_after":8,"message":"Waiting for model capacity…"}
+          - "input_too_large" — terminal; the request cannot fit the current
+            model even as a skeleton. Nothing was sent to the
+            model and no credits were used.
+            data: {"message":"...","doc_kb":180,"max_kb":40,
+                   "sections":[{"path":"/settings","kb":12}],
+                   "trimmed":{"working_json":{...},"cuts":[{"path":"/records","from":1240,"to":25,"kind":"array"}]}}
+            sections = paths that fit (resend with focus_path); trimmed = a
+            structure-preserving copy that fits, offered as a download (null
+            when no trim fits). cuts kinds: array/keys {from,to}, string
+            {count,to}.
+          - "service_unavailable" — provider outage (not rate limits).
+            data: {"scope":"model","message":"...","retry_after":30}
       operationId: sendChatTurn
       security:
          - simpleApiKey: []
@@ -1597,6 +1620,13 @@ components:
         message:
           type: string
           description: User's natural language modification request
+        focus_path:
+          type: string
+          description: |-
+            Optional JSON Pointer (e.g. "/settings"). The model sees and edits
+            only this subtree; diff paths are returned against the full
+            document. Used after an input_too_large event (ADR-0025).
+          example: "/settings"
       required: [session_id, working_json, message]
 
     UploadResponse:

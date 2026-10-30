@@ -81,6 +81,16 @@ class DeploymentProvider(ABC):
         # Stream tool rounds by default; opt out only for backends where
         # streamed tool calls are proven broken.
         self.tool_streaming: bool = bool(cfg.get("tool_streaming", True))
+        # Provider input-token budget per model per minute (ADR-0025), e.g.
+        # Google free tier 16k. None = no deployment budget. context_tokens
+        # overrides the model window when LiteLLM does not know it.
+        tpm = cfg.get("tpm_input_limit")
+        self.tpm_input_limit: int | None = int(tpm) if tpm else None
+        ctx = cfg.get("context_tokens")
+        self.context_tokens: int | None = int(ctx) if ctx else None
+        # Minimum seconds between call starts on this deployment, across all
+        # turns and users (ADR-0025). 0 = no pacing.
+        self.min_call_interval_s: float = float(cfg.get("min_call_interval_s") or 0)
 
         # Empty base_url = endpoint env var not set -> deployment disabled
         # (warning, not an error). Non-empty must be a valid http(s) URL.

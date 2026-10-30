@@ -16,9 +16,8 @@ from ..bulk_edits import expand_all, extract_bulk, extract_question
 from ..diff_utils import DiffApplyError, DiffUtils, _split_path, parse_llm_response
 from ..settings import get_settings
 from ..gateway import GatewayService
-from ..json_tools import JsonToolbox
-from ..prompting import build_system_prompt, is_skeleton_mode
 from . import chat_history_service
+from .turn_planner import plan_turn
 from .session_service import now_iso
 
 logger = logging.getLogger("json_ai_studio.chat")
@@ -95,8 +94,13 @@ async def _stream_llm(
     reasoning: str | None = None,
     history: list[dict[str, str]] | None = None,
     outcome: dict[str, Any] | None = None,
+    focus_path: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream LLM response as SSE events via GatewayService.
+
+    The turn planner (ADR-0025) sizes the prompt to the chosen deployment.
+    `focus_path` (JSON Pointer) limits what the model sees to one subtree;
+    its diff and bulk paths are prefixed back onto the full document.
 
     `history` is replayed prior turns (chat history). `outcome`, when given,
     is filled with what the turn produced (applied/failed diffs,
@@ -130,30 +134,47 @@ async def _stream_llm(
         if outcome is None:
             outcome = {}
         outcome["store"] = False
-        system_prompt = build_system_prompt(working_json, has_history=bool(history))
-        logger.debug(
-            "chat system_prompt session=%s prompt=%s", session_id, system_prompt
-        )
+        model_json: Any = working_json
+        if focus_path:
+            model_json = _value_at(working_json, focus_path)
+            if not isinstance(model_json, (dict, list)):
+                yield sse(
+                    "complete",
+                    {
+                        "working_json": working_json,
+                        "explanation": (
+                            f"The section {focus_path} was not found in the "
+                            "current JSON. No changes were made."
+                        ),
+                    },
+                )
+                return
+            logger.info("chat focus session=%s path=%s", session_id, focus_path)
         logger.debug("chat history session=%s messages=%s", session_id, history)
+
+        def planner(deployment: Any, litellm_model: str):
+            plan = plan_turn(
+                model_json, message, list(history or []), deployment, litellm_model
+            )
+            messages = getattr(plan, "messages", None)
+            if messages:
+                logger.debug(
+                    "chat system_prompt session=%s prompt=%s",
+                    session_id,
+                    messages[0]["content"],
+                )
+            return plan
 
         content_parts: list[str] = []
         error_payload: dict[str, Any] | None = None
         quota_hit = False
-        # Lookup tools only when the model sees a skeleton (ADR-0024);
-        # inline documents keep the single streaming call.
-        toolbox = (
-            JsonToolbox(working_json, get_settings().chat_tool_result_max_chars)
-            if is_skeleton_mode(working_json)
-            else None
-        )
         async for event_text in GatewayService.invoke(
             session_id,
             message,
             principal,
-            system_prompt,
+            "",
             reasoning=reasoning,
-            history=history,
-            toolbox=toolbox,
+            planner=planner,
         ):
             yield event_text
             event, payload = parse_sse(event_text)
@@ -163,10 +184,16 @@ async def _stream_llm(
                     content_parts.append(text)
             elif event == "error" and payload is not None:
                 error_payload = payload
-            elif event in ("rate_limit", "credit_limit", "service_unavailable"):
+            elif event in (
+                "rate_limit",
+                "credit_limit",
+                "service_unavailable",
+                "input_too_large",
+            ):
                 quota_hit = True
 
-        # The rate_limit/credit_limit/service_unavailable event was already
+        # The rate_limit/credit_limit/service_unavailable/input_too_large
+        # event was already
         # forwarded to the client (it becomes a popup); stop here so we don't
         # emit a misleading "complete" with an empty explanation.
         if quota_hit:
@@ -197,6 +224,14 @@ async def _stream_llm(
         bulk_ops, bulk_explanation = extract_bulk(combined)
         # Clarifying question with options (ADR-0024); rendered as buttons.
         question = extract_question(combined)
+        if focus_path:
+            # The model saw only the focused subtree; re-anchor its paths.
+            for d in diffs:
+                if isinstance(d.get("path"), str):
+                    d["path"] = focus_path + d["path"]
+            for op in bulk_ops:
+                if isinstance(op.get("path"), str):
+                    op["path"] = focus_path + op["path"]
         if question:
             outcome["question"] = question
         bulk_notes: list[str] = []
@@ -343,6 +378,7 @@ async def chat_event_stream(
     message: str,
     principal,
     thinking: bool = False,
+    focus_path: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Full chat turn: stream LLM events, then persist the merged JSON.
 
@@ -380,6 +416,7 @@ async def chat_event_stream(
             reasoning=reasoning,
             history=history,
             outcome=outcome,
+            focus_path=focus_path or None,
         ):
             event, payload = parse_sse(event_text)
             if event != "complete" or payload is None:

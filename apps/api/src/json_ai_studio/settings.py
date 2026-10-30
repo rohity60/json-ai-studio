@@ -72,8 +72,20 @@ class Settings(BaseSettings):
     chat_tool_max_rounds: int = 4  # tool rounds before a forced final answer
     chat_tool_result_max_chars: int = 4_000  # per tool result
     chat_tool_turn_timeout_s: float = 150.0  # whole tool loop wall clock
-    chat_tool_retry_attempts: int = 2  # per round, transient provider errors
+    # Retries per LLM call (tool round or single call). Default 0: pacing and
+    # the token gate keep load down, and every retry adds to the provider's
+    # per-minute count (ADR-0025). If raised, only a 429 with a short
+    # provider hint is retried; 5xx never are.
+    chat_tool_retry_attempts: int = 0
     chat_tool_retry_max_wait_s: float = 10.0  # longer provider retry hints → fail
+
+    # Deployment token budget (ADR-0025). Prompts are planned, and every call
+    # is gated, against this fraction of a deployment's tpm_input_limit
+    # (estimate error; Google fails with 500s near its stated limit). Any call — first or a later tool round — that would overflow
+    # the minute waits up to max_wait_s for capacity (countdown streamed),
+    # else the turn ends with a model-scope rate_limit. 60 s = one window.
+    deployment_budget_headroom: float = 0.8
+    deployment_budget_max_wait_s: float = 60.0
 
     # Bulk edits: the model may emit a pattern op ("/records/*/field" + where)
     # that the server expands against the full JSON (bulk_edits.py). Caps

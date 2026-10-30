@@ -21,11 +21,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Callable
 
 import litellm
 from fastapi import HTTPException
@@ -35,9 +36,15 @@ from .deployment import DeploymentRegistry
 from .providers import DeploymentProvider
 from .json_tools import JsonToolbox
 from .services import chat_history_service, credit_service
+from .services import deployment_budget as budget
+from .services.turn_planner import TooLarge, TurnPlan
 from .settings import get_settings
 
 logger = logging.getLogger("json_ai_studio.gateway")
+
+# No "Give Feedback / Get Help" banner on stdout for every provider error;
+# the error itself is logged below.
+litellm.suppress_debug_info = True
 
 # Shown to users when a deployment/provider call fails (any cause). Raw
 # provider errors go to server logs only — never to the client.
@@ -92,7 +99,7 @@ def _quota_sse_event(exc: HTTPException) -> str:
         f"event: {event}\ndata: "
         + json.dumps(
             {
-                "scope": "model",
+                "scope": "user",
                 "message": message,
                 "retry_after": retry_after,
                 "login_available": login_available,
@@ -106,32 +113,160 @@ _RETRY_IN_RE = re.compile(r"retry in ([0-9.]+)s", re.IGNORECASE)
 _RETRY_DELAY_RE = re.compile(r'"retryDelay":\s*"([0-9.]+)s"')
 
 
-def _transient_retry_wait(exc: Exception, attempt: int, settings: Any) -> float | None:
-    """Seconds to wait before retrying a tool round, or None to give up.
+MODEL_BUSY_MESSAGE = (
+    "The AI model is at its per-minute capacity. Please try again in a " "few seconds."
+)
 
-    Rate limits (429) use the provider's retry hint when it is short enough;
-    5xx / connection errors back off briefly. LiteLLM sometimes wraps the
-    real error (MidStreamFallbackError), so the message is checked too.
-    """
-    if attempt >= settings.chat_tool_retry_attempts:
-        return None
+
+class BudgetExhausted(Exception):
+    """No deployment capacity within the allowed wait (ADR-0025)."""
+
+    def __init__(self, retry_after: float) -> None:
+        super().__init__(f"deployment budget exhausted, retry in {retry_after:.1f}s")
+        self.retry_after = retry_after
+
+
+def _is_rate_limit(exc: Exception) -> bool:
     text = f"{type(exc).__name__}: {exc}"
-    if (
+    return (
         isinstance(exc, litellm.RateLimitError)
         or "RateLimitError" in text
         or " 429" in text
-    ):
-        match = _RETRY_IN_RE.search(text) or _RETRY_DELAY_RE.search(text)
-        wait = float(match.group(1)) + 0.5 if match else 5.0
-        return wait if wait <= settings.chat_tool_retry_max_wait_s else None
-    transient = (
-        litellm.InternalServerError,
-        litellm.ServiceUnavailableError,
-        litellm.APIConnectionError,
     )
-    if isinstance(exc, transient) or "InternalServerError" in text or " 500" in text:
-        return 2.0
+
+
+def _settle_failed(holder: dict[str, Any], exc: Exception) -> None:
+    """A failed call keeps its reservation (at the estimate): the provider
+    counts its input tokens toward the per-minute limit even on 429/5xx."""
+    holder.pop("res", None)
+
+
+def _retry_hint(exc: Exception) -> float | None:
+    """Provider retry delay in seconds, if the error carries one."""
+    text = str(exc)
+    match = _RETRY_IN_RE.search(text) or _RETRY_DELAY_RE.search(text)
+    return float(match.group(1)) if match else None
+
+
+def _model_rate_limit_event(retry_after: float) -> str:
+    """Deployment capacity exhausted: logging in would not help."""
+    seconds = 60 if math.isinf(retry_after) else max(1, math.ceil(retry_after))
+    return (
+        "event: rate_limit\ndata: "
+        + json.dumps(
+            {
+                "scope": "model",
+                "message": MODEL_BUSY_MESSAGE,
+                "retry_after": seconds,
+                "login_available": False,
+            }
+        )
+        + "\n\n"
+    )
+
+
+def _too_large_event(result: TooLarge) -> str:
+    message = (
+        f"This JSON is about {result.doc_kb} KB; the current AI model can work "
+        f"with about {result.max_kb} KB at a time. Edit one section, or "
+        "continue with a trimmed copy."
+    )
+    return (
+        "event: input_too_large\ndata: "
+        + json.dumps(
+            {
+                "message": message,
+                "doc_kb": result.doc_kb,
+                "max_kb": result.max_kb,
+                "sections": result.sections,
+                "trimmed": result.trimmed,
+            },
+            default=str,
+        )
+        + "\n\n"
+    )
+
+
+_WAIT_TICK_S = 5.0
+
+
+async def _acquire(
+    deployment: Any, model: str, raw_estimate: int, holder: dict[str, Any]
+) -> AsyncGenerator[str, None]:
+    """Reserve deployment budget for one call, waiting briefly if needed.
+
+    Streams `waiting` events while it waits — at least every
+    _WAIT_TICK_S, so the countdown updates and proxies see traffic; stores
+    the reservation in holder["res"]; raises BudgetExhausted when capacity
+    will not free up within deployment_budget_max_wait_s.
+    """
+    max_wait = get_settings().deployment_budget_max_wait_s
+    # Pacing slot first (global per deployment): spreads calls over the
+    # minute so they stay under the provider's cap.
+    slot = budget.claim_slot(deployment, model)
+    if slot > max_wait:
+        raise BudgetExhausted(slot)
+    while slot > 0:
+        yield "event: waiting\ndata: " + json.dumps(
+            {
+                "retry_after": max(1, math.ceil(slot)),
+                "message": "Waiting for AI model capacity…",
+            }
+        ) + "\n\n"
+        step = min(slot, _WAIT_TICK_S)
+        await asyncio.sleep(step)
+        slot -= step
+    waited = 0.0
+    while True:
+        res, wait = budget.try_reserve(deployment, model, raw_estimate)
+        if res is not None:
+            holder["res"] = res
+            return
+        if waited + wait > max_wait:
+            raise BudgetExhausted(wait)
+        step = min(wait, _WAIT_TICK_S)
+        logger.info(
+            "budget wait deployment=%s model=%s wait=%.1fs",
+            getattr(deployment, "name", "?"),
+            model,
+            wait,
+        )
+        yield "event: waiting\ndata: " + json.dumps(
+            {
+                "retry_after": max(1, math.ceil(wait)),
+                "message": "Waiting for AI model capacity…",
+            }
+        ) + "\n\n"
+        await asyncio.sleep(step + 0.05)
+        waited += step
+
+
+def _transient_retry_wait(exc: Exception, attempt: int, settings: Any) -> float | None:
+    """Seconds to wait before retrying an LLM call, or None to give up.
+
+    Only short rate limits (429 with a provider hint) are retried. 5xx are
+    not (ADR-0025): Google's free tier answers 500 in bursts and each retry
+    adds to its per-minute count, so retries made it worse; call pacing
+    keeps load down instead. LiteLLM sometimes wraps the real error
+    (MidStreamFallbackError), so the message is checked too.
+    """
+    if attempt >= settings.chat_tool_retry_attempts:
+        return None
+    if _is_rate_limit(exc):
+        hint = _retry_hint(exc)
+        wait = hint + 0.5 if hint is not None else 5.0
+        return wait if wait <= settings.chat_tool_retry_max_wait_s else None
     return None
+
+
+async def _backoff(deployment: Any, model: str, wait: float) -> None:
+    """Back off before a (429) retry. With a deployment budget the whole
+    deployment pauses (every turn backs off, not only this one) and the next
+    _acquire streams the countdown; otherwise just sleep."""
+    if budget.tpm_limit(deployment) is not None:
+        budget.block(deployment, model, wait)
+    else:
+        await asyncio.sleep(wait)
 
 
 class GatewayService:
@@ -295,8 +430,17 @@ class GatewayService:
         reasoning: str | None = None,
         history: list[dict[str, str]] | None = None,
         toolbox: JsonToolbox | None = None,
+        planner: Callable[[Any, str], TurnPlan | TooLarge] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Full LLM pipeline: credit check -> stream -> diff -> cost -> deduct -> log.
+
+        `planner` (ADR-0025) is called once the deployment is known and
+        returns the prompt plan (messages, toolbox, tool rounds) sized to
+        the deployment's budget — or TooLarge, which ends the turn with an
+        `input_too_large` event before any LLM call. When given, it
+        replaces `system_prompt`/`history`/`toolbox`. Every LLM call
+        reserves deployment budget first (waits briefly or ends with a
+        model-scope `rate_limit`); user quotas are untouched by that.
 
         `toolbox` (documents too large to inline) enables the read-only
         search/read lookup loop on deployments with supports_tools; the
@@ -325,6 +469,8 @@ class GatewayService:
             raise
 
         start_time = time.monotonic()
+        holder: dict[str, Any] = {}  # in-flight budget reservation
+        litellm_model = ""
         try:
             # Select deployment: explicit/profile model routes via pick();
             # no model means the config default — round-robin over enabled
@@ -362,14 +508,26 @@ class GatewayService:
                 }
             ) + "\n\n"
 
-            messages = chat_history_service.fit_to_context(
-                litellm_model,
-                system_prompt,
-                list(history or []),
-                message,
-                reserve_output=get_settings().llm_max_tokens,
-            )
             settings = get_settings()
+            max_rounds = settings.chat_tool_max_rounds
+            raw_estimate = 0
+            if planner is not None:
+                plan = planner(deployment, litellm_model)
+                if isinstance(plan, TooLarge):
+                    yield _too_large_event(plan)
+                    return
+                messages = plan.messages
+                toolbox = plan.toolbox
+                max_rounds = plan.max_rounds
+                raw_estimate = plan.raw_estimate
+            else:
+                messages = chat_history_service.fit_to_context(
+                    litellm_model,
+                    system_prompt,
+                    list(history or []),
+                    message,
+                    reserve_output=settings.llm_max_tokens,
+                )
             use_tools = (
                 toolbox is not None
                 and settings.chat_tools_enabled
@@ -385,6 +543,8 @@ class GatewayService:
                     toolbox,
                     usage,
                     deployment.completion_params(resolved_model, reasoning),
+                    max_rounds=max_rounds,
+                    holder=holder,
                 ):
                     yield event_text
                 prompt_tokens = usage["prompt"]
@@ -401,35 +561,66 @@ class GatewayService:
                     prompt_tokens, completion_tokens, resolved_model, deployment
                 )
             else:
-                response = await litellm.acompletion(
-                    model=litellm_model,
-                    base_url=deployment.base_url,
-                    api_key=deployment.api_key or None,
-                    messages=messages,
-                    stream=True,
-                    timeout=120.0,
-                    num_retries=0,
-                    max_tokens=get_settings().llm_max_tokens,
-                    stream_options={"include_usage": True},
-                    **deployment.completion_params(resolved_model, reasoning),
-                )
-
-                content_parts: list[str] = []
-                last_chunk = None
-                async for chunk in response:
-                    last_chunk = chunk
-                    if not getattr(chunk, "choices", None):
-                        continue
-                    delta = chunk.choices[0].delta
-                    if isinstance(delta, dict):
-                        text = delta.get("content")
-                    else:
-                        text = getattr(delta, "content", None)
-                    if text:
-                        content_parts.append(text)
-                        yield "event: thinking\ndata: " + json.dumps(
-                            {"text": text}
-                        ) + "\n\n"
+                if budget.tpm_limit(deployment) is not None:
+                    raw_estimate = raw_estimate or budget.estimate_tokens(
+                        litellm_model, messages
+                    )
+                # Retry a short 429 only before any text reached the client —
+                # a retry after that would repeat it. 5xx are not retried.
+                attempt = 0
+                while True:
+                    async for event_text in _acquire(
+                        deployment, litellm_model, raw_estimate, holder
+                    ):
+                        yield event_text
+                    content_parts: list[str] = []
+                    last_chunk = None
+                    try:
+                        response = await litellm.acompletion(
+                            model=litellm_model,
+                            base_url=deployment.base_url,
+                            api_key=deployment.api_key or None,
+                            messages=messages,
+                            stream=True,
+                            timeout=120.0,
+                            num_retries=0,
+                            max_tokens=get_settings().llm_max_tokens,
+                            stream_options={"include_usage": True},
+                            **deployment.completion_params(resolved_model, reasoning),
+                        )
+                        async for chunk in response:
+                            last_chunk = chunk
+                            if not getattr(chunk, "choices", None):
+                                continue
+                            delta = chunk.choices[0].delta
+                            if isinstance(delta, dict):
+                                text = delta.get("content")
+                            else:
+                                text = getattr(delta, "content", None)
+                            if text:
+                                content_parts.append(text)
+                                yield "event: thinking\ndata: " + json.dumps(
+                                    {"text": text}
+                                ) + "\n\n"
+                        break
+                    except Exception as exc:
+                        wait = (
+                            None
+                            if content_parts
+                            else _transient_retry_wait(exc, attempt, settings)
+                        )
+                        if wait is None:
+                            raise
+                        _settle_failed(holder, exc)
+                        attempt += 1
+                        logger.warning(
+                            "invoke session=%s transient error, retry %d in %.1fs: %s",
+                            session_id,
+                            attempt,
+                            wait,
+                            type(exc).__name__,
+                        )
+                        await _backoff(deployment, litellm_model, wait)
 
                 combined = "".join(content_parts)
                 logger.info(
@@ -489,6 +680,8 @@ class GatewayService:
                     cost_usd = GatewayService._calculate_cost(
                         0, 0, resolved_model, deployment
                     )
+                if holder.get("res") is not None:
+                    budget.settle(holder.pop("res"), prompt_tokens)
 
             credits_used = GatewayService._calculate_credits(cost_usd)
             latency_ms = int((time.monotonic() - start_time) * 1000)
@@ -538,7 +731,17 @@ class GatewayService:
                 },
             )
 
+        except BudgetExhausted as e:
+            # Not a provider error: nothing was sent, user quota untouched.
+            logger.warning(
+                "invoke session=%s deployment=%s budget exhausted retry_after=%.1fs",
+                session_id,
+                deployment.name if deployment else "?",
+                e.retry_after,
+            )
+            yield _model_rate_limit_event(e.retry_after)
         except Exception as e:
+            _settle_failed(holder, e)
             latency_ms = int((time.monotonic() - start_time) * 1000)
             logger.error(
                 "invoke session=%s model=%s error=%s latency_ms=%d",
@@ -568,6 +771,14 @@ class GatewayService:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
+            if deployment is not None and _is_rate_limit(e):
+                # Provider 429 (ADR-0025): model capacity, with its real retry
+                # delay — not "high load", and logging in would not help.
+                hint = _retry_hint(e)
+                retry_after = hint if hint is not None else 60.0
+                budget.block(deployment, litellm_model, retry_after)
+                yield _model_rate_limit_event(retry_after)
+                return
             # Deployment/provider failure -> friendly popup event; raw error
             # stays in the logs above.
             yield "event: service_unavailable\ndata: " + json.dumps(
@@ -587,6 +798,8 @@ class GatewayService:
         toolbox: JsonToolbox,
         usage: dict[str, int],
         extra_params: dict[str, Any],
+        max_rounds: int | None = None,
+        holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Non-streaming rounds: model calls search/read until it answers.
 
@@ -595,6 +808,10 @@ class GatewayService:
         chat_tool_max_rounds, or past the turn deadline, the model is told to
         answer now. The final content is yielded as one `thinking` event so
         the existing parse/apply path is unchanged.
+
+        `max_rounds` comes from the turn planner (ADR-0025) when the
+        deployment has a budget; each round reserves budget for its own
+        (growing) prompt and settles with the provider's count.
         """
         settings = get_settings()
         messages = list(messages)
@@ -608,7 +825,12 @@ class GatewayService:
             if hasattr(deployment, "tool_litellm_model")
             else litellm_model
         )
-        max_rounds = max(0, settings.chat_tool_max_rounds)
+        if max_rounds is None:
+            max_rounds = settings.chat_tool_max_rounds
+        max_rounds = max(0, max_rounds)
+        if holder is None:
+            holder = {}
+        has_budget = budget.tpm_limit(deployment) is not None
         content = ""
         round_no = 0
         for round_no in range(max_rounds + 1):
@@ -638,6 +860,13 @@ class GatewayService:
             # failing — or re-running — the whole multi-round turn.
             attempt = 0
             while True:
+                raw = (
+                    budget.estimate_tokens(litellm_model, messages) if has_budget else 0
+                )
+                async for event_text in _acquire(
+                    deployment, litellm_model, raw, holder
+                ):
+                    yield event_text
                 try:
                     if getattr(deployment, "tool_streaming", True):
                         # Stream by default: text goes out live as `draft` events
@@ -669,6 +898,7 @@ class GatewayService:
                         response = await litellm.acompletion(stream=False, **request)
                     break
                 except Exception as exc:
+                    _settle_failed(holder, exc)
                     wait = _transient_retry_wait(exc, attempt, settings)
                     if wait is None:
                         raise
@@ -681,8 +911,12 @@ class GatewayService:
                         wait,
                         type(exc).__name__,
                     )
-                    await asyncio.sleep(wait)
+                    await _backoff(deployment, litellm_model, wait)
             u = getattr(response, "usage", None)
+            if holder.get("res") is not None:
+                budget.settle(
+                    holder.pop("res"), int(getattr(u, "prompt_tokens", 0) or 0)
+                )
             usage["prompt"] += int(getattr(u, "prompt_tokens", 0) or 0)
             usage["completion"] += int(getattr(u, "completion_tokens", 0) or 0)
             message = response.choices[0].message

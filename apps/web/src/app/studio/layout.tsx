@@ -4,6 +4,7 @@ import { WorkspaceProvider } from '@/context/WorkspaceContext';
 import { Toaster } from 'sonner';
 import VersionModal from '@/components/VersionModal';
 import RateLimitModal from '@/components/RateLimitModal';
+import TooLargeModal from '@/components/TooLargeModal';
 import SaveDialog from '@/components/SaveDialog';
 
 export const metadata: Metadata = {
@@ -22,6 +23,7 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
         <Toaster position="top-right" />
         <VersionModal />
         <RateLimitModal />
+        <TooLargeModal />
         <SaveDialog />
       </WorkspaceProvider>
     </SessionProvider>
