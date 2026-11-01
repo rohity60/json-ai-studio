@@ -315,6 +315,49 @@ class TestApplyAll:
         result = DiffUtils.apply_all(diffs, json_data)
         assert result["items"] == ["b", "c"]
 
+    def test_delete_then_modify_same_array_stale_index(self):
+        """Regression: a delete at a low index must not invalidate a
+        modify at a higher original index that follows it in the diff
+        list. Both indices are computed against the same original
+        5-element array; the delete at 0 must not shift the modify's
+        target before it runs."""
+        json_data = {"items": ["a", "b", "c", "d", "e"]}
+        diffs = [
+            {"path": "/items/0", "operation": "delete"},
+            {"path": "/items/4", "operation": "modify", "new_value": "E"},
+        ]
+        result, applied, failed = DiffUtils.apply_all_verbose(diffs, json_data)
+        assert failed == []
+        assert len(applied) == 2
+        assert result["items"] == ["b", "c", "d", "E"]
+
+    def test_many_deletes_then_modify_same_array_stale_index(self):
+        """Same bug at the scale seen in production: several low-index
+        deletes ahead of a modify at a much higher original index."""
+        json_data = {"items": [f"v{i}" for i in range(10)]}
+        diffs = [
+            {"path": "/items/1", "operation": "delete"},
+            {"path": "/items/2", "operation": "delete"},
+            {"path": "/items/3", "operation": "delete"},
+            {"path": "/items/9", "operation": "modify", "new_value": "V9"},
+        ]
+        result, applied, failed = DiffUtils.apply_all_verbose(diffs, json_data)
+        assert failed == []
+        assert len(applied) == 4
+        assert result["items"] == ["v0", "v4", "v5", "v6", "v7", "v8", "V9"]
+
+    def test_delete_then_add_same_array_stale_index(self):
+        """An insert at a higher original index must not be shifted out
+        from under itself by an earlier-processed lower-index delete."""
+        json_data = {"items": ["a", "b", "c", "d"]}
+        diffs = [
+            {"path": "/items/0", "operation": "delete"},
+            {"path": "/items/3", "operation": "add", "new_value": "X"},
+        ]
+        result, applied, failed = DiffUtils.apply_all_verbose(diffs, json_data)
+        assert failed == []
+        assert result["items"] == ["b", "c", "X", "d"]
+
     def test_mixed_ops_batch(self):
         json_data = {
             "services": {"api": {"timeout": 30}, "worker": {"timeout": 10}},
