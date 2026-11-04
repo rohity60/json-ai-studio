@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from src.json_ai_studio.gateway import GatewayService
+from src.json_ai_studio.gateway import SERVICE_BUSY_MESSAGE, GatewayService
 from src.json_ai_studio.services import chat_history_service as history
 from src.json_ai_studio.services.chat_service import parse_sse
 from src.json_ai_studio.settings import get_settings
@@ -640,3 +640,44 @@ class TestReplayShaping:
         hist = [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
         msgs = history.fit_to_context("m", "s", hist, "q", reserve_output=0)
         assert len(msgs) == 4
+
+
+# ---------------------------------------------------------------------------
+# Unexpected-error dialogue: never leak a raw exception to the client.
+# Provider/deployment failures are already turned into a friendly
+# service_unavailable event inside GatewayService.invoke/explain; these
+# cover the outer catch-alls for anything else (a bug in the inner stream,
+# or in persisting the turn afterward).
+# ---------------------------------------------------------------------------
+
+
+class TestUnexpectedErrorDialogue:
+    def test_inner_stream_exception_yields_friendly_message(
+        self, client, session_id, llm, monkeypatch
+    ):
+        async def boom(*_a, **_kw):
+            raise RuntimeError("boom: something unexpected in the LLM call")
+            yield  # pragma: no cover - makes this an async generator
+
+        monkeypatch.setattr(GatewayService, "invoke", staticmethod(boom))
+        events = chat(client, session_id, "trigger a bug")
+        payload = complete_of(events)
+        assert payload["explanation"] == SERVICE_BUSY_MESSAGE
+        assert "boom" not in payload["explanation"]
+        assert "RuntimeError" not in payload["explanation"]
+
+    def test_persistence_exception_yields_friendly_message(
+        self, client, session_id, llm, monkeypatch
+    ):
+        from src.json_ai_studio.db.session_store import store
+
+        async def boom(*_a, **_kw):
+            raise RuntimeError("boom: db is on fire")
+
+        monkeypatch.setattr(store, "save_session", boom)
+        llm.replies.append({"diffs": [], "explanation": "fine"})
+        events = chat(client, session_id, "do something")
+        payload = complete_of(events)
+        assert payload["explanation"] == SERVICE_BUSY_MESSAGE
+        assert "boom" not in payload["explanation"]
+        assert "RuntimeError" not in payload["explanation"]
