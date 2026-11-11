@@ -38,6 +38,7 @@ from .providers.policy import policy_of
 from .json_tools import JsonToolbox
 from .services import chat_history_service, credit_service
 from .services import deployment_budget as budget
+from .services import progress
 from .services.turn_planner import TooLarge, TurnPlan
 from .settings import get_settings
 
@@ -195,7 +196,12 @@ _WAIT_TICK_S = 5.0
 
 
 async def _acquire(
-    deployment: Any, model: str, raw_estimate: int, holder: dict[str, Any]
+    deployment: Any,
+    model: str,
+    raw_estimate: int,
+    holder: dict[str, Any],
+    reason: str | None = None,
+    step: int | None = None,
 ) -> AsyncGenerator[str, None]:
     """Reserve deployment budget for one call, waiting briefly if needed.
 
@@ -215,15 +221,11 @@ async def _acquire(
     if slot > max_wait:
         raise BudgetExhausted(slot)
     while slot > 0:
-        yield "event: waiting\ndata: " + json.dumps(
-            {
-                "retry_after": max(1, math.ceil(slot)),
-                "message": "Waiting for AI model capacity…",
-            }
-        ) + "\n\n"
-        step = min(slot, _WAIT_TICK_S)
-        await asyncio.sleep(step)
-        slot -= step
+        # `reason` overrides the label after a provider error (cooldown).
+        yield progress.waiting_event(slot, reason or "pacing", step)
+        tick = min(slot, _WAIT_TICK_S)
+        await asyncio.sleep(tick)
+        slot -= tick
     waited = 0.0
     while True:
         res, wait = budget.try_reserve(deployment, model, raw_estimate)
@@ -232,21 +234,26 @@ async def _acquire(
             return
         if waited + wait > max_wait:
             raise BudgetExhausted(wait)
-        step = min(wait, _WAIT_TICK_S)
+        tick = min(wait, _WAIT_TICK_S)
         logger.info(
             "budget wait deployment=%s model=%s wait=%.1fs",
             getattr(deployment, "name", "?"),
             model,
             wait,
         )
-        yield "event: waiting\ndata: " + json.dumps(
-            {
-                "retry_after": max(1, math.ceil(wait)),
-                "message": "Waiting for AI model capacity…",
-            }
-        ) + "\n\n"
-        await asyncio.sleep(step + 0.05)
-        waited += step
+        yield progress.waiting_event(wait, reason or "tokens", step)
+        await asyncio.sleep(tick + 0.05)
+        waited += tick
+
+
+async def _cooldown(wait: float, step: int | None = None) -> AsyncGenerator[str, None]:
+    """Back off before a retry while streaming a `waiting` countdown
+    (reason=cooldown), so the user sees why nothing is happening."""
+    while wait > 0:
+        yield progress.waiting_event(wait, "cooldown", step)
+        tick = min(wait, _WAIT_TICK_S)
+        await asyncio.sleep(tick)
+        wait -= tick
 
 
 def _transient_retry_wait(exc: Exception, attempt: int, policy: Any) -> float | None:
@@ -568,6 +575,19 @@ class GatewayService:
                 and settings.chat_tools_enabled
                 and deployment.supports_tools
             )
+            # Tell the user up front what this turn will do (PRD B B-50).
+            plan_est = raw_estimate or (
+                budget.estimate_tokens(litellm_model, messages)
+                if budget.tpm_limit(deployment) is not None
+                else 0
+            )
+            yield progress.plan_event(
+                "skeleton" if use_tools else "inline",
+                (max_rounds + 1) if use_tools else 1,
+                deployment,
+                litellm_model,
+                plan_est,
+            )
             if use_tools:
                 usage: dict[str, int] = {"prompt": 0, "completion": 0}
                 async for event_text in GatewayService._tool_loop(
@@ -605,11 +625,13 @@ class GatewayService:
                 # transient 5xx (_fast_transient).
                 attempt = 0
                 transient_attempt = 0  # fast-5xx retries of this call
+                wait_reason: str | None = None  # "cooldown" after an error
                 while True:
                     async for event_text in _acquire(
-                        deployment, litellm_model, raw_estimate, holder
+                        deployment, litellm_model, raw_estimate, holder, wait_reason
                     ):
                         yield event_text
+                    yield progress.calling(1, 1, final=False)
                     content_parts: list[str] = []
                     last_chunk = None
                     call_start = time.monotonic()
@@ -661,7 +683,18 @@ class GatewayService:
                                 wait,
                                 type(exc).__name__,
                             )
-                            await asyncio.sleep(wait)
+                            yield progress.retrying_event(
+                                transient_attempt,
+                                min(
+                                    pol.transient_retry_attempts,
+                                    pol.transient_retry_turn_max,
+                                ),
+                                wait,
+                                "provider_error",
+                            )
+                            async for event_text in _cooldown(wait):
+                                yield event_text
+                            wait_reason = "cooldown"
                             continue
                         wait = _transient_retry_wait(
                             exc, attempt, policy_of(deployment)
@@ -677,7 +710,14 @@ class GatewayService:
                             wait,
                             type(exc).__name__,
                         )
+                        yield progress.retrying_event(
+                            attempt,
+                            policy_of(deployment).rate_limit_retry_attempts,
+                            wait,
+                            "rate_limit",
+                        )
                         await _backoff(deployment, litellm_model, wait)
+                        wait_reason = "cooldown"
 
                 combined = "".join(content_parts)
                 logger.info(
@@ -919,14 +959,20 @@ class GatewayService:
             # failing — or re-running — the whole multi-round turn.
             attempt = 0
             call_retries = 0  # fast-5xx retries of this round
+            wait_reason: str | None = None  # "cooldown" after an error
+            # Step X/N for the user (B-51/52): rounds + the final answer; a
+            # turn cut short by the deadline ends at this step.
+            step = round_no + 1
+            steps = step if final else max_rounds + 1
             while True:
                 raw = (
                     budget.estimate_tokens(litellm_model, messages) if has_budget else 0
                 )
                 async for event_text in _acquire(
-                    deployment, litellm_model, raw, holder
+                    deployment, litellm_model, raw, holder, wait_reason, step
                 ):
                     yield event_text
+                yield progress.calling(step, steps, final)
                 drafted = False
                 call_start = time.monotonic()
                 try:
@@ -981,7 +1027,15 @@ class GatewayService:
                             wait,
                             type(exc).__name__,
                         )
-                        await asyncio.sleep(wait)
+                        yield progress.retrying_event(
+                            call_retries,
+                            pol.transient_retry_attempts,
+                            wait,
+                            "provider_error",
+                        )
+                        async for event_text in _cooldown(wait, step):
+                            yield event_text
+                        wait_reason = "cooldown"
                         continue
                     _settle_failed(holder, exc)
                     wait = _transient_retry_wait(exc, attempt, policy_of(deployment))
@@ -996,7 +1050,14 @@ class GatewayService:
                         wait,
                         type(exc).__name__,
                     )
+                    yield progress.retrying_event(
+                        attempt,
+                        policy_of(deployment).rate_limit_retry_attempts,
+                        wait,
+                        "rate_limit",
+                    )
                     await _backoff(deployment, litellm_model, wait)
+                    wait_reason = "cooldown"
             u = getattr(response, "usage", None)
             if holder.get("res") is not None:
                 budget.settle(
@@ -1050,14 +1111,24 @@ class GatewayService:
                         "content": result,
                     }
                 )
-                yield "event: tool\ndata: " + json.dumps(
+                yield progress.sse(
+                    "tool",
                     {
                         "round": round_no + 1,
+                        "step": step,
+                        "steps": steps,
                         "name": c.function.name,
                         "args": str(c.function.arguments)[:200],
                         "result_chars": len(result),
-                    }
-                ) + "\n\n"
+                        # Built from the real result, never by the model (B-53).
+                        "message": progress.describe_tool_call(
+                            c.function.name,
+                            c.function.arguments,
+                            toolbox.last_result,
+                            toolbox.doc,
+                        ),
+                    },
+                )
         logger.info(
             "tool loop session=%s rounds=%d answer_len=%d",
             session_id,

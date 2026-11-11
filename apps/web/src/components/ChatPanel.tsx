@@ -1,13 +1,14 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Sparkles, FileJson2, Brain, Eraser, CheckCircle2, XCircle, Clock, AlertTriangle } from 'lucide-react';
+import { Send, Loader2, Sparkles, FileJson2, Brain, Eraser, CheckCircle2, XCircle, Clock, AlertTriangle, Hourglass, RotateCw } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
 import { contextPairCount, diffStatus } from '@/lib/chatHistory';
 import type { DiffEntry, DiffStatus } from '@/lib/api';
 import { peekStarterPrompts, clearStarterPrompts } from '@/lib/openInWorkspace';
 import { trackEvent } from '@/lib/gtagConversion';
 import Button from '@/components/ui/Button';
+import { formatDuration, type TurnProgress } from '@/lib/progress';
 
 // JSON-agnostic fallbacks — shown when no sample-specific prompts are wired
 // in (e.g. user's own upload or a restored session), so they must make sense
@@ -72,6 +73,96 @@ function DiffStatusList({ diffs }: { diffs: DiffEntry[] }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Ticks every second while `active` (client-side countdown; the server only
+// re-sends `waiting` every 5 s).
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return now;
+}
+
+const WAIT_HINT: Record<string, string> = {
+  pacing: 'pacing',
+  tokens: 'model limit',
+  cooldown: 'cooldown',
+};
+
+// Turn progress inside the assistant bubble (PRD B §8, WB-08..11): plan,
+// step X/N with a bar, live wait countdown, finished lookups and retries.
+// Collapses to a one-line summary once the answer arrives.
+function TurnProgressPanel({ progress, finished }: { progress: TurnProgress; finished: boolean }) {
+  const [open, setOpen] = useState(false);
+  const now = useNow(!finished && !!progress.wait);
+  const multiStep = (progress.steps ?? 1) > 1 || progress.done.length > 0;
+
+  if (finished) {
+    if (!multiStep) return null;
+    const took = formatDuration((progress.finishedAt ?? now) - progress.startedAt);
+    const lookups = progress.done.filter((l) => l.kind === 'tool').length;
+    return (
+      <div className="mt-2 text-[11px] text-gray-500 whitespace-normal">
+        <button type="button" className="hover:underline" onClick={() => setOpen((v) => !v)}>
+          Done in {took} · {lookups} lookup{lookups === 1 ? '' : 's'} {open ? '▴' : '▾'}
+        </button>
+        {open && <ProgressLines progress={progress} />}
+      </div>
+    );
+  }
+
+  const secs = progress.wait ? Math.max(0, Math.ceil((progress.wait.until - now) / 1000)) : 0;
+  const pct = progress.step && progress.steps ? Math.min(100, Math.round(((progress.step - 1) / progress.steps) * 100)) : 0;
+  return (
+    <div className="space-y-1.5 whitespace-normal" aria-live="polite">
+      {progress.plan && <p className="text-[11px] text-gray-500">{progress.plan}</p>}
+      {(progress.current || progress.wait) && (
+        <div className="flex items-center gap-1.5 text-xs text-gray-700">
+          <Loader2 className="w-3 h-3 shrink-0 animate-spin" />
+          <span>{progress.current ?? (progress.step && progress.steps ? `Step ${progress.step}/${progress.steps}` : 'Working…')}</span>
+        </div>
+      )}
+      {!!progress.steps && progress.steps > 1 && (
+        <div className="h-1 w-full rounded bg-gray-200 overflow-hidden">
+          <div className="h-full bg-purple-500 transition-all" style={{ width: `${pct}%` }} />
+        </div>
+      )}
+      {progress.wait && (
+        <div className={`flex items-center gap-1.5 text-xs ${progress.wait.reason === 'cooldown' ? 'text-amber-700' : 'text-gray-600'}`}>
+          <Hourglass className="w-3 h-3 shrink-0" />
+          <span>
+            {progress.wait.message} · {secs}s
+            <span className="ml-1 text-[10px] opacity-70">({WAIT_HINT[progress.wait.reason] ?? 'waiting'})</span>
+          </span>
+        </div>
+      )}
+      <ProgressLines progress={progress} max={4} />
+    </div>
+  );
+}
+
+function ProgressLines({ progress, max }: { progress: TurnProgress; max?: number }) {
+  const lines = max ? progress.done.slice(-max) : progress.done;
+  if (!lines.length) return null;
+  const hidden = progress.done.length - lines.length;
+  return (
+    <ul className="mt-1 space-y-0.5 text-[11px]">
+      {hidden > 0 && <li className="text-gray-400">+{hidden} earlier step{hidden === 1 ? '' : 's'}</li>}
+      {lines.map((l, i) => (
+        <li key={i} className={`flex items-start gap-1.5 ${l.kind === 'retry' ? 'text-amber-700' : 'text-gray-600'}`}>
+          {l.kind === 'retry'
+            ? <RotateCw className="w-3 h-3 mt-0.5 shrink-0" />
+            : <CheckCircle2 className="w-3 h-3 mt-0.5 shrink-0 text-green-600" />}
+          <span className="break-words">{l.text}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -220,7 +311,13 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
                     <span className="text-xs opacity-70">AI</span>
                    </div>
                 )}
+                {msg.role === 'assistant' && msg.progress?.structured && !msg.content && (
+                  <TurnProgressPanel progress={msg.progress} finished={false} />
+                )}
                 {msg.content}
+                {msg.role === 'assistant' && msg.progress?.structured && !!msg.content && (
+                  <TurnProgressPanel progress={msg.progress} finished />
+                )}
                 {msg.role === 'assistant' && !!msg.diffs?.length && <DiffStatusList diffs={msg.diffs} />}
                 {msg.role === 'assistant' && msg.question?.text && (
                   <div className="mt-2 space-y-1.5">

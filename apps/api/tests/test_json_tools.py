@@ -643,5 +643,54 @@ async def test_fast_server_error_retried_per_call_limit(gateway, no_sleep, monke
     # turn ends. Slow 5xx stay unretried (ADR-0025).
     assert len(attempts) == 4
     w = gateway.deployment.policy.transient_retry_wait_s
-    assert no_sleep == [w, 2 * w, 3 * w]
+    # Backoff 3/6/9 s, streamed as cooldown countdown ticks (≤ 5 s each).
+    assert sum(no_sleep) == pytest.approx(6 * w)
+    retrying = [p for e, p in events if e == "retrying"]
+    assert [r["attempt"] for r in retrying] == [1, 2, 3]
+    assert all(r["kind"] == "provider_error" for r in retrying)
+    cooldowns = [p for e, p in events if e == "waiting" and p["reason"] == "cooldown"]
+    assert cooldowns and cooldowns[0]["step"] == 1
     assert [e for e, _ in events][-1] == "service_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Turn progress events (PRD B §8)
+# ---------------------------------------------------------------------------
+
+
+async def test_progress_events_for_tool_turn(gateway):
+    gateway.script.extend(
+        [
+            _response(calls=[("search", {"query": "ch_3"})]),
+            _response(calls=[("read", {"path": "/records/0"})]),
+            _response(content='{"diffs": [], "explanation": "ok"}'),
+        ]
+    )
+    events = await _run(gateway.gw, JsonToolbox(RECORDS))
+    kinds = [e for e, _ in events]
+    plan = next(p for e, p in events if e == "plan")
+    assert plan["mode"] == "skeleton" and plan["steps"] >= 3
+    assert kinds.index("plan") < kinds.index("progress")
+    steps = [p for e, p in events if e == "progress"]
+    assert [s["step"] for s in steps] == [1, 2, 3]
+    assert steps[0]["message"].startswith(f"Step 1/{plan['steps']}")
+    tools = [p for e, p in events if e == "tool"]
+    assert tools[0]["message"].startswith("Searched values for “ch_3” — ")
+    assert tools[1]["message"].startswith("Read /records/0")
+    assert all(t["step"] in (1, 2) for t in tools)
+
+
+async def test_progress_plan_for_inline_turn(gateway):
+    gateway.script.append(_response(content='{"diffs": [], "explanation": "ok"}'))
+    events = await _run(gateway.gw, None)
+    plan = next(p for e, p in events if e == "plan")
+    assert plan == {
+        **plan,
+        "mode": "inline",
+        "steps": 1,
+        "message": "Sending your request to the AI model…",
+    }
+    assert (
+        "progress",
+        {"stage": "calling", "message": "Asking the AI model…", "step": 1, "steps": 1},
+    ) in events

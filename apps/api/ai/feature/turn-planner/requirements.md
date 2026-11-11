@@ -134,6 +134,8 @@ Settings hold **global** knobs and the **defaults** for `DeploymentPolicy` field
 
 ## 8. Turn progress events — `gateway.py`, `services/progress.py` (new)
 
+**Status: B-50…B-56 shipped (branch `feature/turn-progress`, 2026-11-11); B-57 later.** Live check on Google (card, typo prompt): plan, step X/N, cooldown/limit countdowns, retry lines and tool lines rendered through a 7-min turn with 9 provider 500s. Known gap: the plan ETA ("~2 min") ignores expected retries — fixed by B-28 learned 5xx rate.
+
 Every long step tells the user what is happening and where the turn stands. **All messages are built in code** from the plan, tool name/args and the document (sizes, match counts): zero extra LLM tokens, deterministic, localisable later. Model-written status text was rejected: it costs tokens on a 16k/min budget, Google tool rounds are non-streaming (no live text), and it can be wrong.
 
 | # | Requirement | Priority | Issue |
