@@ -45,6 +45,8 @@
 #   transient_retry_attempts    hiccup retries per call (1)
 #   transient_retry_turn_max    hiccup retries per turn (2)
 #   transient_retry_wait_s      wait × attempt before a retry (3)
+#   transient_retry_schedule_s  explicit waits before retry 1, 2, 3… (list;
+#                               overrides wait × attempt; last repeats)
 #   rate_limit_retry_attempts   429 retries per call, hint required (0)
 #   rate_limit_retry_max_wait_s longer provider hints → fail (10)
 # Retries always wait for their pacing slot and token budget; failed calls
@@ -74,6 +76,10 @@ deployments:
       # live turn needed 7 paced retries (2026-11-11).
       transient_retry_attempts: 3
       transient_retry_turn_max: 12
+      # Bursts of 500s last minutes: retries 3/6/9 s apart (all inside one
+      # 45 s span with 15 s pacing) failed together in prod 2026-11-11
+      # 16:23. Spread them so the last retry lands ~1.5–2 min later.
+      transient_retry_schedule_s: [10, 30, 60]
     models:
         - "gemma-4-26b-a4b-it"
 

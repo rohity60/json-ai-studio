@@ -34,7 +34,7 @@ from fastapi import HTTPException
 from .auth import Principal, mask_secret
 from .deployment import DeploymentRegistry
 from .providers import DeploymentProvider
-from .providers.policy import policy_of
+from .providers.policy import policy_of, transient_wait
 from .json_tools import JsonToolbox
 from .services import chat_history_service, credit_service
 from .services import deployment_budget as budget
@@ -674,9 +674,9 @@ class GatewayService:
                         ) and _fast_transient(exc, latency_s, pol):
                             _settle_failed(holder, exc)
                             transient_attempt += 1
-                            wait = pol.transient_retry_wait_s * transient_attempt
+                            wait = transient_wait(pol, transient_attempt)
                             logger.warning(
-                                "invoke session=%s fast 5xx after %.1fs, retry %d in %.1fs: %s",
+                                "invoke session=%s fast 5xx after %.1fs, retry %d after %.1fs cooldown (+ pacing slot): %s",
                                 session_id,
                                 latency_s,
                                 transient_attempt,
@@ -1017,9 +1017,9 @@ class GatewayService:
                         _settle_failed(holder, exc)
                         call_retries += 1
                         turn_retries += 1
-                        wait = pol.transient_retry_wait_s * call_retries
+                        wait = transient_wait(pol, call_retries)
                         logger.warning(
-                            "tool loop session=%s round=%d fast 5xx after %.1fs, retry %d in %.1fs: %s",
+                            "tool loop session=%s round=%d fast 5xx after %.1fs, retry %d after %.1fs cooldown (+ pacing slot): %s",
                             session_id,
                             round_no + 1,
                             latency_s,
