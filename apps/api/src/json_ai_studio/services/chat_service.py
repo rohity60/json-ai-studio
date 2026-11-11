@@ -23,7 +23,7 @@ from ..diff_utils import (
 )
 from ..settings import get_settings
 from ..gateway import SERVICE_BUSY_MESSAGE, GatewayService
-from . import chat_history_service
+from . import chat_history_service, progress
 from .turn_planner import plan_turn
 from .session_service import now_iso
 
@@ -332,6 +332,7 @@ async def _stream_llm(
             )
             return
 
+        yield progress.applying(len(diffs))  # B-52
         merged, applied, failed = DiffUtils.apply_all_verbose(diffs, working_json)
         logger.info("diff application: applied=%d failed=%d", len(applied), len(failed))
         # Per-failed-diff path + reason at INFO — the key signal for "model

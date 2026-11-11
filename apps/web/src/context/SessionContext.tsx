@@ -9,6 +9,7 @@ import { pendingDiffs, syncStatuses, type UiChatTurn } from '../lib/chatHistory'
 import { showRateLimitModal } from '../components/RateLimitModal';
 import { showTooLargeModal } from '../components/TooLargeModal';
 import { trackEvent } from '../lib/gtagConversion';
+import { applyProgressEvent, legacyProgressText, newProgress, type TurnProgress } from '../lib/progress';
 
 // A request is rate-limited when the backend answered HTTP 429 (status carried
 // on the error) or the message otherwise mentions 429.
@@ -58,15 +59,6 @@ function handleQuotaError(err: any): boolean {
     return true;
   }
   return false;
-}
-
-// "search" / "read" tool calls → a short progress line for the chat bubble.
-function describeToolCall(name: string, rawArgs?: string): string {
-  let args: Record<string, any> = {};
-  try { args = JSON.parse(rawArgs || '{}'); } catch { /* truncated args */ }
-  if (name === 'search') return `Searching the document for “${args.query ?? '…'}”…`;
-  if (name === 'read') return `Reading ${args.path || 'the document'}…`;
-  return `Looking up ${name}…`;
 }
 
 type SessionVersion = {
@@ -376,17 +368,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       let stored: { userId: string; assistantId: string } | null = null;
       let quotaStopped = false;
       let question: { text: string; options: string[] } | null = null;
-      // Progress while the backend runs lookup tools on a large doc
-      // (ADR-0024); replaced by the explanation on `complete`. The last tool
-      // step and the current budget wait are kept separately: on budgeted
-      // deployments (ADR-0025) a wait follows each tool call within ms, and a
-      // single status string let the wait hide every tool step.
-      let lastTool = '';
-      let waitLine = '';
-      const progressText = () =>
-        waitLine
-          ? [lastTool && `✓ ${lastTool.replace(/…$/, '')}`, waitLine].filter(Boolean).join('\n')
-          : lastTool;
+      // Turn progress (PRD B §8): plan, step X/N, finished lookups, waits
+      // and retries, folded from plan/progress/tool/waiting/retrying events
+      // and rendered by ChatPanel's progress panel. Older backends send only
+      // tool/waiting → legacyProgressText() as the bubble text.
+      let progress = newProgress();
 
         // Initialize the assistant message container in UI history
       setState((prev) => ({
@@ -436,6 +422,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           }
 
         let structureChanged = false;
+        const progressNext: TurnProgress | null = applyProgressEvent(progress, chunk.type, chunk.data);
 
         if (chunk.type === 'diff' && chunk.data.entry) {
           diffs.push(chunk.data.entry);
@@ -457,13 +444,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             question = chunk.data.question;
             }
           structureChanged = true;
-          } else if (chunk.type === 'tool' && chunk.data?.name) {
-          lastTool = describeToolCall(chunk.data.name, chunk.data.args);
-          waitLine = '';
-          structureChanged = true;
-          } else if (chunk.type === 'waiting') {
-          // Deployment budget wait (ADR-0025); the turn continues after it.
-          waitLine = `Waiting for AI model capacity… ~${chunk.data?.retry_after ?? ''}s`;
+          } else if (progressNext) {
+          progress = progressNext;
           structureChanged = true;
           } else if (chunk.type === 'content' || chunk.type === 'text') {
           textAccumulator += chunk.data.text || '';
@@ -483,7 +465,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                 const lastIndex = historyCopy.length - 1;
                 historyCopy[lastIndex] = {
                     ...historyCopy[lastIndex],
-                  content: textAccumulator || progressText(),
+                  content: textAccumulator || (progress.structured ? '' : legacyProgressText(progress)),
+                  progress: textAccumulator ? { ...progress, finishedAt: progress.finishedAt ?? Date.now() } : progress,
                   diffs: [...diffs],
                   question,
                   };

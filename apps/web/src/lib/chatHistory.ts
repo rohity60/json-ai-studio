@@ -6,11 +6,13 @@
  * every turn, not just the latest one.
  */
 
+import type { TurnProgress } from './progress';
 import type { ChatTurn, DiffEntry, DiffStatus } from './api';
 
 /** Client-only turn: shown in the thread but never stored server-side
  *  (stream errored before the backend persisted it). Not mirrored. */
-export type UiChatTurn = ChatTurn & { ephemeral?: boolean };
+// progress: client-only turn progress (lib/progress.ts), not stored by the server.
+export type UiChatTurn = ChatTurn & { ephemeral?: boolean; progress?: TurnProgress };
 
 // Matches backend chat_history_max_turns (pairs replayed to the model).
 export const MAX_CONTEXT_PAIRS = 10;

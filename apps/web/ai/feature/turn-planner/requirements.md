@@ -25,6 +25,8 @@ Only what the **frontend** must implement. Server side:
 | WB-06 | TS mirrors (`lib/api.ts` types): `ChatTurn.status`, `error_code`; SSE `plan`, `progress`, `retrying`, `waiting.reason`, `tool.message`; `resumeTurn()` client fn. Hand-written per CLAUDE.md. | MVP | — |
 | WB-07 | IndexedDB mirror (ADR-0014) stores the new turn fields as-is; no resume after backend restart (trace is server memory only) — Continue hidden when the server 404s. | MVP | I-B5 |
 | WB-08 | **Progress panel** inside the pending assistant bubble: header from `plan.message`; a step line *"Step 2/5 · Reading /data/description"* with a thin progress bar (`step/steps`); a list of finished steps with ✓ (each `tool.message`, retries as ⚠ lines). Replaces the single `toolStatus` string in `SessionContext`. | MVP | I-B13 |
+**Status: WB-08…WB-12 shipped (branch `feature/turn-progress`, 2026-11-11):** `lib/progress.ts` (event fold), `TurnProgressPanel` in `ChatPanel`; older backends fall back to WB-08a text.
+
 | WB-08a | **Hotfix 2026-11-11 (shipped):** `SessionContext` keeps the last tool step and the current wait separately, so a wait no longer hides the tool step: "✓ Searching the document for “x”" + "Waiting for AI model capacity… ~45s". Superseded by WB-08. | MVP | I-B13 |
 | WB-09 | Waits: show `waiting.message` with a **client-side countdown** that ticks every second from `retry_after` (server ticks every 5 s); reason icon for pacing / limit / cooldown. | MVP | I-B13 |
 | WB-10 | `retrying` → amber line *"Temporary AI provider error — retrying (1/3)"*; never shown as a failure unless the turn ends in `service_unavailable`. | MVP | I-B13 |

@@ -109,6 +109,7 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
     def __init__(self, doc: Any, result_max_chars: int = 4000) -> None:
         self.doc = doc
         self.result_max_chars = result_max_chars
+        self.last_result: dict[str, Any] | None = None
 
     # -- tools -------------------------------------------------------------
 
@@ -230,6 +231,8 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
             result: Any = handlers[name](args)
         except (ToolError, ValueError) as exc:
             result = {"error": str(exc)}
+        # Structured result for progress messages (counts, truncation).
+        self.last_result = result if isinstance(result, dict) else None
         text = json.dumps(result, ensure_ascii=False, default=str)
         if len(text) > self.result_max_chars:
             text = text[: self.result_max_chars] + TRUNCATED_SUFFIX
