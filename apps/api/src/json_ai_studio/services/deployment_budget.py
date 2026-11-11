@@ -29,6 +29,7 @@ from typing import Any
 
 import litellm
 
+from ..providers.policy import policy_of
 from ..settings import get_settings
 
 logger = logging.getLogger("json_ai_studio.deployment_budget")
@@ -43,6 +44,7 @@ _windows: dict[str, deque[list[float]]] = {}
 _blocked_until: dict[str, float] = {}
 _next_slot: dict[str, float] = {}  # key -> earliest start of the next call
 _ratio: dict[str, float] = {}
+_span: dict[str, float] = {}  # key -> WINDOW_S + deployment window_margin_s
 
 
 @dataclass
@@ -65,7 +67,7 @@ def plan_budget(deployment: Any) -> int | None:
     limit = tpm_limit(deployment)
     if limit is None:
         return None
-    return int(limit * get_settings().deployment_budget_headroom)
+    return int(limit * policy_of(deployment).budget_headroom)
 
 
 def estimate_tokens(model: str, messages: list[dict[str, Any]]) -> int:
@@ -82,9 +84,18 @@ def calibrated(key: str, raw_estimate: int) -> int:
     return math.ceil(raw_estimate * _ratio.get(key, 1.0))
 
 
+def window_span(deployment: Any) -> float:
+    """How long a call counts against the budget after it finishes:
+    WINDOW_S plus the deployment's window_margin_s (clock skew / provider
+    bookkeeping). Entries are reserved at send time and re-stamped at
+    finish (finish())."""
+    return WINDOW_S + max(0.0, policy_of(deployment).window_margin_s)
+
+
 def _prune(key: str, now: float) -> deque[list[float]]:
     q = _windows.setdefault(key, deque())
-    while q and q[0][0] <= now - WINDOW_S:
+    span = _span.get(key, WINDOW_S)
+    while q and q[0][0] <= now - span:
         q.popleft()
     return q
 
@@ -121,6 +132,7 @@ def try_reserve(
     if limit is None:
         return Reservation(key, None, raw_estimate), 0.0
     tokens = calibrated(key, raw_estimate)
+    _span[key] = span = window_span(deployment)
     now = time.monotonic()
     blocked = _blocked_until.get(key, 0.0)
     if now < blocked:
@@ -132,6 +144,12 @@ def try_reserve(
     if used + tokens <= limit:
         entry = [now, float(tokens)]
         q.append(entry)
+        # The call starts now: the next one waits a full interval from here,
+        # even if this call's slot was claimed long ago and it then waited
+        # for tokens (live run 2026-11-11: two calls 2 s apart → 500).
+        interval = getattr(deployment, "min_call_interval_s", 0) or 0
+        if interval > 0:
+            _next_slot[key] = max(_next_slot.get(key, 0.0), now + interval)
         logger.debug(
             "budget reserve key=%s tokens=%d used=%d limit=%d",
             key,
@@ -145,12 +163,35 @@ def try_reserve(
     for ts, t in q:
         freed += t
         if freed >= need:
-            return None, max(0.0, ts + WINDOW_S - now)
-    return None, WINDOW_S  # unreachable while tokens <= limit
+            return None, max(0.0, ts + span - now)
+    return None, span  # unreachable while tokens <= limit
+
+
+def finish(res: Reservation) -> None:
+    """Re-stamp the call at its finish time (success or failure).
+
+    Google counts a call's input tokens toward its minute when the call
+    ends, not when it is sent, and counts failed 500 calls too (live run
+    2026-11-11: with 18-26 s calls, send-time stamps let a round through
+    that Google answered with a 500; finish-time stamps matched every
+    accept/reject). The entry moves to the back so the window stays sorted.
+    """
+    if res.entry is None:
+        return
+    q = _windows.get(res.key)
+    if q is not None:
+        try:
+            q.remove(res.entry)
+        except ValueError:
+            return  # already pruned or released
+        q.append(res.entry)
+    res.entry[0] = time.monotonic()
 
 
 def settle(res: Reservation, actual_prompt_tokens: int) -> None:
-    """Replace the estimate with the provider's count; update calibration."""
+    """Re-stamp at finish; replace the estimate with the provider's count
+    and update calibration."""
+    finish(res)
     if res.entry is None or actual_prompt_tokens <= 0:
         return
     res.entry[1] = float(actual_prompt_tokens)
@@ -195,3 +236,4 @@ def reset() -> None:
     _blocked_until.clear()
     _ratio.clear()
     _next_slot.clear()
+    _span.clear()

@@ -16,6 +16,7 @@ from abc import ABC
 from typing import Any, ClassVar
 
 from ..settings import Settings
+from .policy import DeploymentPolicy
 
 _logger = logging.getLogger("json_ai_studio.providers")
 
@@ -91,6 +92,11 @@ class DeploymentProvider(ABC):
         # Minimum seconds between call starts on this deployment, across all
         # turns and users (ADR-0025). 0 = no pacing.
         self.min_call_interval_s: float = float(cfg.get("min_call_interval_s") or 0)
+        # Provider facts + retry caps (PRD B B-19): `policy:` block, Settings
+        # defaults for anything omitted.
+        self.policy: DeploymentPolicy = DeploymentPolicy.from_config(
+            cfg.get("policy"), settings
+        )
 
         # Empty base_url = endpoint env var not set -> deployment disabled
         # (warning, not an error). Non-empty must be a valid http(s) URL.

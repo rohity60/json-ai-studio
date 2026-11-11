@@ -37,6 +37,18 @@
 # min_call_interval_s: minimum spacing between LLM call starts on this
 # deployment, across all users and tool rounds (each waits for its slot,
 # countdown shown). Omit = no pacing.
+# policy (PRD B B-19): provider facts and safety caps for this deployment;
+# any key left out uses the Settings default (env-overridable):
+#   budget_headroom             fraction of tpm_input_limit planned/gated (0.8)
+#   window_margin_s             calls count 60 s + this after they finish (0)
+#   transient_fast_s            a 5xx within this many s is a hiccup (3)
+#   transient_retry_attempts    hiccup retries per call (1)
+#   transient_retry_turn_max    hiccup retries per turn (2)
+#   transient_retry_wait_s      wait × attempt before a retry (3)
+#   rate_limit_retry_attempts   429 retries per call, hint required (0)
+#   rate_limit_retry_max_wait_s longer provider hints → fail (10)
+# Retries always wait for their pacing slot and token budget; failed calls
+# stay counted (Google counts them).
 
 deployments:
   google_ai_studio:
@@ -53,6 +65,15 @@ deployments:
     tpm_input_limit: 16000
     # ~4k input tokens per skeleton call → ~4 calls/min fit: one every 15 s.
     min_call_interval_s: 15
+    policy:
+      # Soft cap: 500s near the stated 16k (ADR-0025).
+      budget_headroom: 0.8
+      # Skew on top of finish-time stamping (500s at our window edge).
+      window_margin_s: 4
+      # Free tier answers ~40 % of calls with a fast 500, in bursts; one
+      # live turn needed 7 paced retries (2026-11-11).
+      transient_retry_attempts: 3
+      transient_retry_turn_max: 12
     models:
         - "gemma-4-26b-a4b-it"
 
@@ -89,6 +110,9 @@ deployments:
     reasoning: "none"
     supports_thinking: false
     supports_tools: true
+    policy:
+      # Local: a 5xx means the model server is down/broken — don't retry.
+      transient_retry_attempts: 0
     models:
         - "qwen3.6:35b-mlx"
         - "gemma4:12b"

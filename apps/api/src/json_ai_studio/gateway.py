@@ -34,6 +34,7 @@ from fastapi import HTTPException
 from .auth import Principal, mask_secret
 from .deployment import DeploymentRegistry
 from .providers import DeploymentProvider
+from .providers.policy import policy_of
 from .json_tools import JsonToolbox
 from .services import chat_history_service, credit_service
 from .services import deployment_budget as budget
@@ -136,9 +137,12 @@ def _is_rate_limit(exc: Exception) -> bool:
 
 
 def _settle_failed(holder: dict[str, Any], exc: Exception) -> None:
-    """A failed call keeps its reservation (at the estimate): the provider
-    counts its input tokens toward the per-minute limit even on 429/5xx."""
-    holder.pop("res", None)
+    """A failed call keeps its reservation (at the estimate), re-stamped at
+    failure time: Google counts its input tokens toward the per-minute limit
+    even on 429/5xx, fast 500s included (live run 2026-11-11)."""
+    res = holder.pop("res", None)
+    if res is not None:
+        budget.finish(res)
 
 
 def _retry_hint(exc: Exception) -> float | None:
@@ -200,7 +204,11 @@ async def _acquire(
     the reservation in holder["res"]; raises BudgetExhausted when capacity
     will not free up within deployment_budget_max_wait_s.
     """
-    max_wait = get_settings().deployment_budget_max_wait_s
+    # A full window frees within window_span (60 s + margin after the last
+    # call finished): never refuse a wait that one window would clear.
+    max_wait = max(
+        get_settings().deployment_budget_max_wait_s, budget.window_span(deployment)
+    )
     # Pacing slot first (global per deployment): spreads calls over the
     # minute so they stay under the provider's cap.
     slot = budget.claim_slot(deployment, model)
@@ -241,7 +249,7 @@ async def _acquire(
         waited += step
 
 
-def _transient_retry_wait(exc: Exception, attempt: int, settings: Any) -> float | None:
+def _transient_retry_wait(exc: Exception, attempt: int, policy: Any) -> float | None:
     """Seconds to wait before retrying an LLM call, or None to give up.
 
     Only short rate limits (429 with a provider hint) are retried. 5xx are
@@ -250,13 +258,40 @@ def _transient_retry_wait(exc: Exception, attempt: int, settings: Any) -> float 
     keeps load down instead. LiteLLM sometimes wraps the real error
     (MidStreamFallbackError), so the message is checked too.
     """
-    if attempt >= settings.chat_tool_retry_attempts:
+    if attempt >= policy.rate_limit_retry_attempts:
         return None
     if _is_rate_limit(exc):
         hint = _retry_hint(exc)
         wait = hint + 0.5 if hint is not None else 5.0
-        return wait if wait <= settings.chat_tool_retry_max_wait_s else None
+        return wait if wait <= policy.rate_limit_retry_max_wait_s else None
     return None
+
+
+def _is_server_error(exc: Exception) -> bool:
+    """Provider 5xx (LiteLLM may wrap it in MidStreamFallbackError)."""
+    if _is_rate_limit(exc):
+        return False
+    if isinstance(exc, (litellm.InternalServerError, litellm.ServiceUnavailableError)):
+        return True
+    text = f"{type(exc).__name__}: {exc}"
+    return any(
+        marker in text
+        for marker in (
+            "InternalServerError",
+            "ServiceUnavailable",
+            '"code": 500',
+            '"code": 503',
+            '"status": "INTERNAL"',
+            '"status": "UNAVAILABLE"',
+        )
+    )
+
+
+def _fast_transient(exc: Exception, latency_s: float, policy: Any) -> bool:
+    """A 5xx that came back quickly: Google free-tier flakiness (~40 % of
+    calls on 2026-11-11, independent of load and request shape). The failed
+    call still counts (_settle_failed); this only decides the retry."""
+    return _is_server_error(exc) and latency_s <= policy.transient_fast_s
 
 
 async def _backoff(deployment: Any, model: str, wait: float) -> None:
@@ -565,9 +600,11 @@ class GatewayService:
                     raw_estimate = raw_estimate or budget.estimate_tokens(
                         litellm_model, messages
                     )
-                # Retry a short 429 only before any text reached the client —
-                # a retry after that would repeat it. 5xx are not retried.
+                # Retry only before any text reached the client — a retry
+                # after that would repeat it: a short 429, or one fast
+                # transient 5xx (_fast_transient).
                 attempt = 0
+                transient_attempt = 0  # fast-5xx retries of this call
                 while True:
                     async for event_text in _acquire(
                         deployment, litellm_model, raw_estimate, holder
@@ -575,6 +612,7 @@ class GatewayService:
                         yield event_text
                     content_parts: list[str] = []
                     last_chunk = None
+                    call_start = time.monotonic()
                     try:
                         response = await litellm.acompletion(
                             model=litellm_model,
@@ -604,10 +642,29 @@ class GatewayService:
                                 ) + "\n\n"
                         break
                     except Exception as exc:
-                        wait = (
-                            None
-                            if content_parts
-                            else _transient_retry_wait(exc, attempt, settings)
+                        if content_parts:
+                            raise
+                        latency_s = time.monotonic() - call_start
+                        pol = policy_of(deployment)
+                        if transient_attempt < min(
+                            pol.transient_retry_attempts,
+                            pol.transient_retry_turn_max,
+                        ) and _fast_transient(exc, latency_s, pol):
+                            _settle_failed(holder, exc)
+                            transient_attempt += 1
+                            wait = pol.transient_retry_wait_s * transient_attempt
+                            logger.warning(
+                                "invoke session=%s fast 5xx after %.1fs, retry %d in %.1fs: %s",
+                                session_id,
+                                latency_s,
+                                transient_attempt,
+                                wait,
+                                type(exc).__name__,
+                            )
+                            await asyncio.sleep(wait)
+                            continue
+                        wait = _transient_retry_wait(
+                            exc, attempt, policy_of(deployment)
                         )
                         if wait is None:
                             raise
@@ -833,6 +890,8 @@ class GatewayService:
         has_budget = budget.tpm_limit(deployment) is not None
         content = ""
         round_no = 0
+        turn_retries = 0  # fast-5xx retries, whole turn (_fast_transient)
+        pol = policy_of(deployment)
         for round_no in range(max_rounds + 1):
             final = round_no == max_rounds or time.monotonic() > deadline
             if final and round_no > 0:
@@ -859,6 +918,7 @@ class GatewayService:
             # as an answer yet, and re-running one round is far cheaper than
             # failing — or re-running — the whole multi-round turn.
             attempt = 0
+            call_retries = 0  # fast-5xx retries of this round
             while True:
                 raw = (
                     budget.estimate_tokens(litellm_model, messages) if has_budget else 0
@@ -867,6 +927,8 @@ class GatewayService:
                     deployment, litellm_model, raw, holder
                 ):
                     yield event_text
+                drafted = False
+                call_start = time.monotonic()
                 try:
                     if getattr(deployment, "tool_streaming", True):
                         # Stream by default: text goes out live as `draft` events
@@ -886,6 +948,7 @@ class GatewayService:
                             delta = chunk.choices[0].delta
                             text = getattr(delta, "content", None)
                             if text:
+                                drafted = True
                                 yield "event: draft\ndata: " + json.dumps(
                                     {"text": text}
                                 ) + "\n\n"
@@ -898,8 +961,30 @@ class GatewayService:
                         response = await litellm.acompletion(stream=False, **request)
                     break
                 except Exception as exc:
+                    latency_s = time.monotonic() - call_start
+                    if (
+                        not drafted
+                        and call_retries < pol.transient_retry_attempts
+                        and turn_retries < pol.transient_retry_turn_max
+                        and _fast_transient(exc, latency_s, pol)
+                    ):
+                        _settle_failed(holder, exc)
+                        call_retries += 1
+                        turn_retries += 1
+                        wait = pol.transient_retry_wait_s * call_retries
+                        logger.warning(
+                            "tool loop session=%s round=%d fast 5xx after %.1fs, retry %d in %.1fs: %s",
+                            session_id,
+                            round_no + 1,
+                            latency_s,
+                            call_retries,
+                            wait,
+                            type(exc).__name__,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
                     _settle_failed(holder, exc)
-                    wait = _transient_retry_wait(exc, attempt, settings)
+                    wait = _transient_retry_wait(exc, attempt, policy_of(deployment))
                     if wait is None:
                         raise
                     attempt += 1

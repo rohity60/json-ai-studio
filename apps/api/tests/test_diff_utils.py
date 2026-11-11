@@ -511,3 +511,165 @@ class TestParseRepair:
         text = '[{"path": "/a", "operation": "delete"},]'
         diffs, _ = parse_llm_response(text)
         assert len(diffs) == 1
+
+
+# ---------------------------------------------------------------------------
+# Truncation guard (edit-safety ES-01..07)
+# ---------------------------------------------------------------------------
+
+from src.json_ai_studio.diff_utils import TRUNCATION_REASON  # noqa: E402
+from src.json_ai_studio.preview import (  # noqa: E402
+    ELLIPSIS,
+    TRUNCATED_SUFFIX,
+    ends_with_preview_marker,
+)
+
+_LONG = (
+    "Elara is a Wolf-kinn ranger from the northern woods who guards the old shrine. "
+    + " ".join(
+        f"In year {y} the {w} clan of {p} sent {y % 7 + 2} envoys to trade {g} for salt."
+        for y, w, p, g in zip(
+            range(1100, 1160),
+            ["wolf", "owl", "elk", "fox", "bear", "hawk"] * 10,
+            [
+                "Tarn",
+                "Velm",
+                "Oskar",
+                "Brin",
+                "Hale",
+                "Mora",
+                "Kest",
+                "Ulva",
+                "Dun",
+                "Rys",
+            ]
+            * 6,
+            ["amber", "furs", "iron", "wool", "honey"] * 12,
+        )
+    )
+)
+
+
+def _apply_one_verbose(diff, doc):
+    result, applied, failed = DiffUtils.apply_all_verbose([diff], doc)
+    return result, applied, failed
+
+
+class TestTruncationGuard:
+    def test_preview_with_marker_rejected(self):
+        doc = {"data": {"description": _LONG}}
+        preview = _LONG[:80].replace("Wolf-kinn", "Wolf-kin") + ELLIPSIS
+        diff = {
+            "path": "/data/description",
+            "operation": "modify",
+            "new_value": preview,
+        }
+        result, applied, failed = _apply_one_verbose(diff, doc)
+        assert applied == []
+        assert failed == [(diff, TRUNCATION_REASON)]
+        assert result["data"]["description"] == _LONG
+
+    def test_edited_preview_without_marker_rejected(self):
+        # Repro 2026-11-10: 7485 → 80 chars, marker dropped by the model.
+        doc = {"d": _LONG}
+        new = _LONG[:80].replace("Wolf-kinn", "Wolf-kin")
+        _, applied, failed = _apply_one_verbose(
+            {"path": "/d", "operation": "modify", "new_value": new}, doc
+        )
+        assert applied == [] and failed[0][1] == TRUNCATION_REASON
+
+    def test_tool_result_marker_rejected(self):
+        doc = {"d": _LONG}
+        new = _LONG[:3000] + TRUNCATED_SUFFIX
+        _, applied, failed = _apply_one_verbose(
+            {"path": "/d", "operation": "replace", "new_value": new}, doc
+        )
+        assert applied == [] and failed[0][1] == TRUNCATION_REASON
+
+    def test_nested_preview_leaf_rejected(self):
+        # ES-02: whole entry rewritten; untouched long sibling copied from preview.
+        doc = {"entries": [{"name": "Elara", "content": _LONG}]}
+        new_entry = {"name": "Elara Moon", "content": _LONG[:80]}
+        _, applied, failed = _apply_one_verbose(
+            {"path": "/entries/0", "operation": "modify", "new_value": new_entry}, doc
+        )
+        assert applied == [] and failed[0][1] == TRUNCATION_REASON
+
+    def test_full_rewrite_of_long_string_allowed(self):
+        doc = {"d": _LONG}
+        new = _LONG.replace("Wolf-kinn", "Wolf-kin")
+        result, applied, _ = _apply_one_verbose(
+            {"path": "/d", "operation": "modify", "new_value": new}, doc
+        )
+        assert applied and result["d"] == new
+
+    def test_heavily_edited_partial_rewrite_rejected(self):
+        # Live repro 2026-11-10: model rewrote the first 4000 chars it could
+        # read (typos fixed, "…" turned into "...)"), dropped the rest.
+        doc = {"d": _LONG}
+        part = _LONG[: len(_LONG) // 2]
+        new = (
+            part.replace("Wolf-kinn", "Wolf-kin")
+            .replace("northern", "Northern")
+            .replace(" the ", " The ")
+            + "...)"
+        )
+        _, applied, failed = _apply_one_verbose(
+            {"path": "/d", "operation": "modify", "new_value": new}, doc
+        )
+        assert applied == [] and failed[0][1] == TRUNCATION_REASON
+
+    def test_exact_prefix_cut_rejected(self):
+        doc = {"d": _LONG}
+        _, applied, failed = _apply_one_verbose(
+            {"path": "/d", "operation": "modify", "new_value": _LONG[:100]}, doc
+        )
+        assert applied == [] and failed[0][1] == TRUNCATION_REASON
+
+    def test_condensed_rewrite_ending_like_old_allowed(self):
+        old = "".join(f"Paragraph {i}: the ranger walks the path. " for i in range(60))
+        new = "Summary: rangers walk. " + old[-200:]
+        result, applied, _ = _apply_one_verbose(
+            {"path": "/d", "operation": "modify", "new_value": new}, {"d": old}
+        )
+        assert applied and result["d"] == new
+
+    def test_new_summary_text_allowed(self):
+        doc = {"d": _LONG}
+        result, applied, _ = _apply_one_verbose(
+            {"path": "/d", "operation": "modify", "new_value": "A ranger."}, doc
+        )
+        assert applied and result["d"] == "A ranger."
+
+    def test_ellipsis_allowed_when_not_shorter_or_new_path(self):
+        # ES-04
+        doc = {"short": "Wait"}
+        result, applied, _ = DiffUtils.apply_all_verbose(
+            [
+                {"path": "/short", "operation": "modify", "new_value": "Wait for it…"},
+                {"path": "/fresh", "operation": "add", "new_value": "To be continued…"},
+            ],
+            doc,
+        )
+        assert len(applied) == 2
+        assert result["short"] == "Wait for it…"
+
+    def test_short_old_value_not_guarded_without_marker(self):
+        doc = {"d": "Hello there world"}
+        result, applied, _ = _apply_one_verbose(
+            {"path": "/d", "operation": "modify", "new_value": "Hello"}, doc
+        )
+        assert applied and result["d"] == "Hello"
+
+    def test_delete_unaffected(self):
+        doc = {"d": _LONG}
+        result, applied, _ = _apply_one_verbose(
+            {"path": "/d", "operation": "delete"}, doc
+        )
+        assert applied and "d" not in result
+
+    def test_markers(self):
+        assert ends_with_preview_marker("abc…")
+        assert ends_with_preview_marker("x…(truncated)")
+        assert ends_with_preview_marker("…+700 more items")
+        assert not ends_with_preview_marker("abc.")

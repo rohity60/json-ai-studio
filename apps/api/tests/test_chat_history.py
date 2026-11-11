@@ -642,6 +642,36 @@ class TestReplayShaping:
         assert len(msgs) == 4
 
 
+def test_truncation_guard_note_says_field_unchanged(client, llm):
+    # Local check 2026-11-11: the model's explanation listed description
+    # fixes that the edit guard had blocked; the note must say so plainly.
+    long_text = " ".join(
+        f"Line {i}: the ranger guards shrine {i * 7}." for i in range(80)
+    )
+    sid = client.post("/api/sessions", json={"name": "t"}).json()["id"]
+    client.post(
+        "/api/json/upload",
+        files={
+            "json_body": (None, json.dumps({"description": long_text, "n": 1})),
+            "session_id": (None, sid),
+        },
+    )
+    preview = long_text[:900].replace("ranger", "Ranger")
+    llm.replies.append(
+        {
+            "diffs": [_modify("/description", None, preview), _modify("/n", 1, 2)],
+            "explanation": "Fixed capitalisation in the description; set n to 2.",
+        }
+    )
+    events = chat(client, sid, "fix typos")
+    explanation = complete_of(events)["explanation"]
+    assert f"NOT changed: /description" in explanation
+    assert f"from {len(long_text):,} to {len(preview):,} characters" in explanation
+    assert "did not match" not in explanation
+    working = client.get(f"/api/sessions/{sid}").json()["working_json"]
+    assert working["description"] == long_text and working["n"] == 2
+
+
 # ---------------------------------------------------------------------------
 # Unexpected-error dialogue: never leak a raw exception to the client.
 # Provider/deployment failures are already turned into a friendly
