@@ -31,6 +31,10 @@ class DeploymentPolicy:
     transient_retry_attempts: int
     transient_retry_turn_max: int
     transient_retry_wait_s: float
+    # Explicit waits before retry 1, 2, 3… (last one repeats). Empty =
+    # transient_retry_wait_s × attempt. Spread them out where the provider
+    # fails in bursts (Google: minutes), so retries can outlast a burst.
+    transient_retry_schedule_s: tuple[float, ...]
     # 429 retries: only with a provider hint no longer than max_wait_s.
     rate_limit_retry_attempts: int
     rate_limit_retry_max_wait_s: float
@@ -45,6 +49,7 @@ class DeploymentPolicy:
             transient_retry_attempts=s.chat_transient_retry_attempts,
             transient_retry_turn_max=s.chat_transient_retry_turn_max,
             transient_retry_wait_s=s.chat_transient_retry_wait_s,
+            transient_retry_schedule_s=(),
             rate_limit_retry_attempts=s.chat_tool_retry_attempts,
             rate_limit_retry_max_wait_s=s.chat_tool_retry_max_wait_s,
         )
@@ -62,11 +67,24 @@ class DeploymentPolicy:
             raise ValueError(f"unknown policy keys: {sorted(unknown)}")
         values = {f.name: getattr(base, f.name) for f in fields(cls)}
         for key, raw in cfg.items():
-            values[key] = int(raw) if isinstance(values[key], int) else float(raw)
+            if isinstance(values[key], tuple):
+                if not isinstance(raw, (list, tuple)) or not raw:
+                    raise ValueError(f"policy.{key} must be a non-empty list")
+                values[key] = tuple(float(x) for x in raw)
+            else:
+                values[key] = int(raw) if isinstance(values[key], int) else float(raw)
         policy = cls(**values)
         if not 0 < policy.budget_headroom <= 1:
             raise ValueError("policy.budget_headroom must be in (0, 1]")
         return policy
+
+
+def transient_wait(policy: DeploymentPolicy, attempt: int) -> float:
+    """Seconds to back off before fast-5xx retry `attempt` (1-based)."""
+    schedule = policy.transient_retry_schedule_s
+    if schedule:
+        return schedule[min(attempt, len(schedule)) - 1]
+    return policy.transient_retry_wait_s * attempt
 
 
 def policy_of(deployment: Any) -> DeploymentPolicy:

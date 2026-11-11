@@ -769,3 +769,39 @@ def test_token_wait_pushes_next_slot(monkeypatch):
     clock["now"] += 50  # waited for tokens, call starts at 1050
     assert budget.try_reserve(dep, "m", 100)[0] is not None
     assert budget.claim_slot(dep, "m") == 15  # not 0
+
+
+async def test_retry_schedule_spreads_retries(monkeypatch, stub_llm):
+    # Prod 2026-11-11 16:23: four attempts 15 s apart all hit one burst of
+    # Google 500s. A schedule spreads the retries over ~1.5 min.
+    attempts = []
+
+    async def broken(**kw):
+        attempts.append(budget.time.monotonic())
+        raise _server_error()
+
+    monkeypatch.setattr(gw.litellm, "acompletion", broken)
+    dep = _deployment(
+        tpm=100_000,
+        interval=15,
+        transient_retry_attempts=3,
+        transient_retry_turn_max=12,
+        transient_retry_schedule_s=[10, 30, 60],
+    )
+    events = await _invoke(monkeypatch, dep)
+    assert events[-1][0] == "service_unavailable"
+    gaps = [round(b - a) for a, b in zip(attempts, attempts[1:])]
+    assert gaps == [15, 30, 60]  # 10 s cooldown < 15 s pacing slot
+    retrying = [p for e, p in events if e == "retrying"]
+    assert [r["wait_s"] for r in retrying] == [10, 30, 60]
+
+
+def test_retry_schedule_policy_parsing():
+    from src.json_ai_studio.providers.policy import transient_wait
+
+    pol = DeploymentPolicy.from_config({"transient_retry_schedule_s": [10, 30]})
+    assert [transient_wait(pol, n) for n in (1, 2, 3)] == [10, 30, 30]
+    default = DeploymentPolicy.from_config({})
+    assert [transient_wait(default, n) for n in (1, 2)] == [3, 6]
+    with pytest.raises(ValueError):
+        DeploymentPolicy.from_config({"transient_retry_schedule_s": 5})
