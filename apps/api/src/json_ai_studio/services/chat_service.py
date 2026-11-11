@@ -22,7 +22,7 @@ from ..diff_utils import (
     parse_llm_response,
 )
 from ..settings import get_settings
-from ..gateway import GatewayService
+from ..gateway import SERVICE_BUSY_MESSAGE, GatewayService
 from . import chat_history_service
 from .turn_planner import plan_turn
 from .session_service import now_iso
@@ -393,14 +393,20 @@ async def _stream_llm(
             },
         )
 
-    except Exception as e:
-        # Fail-fast error (ADR-0007): yield error in stream, don't retry
+    except Exception:
+        # Fail-fast error (ADR-0007): yield error in stream, don't retry.
+        # Provider/deployment failures are already turned into a friendly
+        # service_unavailable event inside GatewayService.invoke/explain;
+        # this is the catch-all for anything else (diff application, JSON
+        # parsing, session store, ...). Never surface the raw exception —
+        # same friendly message as the provider-failure popup, full
+        # traceback stays in the logs.
         logger.exception("chat stream failed")
         if outcome is not None:
             outcome["store"] = False
         yield sse(
             "complete",
-            {"working_json": working_json, "explanation": f"Error: {e}"},
+            {"working_json": working_json, "explanation": SERVICE_BUSY_MESSAGE},
         )
 
 
@@ -495,9 +501,13 @@ async def chat_event_stream(
             )
             yield sse("complete", payload)
 
-    except Exception as e:
+    except Exception:
+        # Catch-all for failures in persistence (session store, chat
+        # history) wrapping the inner stream — provider failures are
+        # already handled as friendly events inside it. Never surface the
+        # raw exception; full traceback stays in the logs.
         logger.exception("chat endpoint stream failed")
         yield sse(
             "complete",
-            {"working_json": working_json, "explanation": f"Error: {e}"},
+            {"working_json": working_json, "explanation": SERVICE_BUSY_MESSAGE},
         )

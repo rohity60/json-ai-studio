@@ -316,12 +316,20 @@ def _revert_one(diff: dict[str, Any], doc: Any) -> None:
 
 
 def _order_for_apply(diffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Reorder deletes that target the same list so higher indices go first.
+    """Reorder same-list index ops (delete/modify/add) so higher indices
+    go first.
 
-    LLMs compute all indices against the original document; deleting
-    index 1 before index 3 would shift the second target. Only delete
-    entries sharing the same list parent are reordered, and only among
-    the positions they already occupy.
+    LLMs compute every index against one snapshot of the document.
+    Applying a lower index first (e.g. a delete at 1) shifts every
+    higher index that follows (e.g. a modify at 3) out from under it,
+    even though the model's indices were internally consistent.
+    Processing a list's indexed ops highest-index-first avoids this:
+    deleting/inserting at index k only shifts elements originally at
+    index > k, so by the time a lower index is handled, nothing above
+    it that could move it has been touched yet. Only ops sharing the
+    same list parent are reordered, and only among the positions they
+    already occupy (unaffected diffs elsewhere keep their relative
+    order).
     """
     groups: dict[tuple[str, ...], list[int]] = {}
     for i, diff in enumerate(diffs):
@@ -330,7 +338,7 @@ def _order_for_apply(diffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             op = _resolve_op(diff)
         except DiffApplyError:
             continue
-        if op == "delete" and parts and parts[-1].isdigit():
+        if op in ("delete", "modify", "add") and parts and parts[-1].isdigit():
             groups.setdefault(tuple(parts[:-1]), []).append(i)
 
     result = list(diffs)
