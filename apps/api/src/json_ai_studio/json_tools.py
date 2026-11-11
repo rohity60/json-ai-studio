@@ -24,6 +24,7 @@ from typing import Any
 
 from .bulk_edits import BulkEditError, _MISSING, _matches, _walk
 from .diff_utils import DiffApplyError, _split_path
+from .preview import ELLIPSIS, TRUNCATED_SUFFIX
 
 _PREVIEW_CHARS = 160
 _CONTEXT_CHARS = 800
@@ -41,7 +42,7 @@ def _esc(part: str) -> str:
 
 def _compact(value: Any, chars: int) -> str:
     text = json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
-    return text if len(text) <= chars else text[:chars] + "…"
+    return text if len(text) <= chars else text[:chars] + ELLIPSIS
 
 
 def _type(value: Any) -> str:
@@ -204,7 +205,7 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
         if len(text) <= budget:
             out["value"] = value
         else:
-            out["value_truncated"] = text[:budget] + "…"
+            out["value_truncated"] = text[:budget] + ELLIPSIS
             out["hint"] = (
                 "too large to return whole: read a deeper path, or search within it (path_prefix)"
             )
@@ -231,7 +232,7 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
             result = {"error": str(exc)}
         text = json.dumps(result, ensure_ascii=False, default=str)
         if len(text) > self.result_max_chars:
-            text = text[: self.result_max_chars] + "…(truncated)"
+            text = text[: self.result_max_chars] + TRUNCATED_SUFFIX
         return text
 
     @staticmethod

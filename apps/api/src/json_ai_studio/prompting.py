@@ -17,6 +17,7 @@ import json
 from typing import Any
 
 from .format_hints import format_notes_block
+from .preview import ELLIPSIS
 from .settings import get_settings
 
 # The verbatim-inline threshold now lives in Settings
@@ -272,7 +273,7 @@ def _skel_values(vals: list[Any], depth: int, caps: tuple[int, int, int]) -> Any
     if isinstance(first, (dict, list)):  # mixed shapes: fall back to a sample
         return _skel_values([first], depth, caps)
     if isinstance(first, str):
-        return first if len(first) <= str_cap else first[:str_cap] + "…"
+        return first if len(first) <= str_cap else first[:str_cap] + ELLIPSIS
     return first
 
 

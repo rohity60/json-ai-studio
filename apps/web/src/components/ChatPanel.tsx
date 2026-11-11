@@ -38,14 +38,21 @@ function DiffStatusList({ diffs }: { diffs: DiffEntry[] }) {
   const row = (d: DiffEntry) => {
     const st = STATUS_STYLE[diffStatus(d)];
     return (
-      <li key={d.id} className="flex items-center gap-2 min-w-0" title={d.failure_reason || undefined}>
-        <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${st.cls}`}>
-          <st.Icon className="w-3 h-3" />
-          {st.label}
-        </span>
-        <span className="truncate font-mono text-[11px] text-gray-600">
-          {d.operation} {d.path}
-        </span>
+      <li key={d.id} className="min-w-0" title={d.failure_reason || undefined}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${st.cls}`}>
+            <st.Icon className="w-3 h-3" />
+            {st.label}
+          </span>
+          <span className="truncate font-mono text-[11px] text-gray-600" title={d.path}>
+            {d.operation} {d.path}
+          </span>
+        </div>
+        {/* Failed diffs: say why inline — a tooltip is invisible on touch
+            and was the only place the edit-guard reason showed. */}
+        {diffStatus(d) === 'failed' && d.failure_reason && (
+          <p className="ml-1 mt-0.5 text-[11px] text-red-700 break-words">{d.failure_reason}</p>
+        )}
       </li>
     );
   };

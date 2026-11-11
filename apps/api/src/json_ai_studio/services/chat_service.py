@@ -13,7 +13,14 @@ from uuid import uuid4
 
 from ..db.session_store import store
 from ..bulk_edits import expand_all, extract_bulk, extract_question
-from ..diff_utils import DiffApplyError, DiffUtils, _split_path, parse_llm_response
+from ..diff_utils import (
+    TRUNCATION_REASON,
+    DiffApplyError,
+    DiffUtils,
+    _current_value,
+    _split_path,
+    parse_llm_response,
+)
 from ..settings import get_settings
 from ..gateway import GatewayService
 from . import chat_history_service
@@ -21,6 +28,25 @@ from .turn_planner import plan_turn
 from .session_service import now_iso
 
 logger = logging.getLogger("json_ai_studio.chat")
+
+
+def _truncation_note(diff: dict[str, Any], working_json: Any) -> str:
+    """User-facing note for a diff the edit-safety guard refused."""
+    path = str(diff.get("path") or "")
+    try:
+        _, old = _current_value(working_json, _split_path(path))
+    except DiffApplyError:
+        old = None
+    new = diff.get("new_value")
+    sizes = ""
+    if isinstance(old, str) and isinstance(new, str):
+        sizes = f" (from {len(old):,} to {len(new):,} characters)"
+    return (
+        f"NOT changed: {path}. The AI only saw part of this long field, and "
+        f"its version would have cut the text{sizes}, so the field was left "
+        "as it was. Any fixes described above for it were not made — ask "
+        "again for just this field."
+    )
 
 
 def sse(event: str, payload: dict[str, Any]) -> str:
@@ -343,12 +369,18 @@ async def _stream_llm(
         elif applied:
             notes.append(f"Applied {len(applied)} change(s).")
         notes.extend(bulk_notes)
-        if failed:
+        guarded = [d for d, reason in failed if reason == TRUNCATION_REASON]
+        other = [(d, reason) for d, reason in failed if reason != TRUNCATION_REASON]
+        for d in guarded:
+            # Edit-safety guard: say plainly that the field is unchanged —
+            # the model's explanation above may describe fixes to it.
+            notes.append(_truncation_note(d, working_json))
+        if other:
             failed_desc = "; ".join(
-                f"{d.get('path')} ({reason})" for d, reason in failed
+                f"{d.get('path')} ({reason})" for d, reason in other
             )
             notes.append(
-                f"Skipped {len(failed)} proposed change(s) that did not match "
+                f"Skipped {len(other)} proposed change(s) that did not match "
                 f"the current JSON: {failed_desc}."
             )
         outcome["explanation"] = " ".join(notes) or "Done."

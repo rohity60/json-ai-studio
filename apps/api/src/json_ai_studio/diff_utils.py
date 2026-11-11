@@ -16,9 +16,15 @@ the error (single accept/reject endpoints).
 from __future__ import annotations
 
 import copy
+import difflib
 import json
+import logging
 import re
 from typing import Any
+
+from .preview import ends_with_preview_marker
+
+logger = logging.getLogger("json_ai_studio.diff_utils")
 
 
 class DiffApplyError(ValueError):
@@ -135,6 +141,135 @@ def _apply_one(diff: dict[str, Any], doc: Any) -> None:
             parent[key] = diff.get("new_value")
         else:
             raise DiffApplyError(f"parent of {path!r} is not a container")
+
+
+# ---------------------------------------------------------------------------
+# Truncation guard (edit-safety ES-01..07)
+# ---------------------------------------------------------------------------
+
+TRUNCATION_REASON = "truncated preview copied — read the full value first"
+_GUARD_MIN_OLD_CHARS = 120  # shorter than the skeleton's str_cap + slack
+_FUZZY_MAX_OLD_CHARS = 50_000  # fuzzy tail search above this is too slow
+_GUARD_SHRINK = 0.85  # only values that lost > 15 % are checked
+_TAIL_CHARS = 160  # how much of the new value's ending is located in the old
+_TAIL_MATCH = 0.6  # SequenceMatcher ratio that counts as "same passage"
+_TAIL_STEP = 40
+
+
+def _current_value(doc: Any, parts: list[str]) -> tuple[bool, Any]:
+    """(exists, value) at parts, without mutating or raising."""
+    current = doc
+    for part in parts:
+        if isinstance(current, list):
+            if not part.isdigit() or int(part) >= len(current):
+                return False, None
+            current = current[int(part)]
+        elif isinstance(current, dict):
+            if part not in current:
+                return False, None
+            current = current[part]
+        else:
+            return False, None
+    return True, current
+
+
+def _tail_end_in_old(old: str, new: str) -> int | None:
+    """Where in `old` the passage that `new` ends with stops, or None.
+
+    Slides a window over `old` and keeps the best fuzzy match for the last
+    _TAIL_CHARS of `new` (typo fixes / punctuation changes still match).
+    """
+    tail = new[-_TAIL_CHARS:].rstrip(" .…)]}\"'")
+    if len(tail) < 20:
+        return None
+    # Unedited ending: cheap exact probes, any size (the last few chars may
+    # be the model's own, so the start of the tail is probed too).
+    for probe, after in ((tail[-60:], 0), (tail[:60], len(tail) - 60)):
+        at = old.find(probe) if len(probe) == 60 else -1
+        if at >= 0:
+            return at + 60 + max(0, after)
+    if len(old) > _FUZZY_MAX_OLD_CHARS:
+        return None
+    width = len(tail) + _TAIL_STEP  # equal-length windows: fair ratios
+    matcher = difflib.SequenceMatcher(autojunk=False)
+    matcher.set_seq2(tail)
+    best_ratio, best_end = 0.0, None
+    last = max(0, len(old) - width)
+    starts = list(range(0, last, _TAIL_STEP)) + [last]
+    for start in starts:  # ties keep the earliest (safer: reject)
+        window = old[start : start + width]
+        matcher.set_seq1(window)
+        if matcher.real_quick_ratio() < _TAIL_MATCH:
+            continue
+        if matcher.quick_ratio() < _TAIL_MATCH:
+            continue
+        ratio = matcher.ratio()
+        if ratio > best_ratio:
+            best_ratio, best_end = ratio, start + len(window)
+    return best_end if best_ratio >= _TAIL_MATCH else None
+
+
+def _looks_like_copied_preview(old: str, new: str) -> bool:
+    """True when `new` is a cut-down (and maybe edited) copy of `old`.
+
+    - `new` ends with a preview marker and is shorter than `old` (ES-01/04);
+    - or `new` is clearly shorter and its ending is a passage from the
+      *middle* of `old`: the model rewrote what it saw of a truncated
+      preview / tool read and dropped the rest (repros 2026-11-10:
+      7485 → 80 chars, 7485 → 3392 chars with typo fixes and "...)" ending).
+      A full rewrite or summary ends like `old` ends, or matches nowhere.
+
+    Deliberately cutting a long text in half is refused too: losing data
+    silently is worse than one failed diff the user can redo explicitly.
+    """
+    if len(new) >= len(old):
+        return False
+    if ends_with_preview_marker(new):
+        return True
+    if len(old) < _GUARD_MIN_OLD_CHARS:
+        return False
+    if len(new) > len(old) * _GUARD_SHRINK:
+        return False
+    end = _tail_end_in_old(old, new)
+    return end is not None and end < len(old) - max(_TAIL_CHARS, len(old) * 0.15)
+
+
+def _find_copied_preview(old: Any, new: Any) -> bool:
+    if isinstance(new, str):
+        return isinstance(old, str) and _looks_like_copied_preview(old, new)
+    if isinstance(new, dict) and isinstance(old, dict):
+        return any(k in old and _find_copied_preview(old[k], v) for k, v in new.items())
+    if isinstance(new, list) and isinstance(old, list):
+        return any(_find_copied_preview(o, n) for o, n in zip(old, new))
+    return False
+
+
+def check_truncation(diff: dict[str, Any], doc: Any) -> None:
+    """Refuse a modify/add whose new_value is a copied (cut-down) preview.
+
+    In skeleton/tool modes the model sees long strings cut at a marker; a
+    diff built from that preview would silently shrink the field (repro
+    2026-11-10: 7485 → 80 chars). Raises DiffApplyError(TRUNCATION_REASON).
+    """
+    try:
+        op = _resolve_op(diff)
+        parts = _split_path(diff.get("path", ""))
+    except DiffApplyError:
+        return  # _apply_one reports these
+    if op == "delete" or not parts:
+        return
+    exists, old = _current_value(doc, parts)
+    if not exists:
+        return
+    new = diff.get("new_value")
+    if _find_copied_preview(old, new):
+        logger.info(
+            "edit guard rejected path=%s old_len=%d new_len=%d",
+            diff.get("path"),
+            len(json.dumps(old, ensure_ascii=False, default=str)),
+            len(json.dumps(new, ensure_ascii=False, default=str)),
+        )
+        raise DiffApplyError(TRUNCATION_REASON)
 
 
 def _revert_one(diff: dict[str, Any], doc: Any) -> None:
@@ -255,6 +390,7 @@ class DiffUtils:
         failed: list[tuple[dict[str, Any], str]] = []
         for diff in _order_for_apply(list(diffs)):
             try:
+                check_truncation(diff, result)
                 _apply_one(diff, result)
                 applied.append(diff)
             except DiffApplyError as exc:

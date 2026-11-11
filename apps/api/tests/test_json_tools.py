@@ -620,18 +620,28 @@ async def test_long_retry_hint_gives_up(gateway, no_sleep, monkeypatch):
     assert payload["login_available"] is False
 
 
-async def test_server_error_not_retried(gateway, no_sleep, monkeypatch):
+async def test_fast_server_error_retried_per_call_limit(gateway, no_sleep, monkeypatch):
     import litellm
 
+    attempts = []
+
     async def broken(**kw):
+        attempts.append(1)
         raise litellm.InternalServerError(
             message="500 Internal", llm_provider="gemini", model="gemma"
         )
 
+    from src.json_ai_studio.providers.policy import DeploymentPolicy
+
+    # Google-like policy (deployments.yaml): 3 per call, 12 per turn.
+    gateway.deployment.policy = DeploymentPolicy.from_config(
+        {"transient_retry_attempts": 3, "transient_retry_turn_max": 12}
+    )
     monkeypatch.setattr(gateway.gw.litellm, "acompletion", broken)
     events = await _run(gateway.gw, JsonToolbox(RECORDS))
-    # 5xx never retried: each retry would add to the provider's per-minute
-    # count (ADR-0025); pacing keeps load down instead.
-    assert no_sleep == []
-    assert len(gateway.calls) == 0  # broken() raised before recording
+    # Fast 5xx: up to 3 retries per call with growing backoff, then the
+    # turn ends. Slow 5xx stay unretried (ADR-0025).
+    assert len(attempts) == 4
+    w = gateway.deployment.policy.transient_retry_wait_s
+    assert no_sleep == [w, 2 * w, 3 * w]
     assert [e for e, _ in events][-1] == "service_unavailable"

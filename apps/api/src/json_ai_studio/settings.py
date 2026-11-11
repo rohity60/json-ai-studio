@@ -72,12 +72,23 @@ class Settings(BaseSettings):
     chat_tool_max_rounds: int = 4  # tool rounds before a forced final answer
     chat_tool_result_max_chars: int = 4_000  # per tool result
     chat_tool_turn_timeout_s: float = 150.0  # whole tool loop wall clock
-    # Retries per LLM call (tool round or single call). Default 0: pacing and
+    # 429 retries per LLM call — defaults for policy.rate_limit_retry_*.
+    # Default 0: pacing and
     # the token gate keep load down, and every retry adds to the provider's
     # per-minute count (ADR-0025). If raised, only a 429 with a short
-    # provider hint is retried; 5xx never are.
+    # provider hint is retried. 5xx: see chat_transient_* below.
     chat_tool_retry_attempts: int = 0
     chat_tool_retry_max_wait_s: float = 10.0  # longer provider retry hints → fail
+    # Fast 5xx retries — DEFAULTS for each deployment's policy (PRD B B-19);
+    # provider-specific values go in deployments.yaml `policy:` (Google free
+    # tier: 3 per call / 12 per turn, live 2026-11-11). A 5xx returning
+    # within transient_fast_s is retried, waiting retry_wait_s × attempt plus
+    # the pacing slot, only before any text reached the client; the failed
+    # call still counts against the budget.
+    chat_transient_retry_attempts: int = 1
+    chat_transient_retry_turn_max: int = 2
+    chat_transient_fast_s: float = 3.0
+    chat_transient_retry_wait_s: float = 3.0
 
     # Deployment token budget (ADR-0025). Prompts are planned, and every call
     # is gated, against this fraction of a deployment's tpm_input_limit
@@ -85,6 +96,8 @@ class Settings(BaseSettings):
     # the minute waits up to max_wait_s for capacity (countdown streamed),
     # else the turn ends with a model-scope rate_limit. 60 s = one window.
     deployment_budget_headroom: float = 0.8
+    # Default per-deployment window margin (policy.window_margin_s).
+    deployment_window_margin_s: float = 0.0
     deployment_budget_max_wait_s: float = 60.0
 
     # Bulk edits: the model may emit a pattern op ("/records/*/field" + where)

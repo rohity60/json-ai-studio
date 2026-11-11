@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.json_ai_studio.providers.policy import DeploymentPolicy
+
 from src.json_ai_studio import gateway as gw
 from src.json_ai_studio.auth import Principal
 from src.json_ai_studio.json_trim import fit_trim, trim_json
@@ -46,7 +48,7 @@ def clean(monkeypatch):
     get_settings.cache_clear()
 
 
-def _deployment(tpm=None, tools=True, name="fake", interval=0):
+def _deployment(tpm=None, tools=True, name="fake", interval=0, margin=0, **policy):
     return SimpleNamespace(
         name=name,
         model_prefix="fake/",
@@ -58,6 +60,7 @@ def _deployment(tpm=None, tools=True, name="fake", interval=0):
         tpm_input_limit=tpm,
         context_tokens=None,
         min_call_interval_s=interval,
+        policy=DeploymentPolicy.from_config({"window_margin_s": margin, **policy}),
         litellm_model=lambda m: m,
         completion_params=lambda model, reasoning=None: {},
         pricing=lambda model: (0.0, 0.0),
@@ -88,6 +91,53 @@ def test_reserve_within_limit_then_wait():
     res2, wait2 = budget.try_reserve(dep, "m", 300)
     assert res2 is None
     assert 59 < wait2 <= 60  # frees when the first call leaves the window
+
+
+def test_window_margin_extends_wait_past_60s(monkeypatch):
+    # Prod 500s when a wait ended exactly at our 60 s edge: with a margin the
+    # call stamped at send time keeps counting for 60 + margin seconds.
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(budget, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    dep = _deployment(tpm=1000, margin=4)
+    assert budget.try_reserve(dep, "m", 600)[0] is not None
+    clock["now"] += 30
+    res, wait = budget.try_reserve(dep, "m", 300)
+    assert res is None and wait == 34  # 60 + 4 - 30
+    clock["now"] += 31  # 61 s after send: past 60, inside the margin
+    assert budget.try_reserve(dep, "m", 300)[0] is None
+    clock["now"] += 3.5  # 64.5 s after send
+    assert budget.try_reserve(dep, "m", 300)[0] is not None
+
+
+def test_entry_restamped_at_finish(monkeypatch):
+    # Live run 2026-11-11: Google counts a call when it finishes.
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(budget, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    dep = _deployment(tpm=1000, margin=4)
+    res, _ = budget.try_reserve(dep, "m", 600)
+    clock["now"] += 25  # slow call finishes
+    budget.settle(res, 650)
+    assert res.entry[0] == 1025.0
+    clock["now"] += 60  # 85 s after send, 60 after finish: still counted
+    res2, wait = budget.try_reserve(dep, "m", 300)
+    assert res2 is None and wait == 4
+    clock["now"] += 4.5
+    assert budget.try_reserve(dep, "m", 300)[0] is not None
+
+
+def test_finish_keeps_window_sorted(monkeypatch):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(budget, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    dep = _deployment(tpm=10_000)
+    slow, _ = budget.try_reserve(dep, "m", 100)
+    clock["now"] += 5
+    fast, _ = budget.try_reserve(dep, "m", 100)
+    clock["now"] += 1
+    budget.settle(fast, 100)  # finishes at 1006
+    clock["now"] += 20
+    budget.settle(slow, 100)  # finishes at 1026
+    stamps = [e[0] for e in budget._windows["fake:m"]]
+    assert stamps == sorted(stamps) == [1006.0, 1026.0]
 
 
 def test_call_larger_than_limit_never_fits():
@@ -423,22 +473,93 @@ async def test_provider_429_is_model_rate_limit_and_blocks(monkeypatch, stub_llm
     assert len(budget._windows["fake:fake/m"]) == 1
 
 
-async def test_server_error_not_retried_and_stays_counted(monkeypatch, stub_llm):
+def _server_error():
     import litellm
 
+    return litellm.InternalServerError(
+        message='500 {"error": {"code": 500, "status": "INTERNAL"}}',
+        llm_provider="gemini",
+        model="g",
+    )
+
+
+async def test_fast_server_error_retried_once_and_still_counted(monkeypatch, stub_llm):
+    # Prod 2026-11-10 17:52: 500 after 1.2 s, empty window → provider hiccup.
+    ok = gw.litellm.acompletion
+    attempts = []
+
+    async def flaky(**kw):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise _server_error()
+        return await ok(**kw)
+
+    monkeypatch.setattr(gw.litellm, "acompletion", flaky)
+    dep = _deployment(tpm=1_000)
+    events = await _invoke(monkeypatch, dep)
+    assert [e for e, _ in events][-1] == "usage"
+    assert len(attempts) == 2
+    # Google counts failed 500 calls too (live run 2026-11-11): both stay.
+    assert len(budget._windows["fake:fake/m"]) == 2
+
+
+async def test_fast_server_error_retried_up_to_limit(monkeypatch, stub_llm):
     attempts = []
 
     async def broken(**kw):
         attempts.append(1)
-        raise litellm.InternalServerError(
-            message="500 Internal error encountered.", llm_provider="gemini", model="g"
-        )
+        raise _server_error()
 
     monkeypatch.setattr(gw.litellm, "acompletion", broken)
-    dep = _deployment(tpm=1_000)
+    dep = _deployment(
+        tpm=1_000, transient_retry_attempts=3, transient_retry_turn_max=12
+    )
     events = await _invoke(monkeypatch, dep)
     assert events[-1][0] == "service_unavailable"
-    assert len(attempts) == 1  # no retry on 5xx
+    assert len(attempts) == 4  # 1 + 3 retries
+    # Every failed call stays counted (Google counts them).
+    assert len(budget._windows["fake:fake/m"]) == len(attempts)
+
+
+async def test_policy_without_transient_retries(monkeypatch, stub_llm):
+    # Ollama-style policy: a 5xx means the server is broken — no retry.
+    attempts = []
+
+    async def broken(**kw):
+        attempts.append(1)
+        raise _server_error()
+
+    monkeypatch.setattr(gw.litellm, "acompletion", broken)
+    events = await _invoke(
+        monkeypatch, _deployment(tpm=1_000, transient_retry_attempts=0)
+    )
+    assert events[-1][0] == "service_unavailable"
+    assert len(attempts) == 1
+
+
+def test_policy_headroom_is_per_deployment():
+    assert budget.plan_budget(_deployment(tpm=10_000)) == 8_000
+    assert budget.plan_budget(_deployment(tpm=10_000, budget_headroom=0.5)) == 5_000
+
+
+def test_policy_rejects_unknown_keys():
+    with pytest.raises(ValueError):
+        DeploymentPolicy.from_config({"retries": 3})
+
+
+async def test_slow_server_error_not_retried_and_stays_counted(monkeypatch, stub_llm):
+    monkeypatch.setenv("CHAT_TRANSIENT_FAST_S", "-1")
+    get_settings.cache_clear()
+    attempts = []
+
+    async def broken(**kw):
+        attempts.append(1)
+        raise _server_error()
+
+    monkeypatch.setattr(gw.litellm, "acompletion", broken)
+    events = await _invoke(monkeypatch, _deployment(tpm=1_000))
+    assert events[-1][0] == "service_unavailable"
+    assert len(attempts) == 1  # near-cap 500s stay unretried (ADR-0025)
     # Google counts the failed call's input: the reservation stays.
     assert len(budget._windows["fake:fake/m"]) == 1
 
@@ -612,3 +733,39 @@ async def test_focus_path_prefixes_model_paths(monkeypatch):
     done = next(p for e, p in events if e == "complete")
     assert done["working_json"]["settings"]["theme"] == "light"
     assert len(done["working_json"]["zz_items"]) == 3
+
+
+def test_midstream_wrapped_500_counts_as_server_error():
+    # Prod 17:52: litellm.MidStreamFallbackError wrapping a Vertex 500.
+    class MidStreamFallbackError(Exception):
+        pass
+
+    exc = MidStreamFallbackError(
+        "litellm.InternalServerError: Vertex_ai_betaException InternalServerError"
+        ' - b\'{\n  "error": {\n    "code": 500,\n    "status": "INTERNAL"\n  }\n}\''
+    )
+    assert gw._is_server_error(exc)
+    assert not gw._is_server_error(ValueError("bad json"))
+
+
+async def test_full_window_with_margin_waits_not_rejects(monkeypatch, stub_llm):
+    # Live run 2026-11-11: a 64 s wait (60 + 4 s margin) was refused by the
+    # 60 s max wait and ended the turn; one window must always be waitable.
+    dep = _deployment(tpm=1_000, margin=4)  # plan budget 800
+    assert budget.try_reserve(dep, "fake/m", 800)[0] is not None
+    events = await _invoke(monkeypatch, dep)
+    waits = [p["retry_after"] for e, p in events if e == "waiting"]
+    assert waits and max(waits) == 64
+    assert [e for e, _ in events][-1] == "usage"
+
+
+def test_token_wait_pushes_next_slot(monkeypatch):
+    # Live run 2026-11-11: slot claimed, then a long token wait; the next
+    # round's slot was already in the past → two calls 2 s apart.
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(budget, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    dep = _deployment(tpm=16_000, interval=15)
+    assert budget.claim_slot(dep, "m") == 0  # next slot at 1015
+    clock["now"] += 50  # waited for tokens, call starts at 1050
+    assert budget.try_reserve(dep, "m", 100)[0] is not None
+    assert budget.claim_slot(dep, "m") == 15  # not 0

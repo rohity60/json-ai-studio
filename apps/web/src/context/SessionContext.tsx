@@ -376,9 +376,17 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       let stored: { userId: string; assistantId: string } | null = null;
       let quotaStopped = false;
       let question: { text: string; options: string[] } | null = null;
-      // Progress line while the backend runs lookup tools on a large doc
-      // (ADR-0024); replaced by the explanation on `complete`.
-      let toolStatus = '';
+      // Progress while the backend runs lookup tools on a large doc
+      // (ADR-0024); replaced by the explanation on `complete`. The last tool
+      // step and the current budget wait are kept separately: on budgeted
+      // deployments (ADR-0025) a wait follows each tool call within ms, and a
+      // single status string let the wait hide every tool step.
+      let lastTool = '';
+      let waitLine = '';
+      const progressText = () =>
+        waitLine
+          ? [lastTool && `✓ ${lastTool.replace(/…$/, '')}`, waitLine].filter(Boolean).join('\n')
+          : lastTool;
 
         // Initialize the assistant message container in UI history
       setState((prev) => ({
@@ -450,11 +458,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             }
           structureChanged = true;
           } else if (chunk.type === 'tool' && chunk.data?.name) {
-          toolStatus = describeToolCall(chunk.data.name, chunk.data.args);
+          lastTool = describeToolCall(chunk.data.name, chunk.data.args);
+          waitLine = '';
           structureChanged = true;
           } else if (chunk.type === 'waiting') {
           // Deployment budget wait (ADR-0025); the turn continues after it.
-          toolStatus = `Waiting for AI model capacity… ~${chunk.data?.retry_after ?? ''}s`;
+          waitLine = `Waiting for AI model capacity… ~${chunk.data?.retry_after ?? ''}s`;
           structureChanged = true;
           } else if (chunk.type === 'content' || chunk.type === 'text') {
           textAccumulator += chunk.data.text || '';
@@ -474,7 +483,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                 const lastIndex = historyCopy.length - 1;
                 historyCopy[lastIndex] = {
                     ...historyCopy[lastIndex],
-                  content: textAccumulator || toolStatus,
+                  content: textAccumulator || progressText(),
                   diffs: [...diffs],
                   question,
                   };
