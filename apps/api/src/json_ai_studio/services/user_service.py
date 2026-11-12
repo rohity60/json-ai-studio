@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from ..auth import mask_email
 from ..db.database import session_factory
 from ..db.models_orm import User
 from ..settings import get_settings
@@ -44,10 +45,10 @@ async def upsert_from_claims(claims: dict[str, Any], token: str) -> User:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     # Log claims only -- never the raw bearer token.
     logger.debug(
-        "upsert_from_claims sub=%s email=%s name=%s",
+        "upsert_from_claims sub=%s email=%s has_name=%s",
         claims.get("sub"),
-        claims.get("email"),
-        claims.get("name"),
+        mask_email(claims.get("email")),
+        bool(claims.get("name")),
     )
 
     async with factory() as db:
@@ -71,7 +72,10 @@ async def upsert_from_claims(claims: dict[str, Any], token: str) -> User:
         user = (await db.execute(stmt)).scalar_one()
         await db.commit()
         logger.info(
-            "user upserted id=%s sub=%s email=%s", user.id, user.auth0_sub, user.email
+            "user upserted id=%s sub=%s email=%s",
+            user.id,
+            user.auth0_sub,
+            mask_email(user.email),
         )
 
         if user.email is None:

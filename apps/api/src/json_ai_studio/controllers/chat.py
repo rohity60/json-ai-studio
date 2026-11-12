@@ -39,7 +39,7 @@ async def endpoint_chat(
         focus_path,
     )
     try:
-        session = await session_service.get_session(session_id)
+        session = await session_service.get_owned_session(session_id, principal)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 

@@ -8,14 +8,17 @@ const BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
 /** Auth headers for every backend call: logged-in users send the Auth0
  *  bearer token (per-user quota); anonymous users send X-API-Key against
- *  the shared free pool (ADR-0015). */
+ *  the shared free pool (ADR-0015). The browser key rides along with the
+ *  bearer too: sessions belong to the caller that created them, and a user
+ *  who logs in mid-session keeps the anonymous session only by presenting
+ *  both credentials (ADR-0027). */
 async function authHeaders(
     apiKey: string,
     extra: Record<string, string> = {},
 ): Promise<Record<string, string>> {
     const token = await getBearerToken();
     return token
-        ? {...extra, Authorization: `Bearer ${token}`}
+        ? {...extra, Authorization: `Bearer ${token}`, 'X-API-Key': apiKey}
         : {...extra, 'X-API-Key': apiKey};
 }
 

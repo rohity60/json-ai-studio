@@ -26,8 +26,13 @@ class SessionStore(ABC):
     """Abstract session persistence."""
 
     @abstractmethod
-    async def create_session(self, *, name: str | None = None) -> dict[str, Any]:
-        """Create and persist a new session; return the full session dict."""
+    async def create_session(
+        self, *, name: str | None = None, owner: str | None = None
+    ) -> dict[str, Any]:
+        """Create and persist a new session; return the full session dict.
+
+        ``owner`` is the creating caller's owner id (ADR-0027).
+        """
 
     @abstractmethod
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
@@ -52,12 +57,15 @@ class InMemorySessionStore(SessionStore):
     def __init__(self) -> None:
         self._sessions: dict[str, dict[str, Any]] = {}
 
-    async def create_session(self, *, name: str | None = None) -> dict[str, Any]:
+    async def create_session(
+        self, *, name: str | None = None, owner: str | None = None
+    ) -> dict[str, Any]:
         sid = uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
         session: dict[str, Any] = {
             "id": sid,
             "name": name,
+            "owner": owner,
             "working_json": {},
             "baseline_json": {},
             "versions": [],

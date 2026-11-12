@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from ..auth import Principal
 from ..db.session_store import store
 from .errors import NotFoundError
 
@@ -26,10 +27,62 @@ def cancel_active_job(session: dict[str, Any]) -> None:
     session["active_job_id"] = None
 
 
-async def create_session(name: str | None = None) -> dict[str, Any]:
-    session = await store.create_session(name=name)
-    logger.info("session created id=%s name=%r", session["id"], name)
+def public_session(session: dict[str, Any]) -> dict[str, Any]:
+    """Session dict as sent to clients: the owner id stays server-side."""
+    return {k: v for k, v in session.items() if k != "owner"}
+
+
+async def create_session(
+    name: str | None = None, principal: Principal | None = None
+) -> dict[str, Any]:
+    owner = principal.owner if principal else None
+    session = await store.create_session(name=name, owner=owner)
+    logger.info(
+        "session created id=%s name=%r owner_kind=%s",
+        session["id"],
+        name,
+        principal.kind if principal else None,
+    )
     logger.debug("session created full=%s", session)
+    return session
+
+
+async def authorize(session: dict[str, Any], principal: Principal) -> None:
+    """Raise NotFoundError unless ``principal`` may use ``session`` (ADR-0027).
+
+    A mismatch looks exactly like an unknown id, so ids cannot be probed.
+    A logged-in user who also sends the X-API-Key that created an anonymous
+    session takes it over: the owner becomes the user.
+    """
+    owner = session.get("owner")
+    if owner is not None and owner == principal.owner:
+        return
+    if (
+        principal.kind == "user"
+        and principal.claim_owner is not None
+        and owner == principal.claim_owner
+    ):
+        session["owner"] = principal.owner
+        session["updated_at"] = now_iso()
+        await store.save_session(session)
+        logger.info("session claimed id=%s sub=%s", session["id"], principal.auth0_sub)
+        return
+    if principal.admin:
+        logger.warning(
+            "admin session access id=%s caller_kind=%s sub=%s",
+            session["id"],
+            principal.kind,
+            principal.auth0_sub,
+        )
+        return
+    logger.info("session access denied id=%s kind=%s", session["id"], principal.kind)
+    raise NotFoundError("Session not found")
+
+
+async def get_owned_session(session_id: str, principal: Principal) -> dict[str, Any]:
+    """``get_session`` plus the owner check: NotFoundError on either miss."""
+    session = await get_session(session_id)
+    await authorize(session, principal)
     return session
 
 
@@ -47,6 +100,7 @@ async def create_from_template(
     json_doc: dict[str, Any],
     name: str | None = None,
     starter_prompts: list[str] | None = None,
+    principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Create a session preloaded with static template JSON (ADR-0020).
 
@@ -54,7 +108,9 @@ async def create_from_template(
     `starter_prompts` are echoed back as transient response metadata for the
     studio's chip UI, not persisted into session state.
     """
-    session = await store.create_session(name=name)
+    session = await store.create_session(
+        name=name, owner=principal.owner if principal else None
+    )
     working = json_doc if isinstance(json_doc, dict) else {}
     session["working_json"] = working
     session["baseline_json"] = working
@@ -66,13 +122,20 @@ async def create_from_template(
         len(working),
         len(starter_prompts or []),
     )
-    result = dict(session)
+    result = public_session(session)
     result["starter_prompts"] = list(starter_prompts or [])
     return result
 
 
-async def upload_json(data: Any, session_id: str | None) -> dict[str, Any]:
-    """Store an uploaded JSON document; reuse the session if one is given."""
+async def upload_json(
+    data: Any, session_id: str | None, principal: Principal | None = None
+) -> dict[str, Any]:
+    """Store an uploaded JSON document; reuse the session if one is given.
+
+    A session id the caller does not own is treated like an unknown id: the
+    upload lands in a new session owned by the caller (ADR-0027), so the
+    response never tells whether that id exists.
+    """
     logger.info(
         "upload_json session_id=%s type=%s top_keys=%s",
         session_id,
@@ -81,9 +144,16 @@ async def upload_json(data: Any, session_id: str | None) -> dict[str, Any]:
     )
     logger.debug("upload_json payload=%s", data)
     session = await store.get_session(session_id) if session_id else None
+    if session is not None and principal is not None:
+        try:
+            await authorize(session, principal)
+        except NotFoundError:
+            session = None
     if session is None:
         name = data.get("name", "Uploaded") if isinstance(data, dict) else "Uploaded"
-        session = await store.create_session(name=name)
+        session = await store.create_session(
+            name=name, owner=principal.owner if principal else None
+        )
 
     # The document is stored verbatim: top-level keys like "name" or
     # "session_id" are legitimate user data (e.g. package.json). Transport

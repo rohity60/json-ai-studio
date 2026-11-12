@@ -25,6 +25,23 @@ securitySchemes:
       Auth0 access token (RS256). Optional: anonymous callers use
       simpleApiKey with the shared free quota; logged-in callers get a
       per-user quota persisted in the database (ADR-0015).
+
+      Session ownership (ADR-0027): every session records the caller that
+      created it (the anonymous X-API-Key, or the logged-in user). All
+      session-scoped endpoints (/api/sessions/{sessionId}/**, /api/chat,
+      /api/explain) answer 404 to any other caller, exactly as for an
+      unknown id; /api/json/upload treats such a session_id as unknown.
+      A logged-in user takes over an anonymous session by sending both the
+      bearer token and the X-API-Key that created it; the session then
+      belongs to the user.
+  adminApiKey:
+    type: apiKey
+    in: header
+    name: X-Admin-Key
+    description: |-
+      Optional support access (ADR-0027). When the server sets
+      ADMIN_API_KEY, a matching X-Admin-Key header (sent together with the
+      normal credentials) may open any session. Every use is logged.
 servers:
    - url: http://localhost:8000
      description: Local development server
@@ -787,7 +804,9 @@ paths:
         syntax, generate a schema summary (top-level keys, nested depth, array
         lengths), and return the structured tree along with session metadata.
         The response includes a sessionId that the frontend uses for all
-        subsequent chat operations.
+        subsequent chat operations. A session_id the caller does not own is
+        treated like an unknown one: the upload goes to a new session owned
+        by the caller (ADR-0027).
       operationId: uploadJson
       security:
          - simpleApiKey: []
@@ -1010,6 +1029,8 @@ paths:
                 data: {"working_json":{"services":{"api":{"timeout":60},"payment":{"timeout":60}}},"explanation":"Done — 2 changes applied.","user_turn_id":"u1","assistant_turn_id":"a1"}
          '401':
            $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
          '429':
            $ref: '#/components/responses/Error429'
          '500':
@@ -2361,7 +2382,9 @@ components:
             hint: null
 
     Error404:
-      description: Not found — session does not exist
+      description: |-
+        Not found — the session does not exist, or it belongs to another
+        caller (ADR-0027). The two cases are indistinguishable on purpose.
       content:
         application/json:
           schema:

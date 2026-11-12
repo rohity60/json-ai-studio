@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import require_api_key
+from .access import require_session_owner
 from ..diff_utils import DiffApplyError
 from ..services import diff_service
 from ..services.errors import ConflictError, NotFoundError
@@ -21,7 +21,7 @@ async def endpoint_accept_all_diffs(
     session_id: str,
     job_id: str | None = None,
     batch_no: int | None = None,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     logger.info(
         "POST /api/sessions/%s/diffs/accept-all principal=%s", session_id, _auth.kind
@@ -37,7 +37,7 @@ async def endpoint_reject_all_diffs(
     session_id: str,
     job_id: str | None = None,
     batch_no: int | None = None,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     logger.info(
         "POST /api/sessions/%s/diffs/reject-all principal=%s", session_id, _auth.kind
@@ -52,7 +52,7 @@ async def endpoint_reject_all_diffs(
 async def endpoint_accept_single_diff(
     session_id: str,
     diff_id: str,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """Accept a single diff by ID: promote it into baseline_json."""
     logger.info(
@@ -77,7 +77,7 @@ async def endpoint_accept_single_diff(
 async def endpoint_reject_single_diff(
     session_id: str,
     diff_id: str,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """Reject a single diff by ID: revert it from working_json."""
     logger.info(
