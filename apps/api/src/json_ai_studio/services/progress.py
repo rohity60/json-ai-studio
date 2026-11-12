@@ -15,6 +15,7 @@ import json
 import math
 from typing import Any
 
+from ..providers.policy import policy_of, transient_wait
 from . import deployment_budget as budget
 
 _TERM_MAX = 40  # chars of a user search term shown back
@@ -58,6 +59,15 @@ def calls_per_min(deployment: Any, model: str, est_tokens: int) -> float | None:
     return min(limits) if limits else None
 
 
+def retry_allowance_s(deployment: Any) -> float:
+    """Extra time one call may take when the provider errors and the
+    deployment policy retries it: every scheduled cooldown plus the repeat
+    calls (B-28a, static; learned rates come with B-28)."""
+    pol = policy_of(deployment)
+    attempts = max(0, int(pol.transient_retry_attempts))
+    return sum(transient_wait(pol, n) + _AVG_CALL_S for n in range(1, attempts + 1))
+
+
 def plan_event(
     mode: str, steps: int, deployment: Any, model: str, est_tokens: int
 ) -> str:
@@ -68,6 +78,7 @@ def plan_event(
         eta_s = (steps - 1) * per_step + _AVG_CALL_S
     else:
         eta_s = steps * _AVG_CALL_S
+    retry_s = retry_allowance_s(deployment)
     if mode == "inline" or steps <= 1:
         message = "Sending your request to the AI model…"
     else:
@@ -77,8 +88,14 @@ def plan_event(
             message += (
                 f". This AI model allows about {per_min} step"
                 f"{'s' if per_min != 1 else ''} per minute, so this may take "
-                f"up to ~{_duration(eta_s)}."
+                f"up to ~{_duration(eta_s)}"
             )
+            if retry_s:
+                message += (
+                    f" (up to ~{_duration(eta_s + retry_s)} if the AI provider "
+                    "has temporary errors — it retries automatically)"
+                )
+            message += "."
         else:
             message += "."
     return sse(
@@ -89,6 +106,7 @@ def plan_event(
             "steps": steps,
             "calls_per_min": round(cpm, 2) if cpm is not None else None,
             "eta_s": int(round(eta_s)),
+            "eta_max_s": int(round(eta_s + retry_s)),
             "message": message,
         },
     )

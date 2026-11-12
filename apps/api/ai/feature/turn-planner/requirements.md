@@ -89,6 +89,7 @@ gateway  ──tells──▶ policy.record(outcome)   (each call)
 | B-26 | `safety_block` → SSE `error` with `code="safety_block"` and a user-facing message ("The AI provider declined this request."), no stack/provider text. | MVP | I-B11 |
 | B-27 | **Learned stats** (in memory, per deployment+model, EWMA over recent calls, bounded): `transient_rate` (5xx share; Google ≈ 0.4 on 2026-11-11), `avg_latency_s`, `avg_call_tokens`, plus the existing calibration ratio. Updated by `record(outcome)`; logged at INFO when they move > 20 %. | MVP | I-B1, I-B3 |
 | B-28 | **Planner derives per turn** from `snapshot()`: expected attempts per call `= 1 / (1 − transient_rate)`; retry reserve `= (expected − 1) × round tokens` (tokens and time); `affordable_rounds` and `eta_s` include expected retries; mode choice (inline / skeleton+tools / `TooLarge` / `JobProposal`) uses the same numbers. Example: rate 0.4 → 1.67 attempts/round → under a 150 s turn timeout plan 2 rounds, not 4. Replaces the fixed B-14 reserve. | MVP | I-B1 |
+| B-28a | **Static retry allowance (shipped 2026-11-12, interim for B-28).** `plan` carries `eta_max_s = eta_s + Σ(transient_wait(n) + avg call)` over the policy's `transient_retry_attempts`; when > `eta_s`, the rate-limited plan message adds "(up to ~X if the AI provider has temporary errors — it retries automatically)". Planned rounds are unchanged; B-28 replaces the allowance with the learned rate. | MVP | I-B1 |
 | B-29 | **Learned values only make plans more cautious.** They never raise config caps (retry counts, headroom, limits); a worse `transient_rate` reduces planned rounds instead of adding retries. When the provider recovers, rates fall and rounds come back automatically. | MVP | I-B1, I-B3 |
 
 ## 4. Window accounting — `services/deployment_budget.py`
@@ -134,7 +135,7 @@ Settings hold **global** knobs and the **defaults** for `DeploymentPolicy` field
 
 ## 8. Turn progress events — `gateway.py`, `services/progress.py` (new)
 
-**Status: B-50…B-56 shipped (branch `feature/turn-progress`, 2026-11-11); B-57 later.** Live check on Google (card, typo prompt): plan, step X/N, cooldown/limit countdowns, retry lines and tool lines rendered through a 7-min turn with 9 provider 500s. Known gap: the plan ETA ("~2 min") ignores expected retries — fixed by B-28 learned 5xx rate.
+**Status: B-50…B-56 shipped (branch `feature/turn-progress`, 2026-11-11); B-57 later.** Live check on Google (card, typo prompt): plan, step X/N, cooldown/limit countdowns, retry lines and tool lines rendered through a 7-min turn with 9 provider 500s. Known gap: the plan ETA ("~2 min") ignored retries — B-28a (2026-11-12) adds a static worst-case allowance from the policy; B-28 learned 5xx rate still open.
 
 Every long step tells the user what is happening and where the turn stands. **All messages are built in code** from the plan, tool name/args and the document (sizes, match counts): zero extra LLM tokens, deterministic, localisable later. Model-written status text was rejected: it costs tokens on a 16k/min budget, Google tool rounds are non-streaming (no live text), and it can be wrong.
 
