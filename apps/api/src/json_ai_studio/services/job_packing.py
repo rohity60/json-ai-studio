@@ -175,7 +175,7 @@ RULES:
 2. To change words INSIDE an existing string use "replace_text": "find" is copied EXACTLY from the text, covers WHOLE words and occurs exactly ONCE in that string (add surrounding words if it repeats; "all": true changes every occurrence). Several fixes in one string = several replace_text diffs on the same path.
 3. Use "modify" with a full new value only for short values, or to fill a field that is missing or empty. Never rewrite a long string in full.
 4. A line with "text_page" shows only PART of a long string (characters "offset".. of "length"). Use only replace_text on its path, only on text you see; a page that starts or ends mid-sentence is not an error.
-5. Keep everything the task does not ask to change. If nothing needs changing: {"diffs": [], "explanation": "No changes needed."}
+5. Keep everything the task does not ask to change. Emit a diff ONLY for a value you actually change — never repeat a record or field unchanged (that wastes the output and the answer gets cut off). If nothing needs changing: {"diffs": [], "explanation": "No changes needed."}
 """
 
 

@@ -180,6 +180,13 @@ _SPECIFIC = _rx(
     r"|\b(first|last|second|third|primeir[oa]s?|ultim[oa]s?|segund[oa]s?|"
     r"primer[oa]?s?)\b"
 )
+# "fix the typo", "corrija o erro": ONE error the user has in mind — a point
+# edit even when the field name is in another language than the keys.
+_ONE_ERROR = _rx(
+    r"\b(the|this|that|o|a|este|esse|esta|essa|el|la|ese|esa)\s+"
+    r"(error|mistake|typo|misspelling|problem|issue|erro|falha|problema|"
+    r"fallo|errata)\b(?!s)"
+)
 _BULK_VERB = _rx(
     r"\b(set|change|update|replace|rename|remove|delete|add|increase|decrease|"
     r"convert|make|translate|defin(a|ir|e)|mud(e|ar|a)|alter(e|ar|a)|"
@@ -248,6 +255,8 @@ def _classify(text: str, stats: DocStats) -> Intent:
     if strong or weak or open_search:
         if _SPECIFIC.search(text):
             return Intent(POINT_EDIT, rule="point.specific_target")
+        if _ONE_ERROR.search(text) and not scope_all and not strong:
+            return Intent(POINT_EDIT, rule="point.one_error")
         if (
             not strong
             and not errors

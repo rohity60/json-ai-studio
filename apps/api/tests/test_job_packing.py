@@ -230,3 +230,41 @@ class TestPlan:
         assert jp.batch_seconds(d, 6_400, call_s=5) == pytest.approx(35)
         assert jp.batch_seconds(deployment(interval=15), 50_000, call_s=5) == 15
         assert jp.batch_seconds(deployment(), 50_000, call_s=5) == 5
+
+
+def test_text_edit_on_wrong_record_of_the_batch_is_retargeted():
+    """Live 2026-11-13 (Nemotron): fixes addressed to a neighbouring record
+    (entry 42's typo sent to /entries/22) were dropped."""
+    from src.json_ai_studio.services.job_service import _retarget_text_edits
+
+    doc = {
+        "entries": [
+            {"keys": ["a"], "content": "Plain text one."},
+            {"keys": ["b"], "content": "They beleive it. More words."},
+            {"keys": ["c"], "content": "Shared words. Shared words."},
+            {"keys": ["d"], "content": "Shared words again."},
+        ]
+    }
+    shown = ["/entries/0", "/entries/1", "/entries/2", "/entries/3"]
+    edit = {"operation": "replace_text", "replace": "x"}
+    out = _retarget_text_edits(
+        [
+            {**edit, "path": "/entries/0", "find": "They beleive it."},  # wrong record
+            {**edit, "path": "/entries/1", "find": "More words."},  # record → field
+            {**edit, "path": "/entries/0/content", "find": "Shared words"},  # 2 records
+            {**edit, "path": "/entries/0", "find": "not anywhere"},
+        ],
+        doc,
+        shown,
+    )
+    assert [d["path"] for d in out] == [
+        "/entries/1/content",
+        "/entries/1/content",
+        "/entries/0/content",  # ambiguous: left as is
+        "/entries/0",
+    ]
+    # outside the batch is never searched
+    only_first = _retarget_text_edits(
+        [{**edit, "path": "/entries/0", "find": "They beleive it."}], doc, shown[:1]
+    )
+    assert only_first[0]["path"] == "/entries/0"

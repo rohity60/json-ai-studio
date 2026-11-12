@@ -266,3 +266,29 @@ def test_long_field_repeated_in_a_collection_is_still_a_review():
         classify_intent("review the whole document for typos", CARD_STATS).kind
         == REVIEW
     )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Corrija o erro na descrição.",
+        "fix the typo in the scenario",
+        "arregla el error",
+    ],
+)
+def test_one_error_is_a_point_edit(message):
+    intent = classify_intent(message, CARD_STATS)
+    assert (intent.kind, intent.rule) == (POINT_EDIT, "point.one_error")
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "fix the typos in all entries",
+        "Procure por erros e qualquer censura",
+        "review the document and fix the errors",
+        "Corrija todos os erros em todas as entradas",
+    ],
+)
+def test_plural_or_scoped_errors_stay_review(message):
+    assert classify_intent(message, CARD_STATS).kind == REVIEW
