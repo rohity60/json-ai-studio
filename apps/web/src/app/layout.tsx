@@ -5,6 +5,7 @@ import GoogleTag from '@/components/GoogleTag';
 import ConversionTracker from '@/components/ConversionTracker';
 import PageViewTracker from '@/components/PageViewTracker';
 import { Suspense } from 'react';
+import AuthSWRConfig from '@/components/AuthSWRConfig';
 
 const SITE_URL = 'https://jsonaistudio.com';
 const REPO_URL = 'https://github.com/rohity60/json-ai-studio';
@@ -104,7 +105,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Suspense fallback={null}>
             <PageViewTracker />
           </Suspense>
-          {children}
+          <AuthSWRConfig>{children}</AuthSWRConfig>
         </body>
       </html>
     );
