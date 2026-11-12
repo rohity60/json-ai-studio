@@ -229,3 +229,40 @@ def test_the_document_with_a_review_verb_or_errors_is_a_review(message):
 def test_text_keys_are_fields_with_long_strings():
     assert "description" in LOREBOOK_STATS.text_keys
     assert "timeout" not in CONFIG_STATS.text_keys
+
+
+CARD = {
+    "data": {
+        "name": "Archivist",
+        "description": "long text " * 200,
+        "character_book": {
+            "entries": [{"id": i, "content": "lore text " * 40} for i in range(30)]
+        },
+    }
+}
+CARD_STATS = doc_stats(CARD)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Fix the spelling mistakes in the character description.",
+        "find typos in the description",
+        "corrija os erros de ortografia na description",
+    ],
+)
+def test_one_named_long_field_is_a_point_edit(message):
+    """Live 2026-11-13: an errors word + one named long field became a
+    whole-document job over the lorebook entries."""
+    intent = classify_intent(message, CARD_STATS)
+    assert (intent.kind, intent.rule) == (POINT_EDIT, "point.named_text_field")
+
+
+def test_long_field_repeated_in_a_collection_is_still_a_review():
+    assert "content" not in CARD_STATS.single_text_keys
+    assert "description" in CARD_STATS.single_text_keys
+    assert classify_intent("fix the typos in every content", CARD_STATS).kind == REVIEW
+    assert (
+        classify_intent("review the whole document for typos", CARD_STATS).kind
+        == REVIEW
+    )

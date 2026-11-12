@@ -181,3 +181,26 @@ def test_explicit_range_reads_only_that_range():
         f"/entries/{i}" for i in range(40, 51)
     ]
     assert "remaining" not in out
+
+
+def test_search_inside_one_long_string_finds_the_text():
+    text = "word " * 1200 + "They teh it. " + "word " * 300
+    box = JsonToolbox({"data": {"description": text}}, 4000)
+    out = _call(box, "search", query="teh", path_prefix="/data/description")
+    assert out["total"] == 1
+    hit = out["matches"][0]
+    assert hit["path"] == "/data/description"
+    assert "They teh it." in hit["value"]  # snippet around the match
+    assert hit["value"].startswith("…")
+
+
+def test_search_in_an_index_range():
+    box = JsonToolbox(_doc(60, 50), 4000)
+    box.doc["entries"][45]["content"] += " untill"
+    box.doc["entries"][51]["content"] += " untill"
+    out = _call(box, "search", query="untill", path_prefix="/entries/40..50")
+    assert [m["path"] for m in out["matches"]] == ["/entries/45/content"]
+    assert (
+        "only 60 items"
+        in _call(box, "search", query="x", path_prefix="/entries/70..80")["error"]
+    )
