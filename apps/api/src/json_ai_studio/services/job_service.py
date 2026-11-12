@@ -309,7 +309,8 @@ def _estimate_rest(job: dict[str, Any], total: int) -> None:
     else:  # still inside the first (split) record
         left = max(1, (job.get("batch_count") or done + 1) - done)
     job["batch_count"] = done + left
-    job["eta_s"] = int(math.ceil(left * job["elapsed_s"] / max(1, done)))
+    per_batch = max(job["elapsed_s"], job.get("pace_s", 0.0)) / max(1, done)
+    job["eta_s"] = int(math.ceil(left * per_batch))
 
 
 async def run_batch(
@@ -354,7 +355,16 @@ async def run_batch(
             settings.job_max_records_per_batch,
         )
         messages = job_packing.lean_messages(job["instruction"], batch.items)
-        holder.update(batch=batch, units=units)
+        holder.update(
+            batch=batch,
+            units=units,
+            # Sustained time per batch at this deployment's pace (budget
+            # window share, pacing): the ETA floor, since the first batch
+            # usually runs without waiting.
+            pace_s=job_packing.batch_seconds(
+                deployment, batch.tokens + overhead, settings.job_est_call_s
+            ),
+        )
         logger.info(
             "job batch packed session=%s job=%s batch=%d items=%d units=%d-%d "
             "tokens=%d room=%d overhead=%d deployment=%s",
@@ -512,6 +522,7 @@ async def run_batch(
         job["error"] = None
         job["total"] = len(units)
         job["elapsed_s"] += time.monotonic() - started
+        job["pace_s"] = job.get("pace_s", 0.0) + holder.get("pace_s", 0.0)
         finished = job["cursor"] >= len(units)
         job["status"] = "done" if finished else "ready"
         if finished:
