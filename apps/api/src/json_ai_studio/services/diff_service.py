@@ -20,7 +20,7 @@ import logging
 from typing import Any
 
 from ..db.session_store import store
-from ..diff_utils import DiffUtils
+from ..diff_utils import DiffApplyError, DiffUtils
 from . import chat_history_service as history
 from .errors import ConflictError, NotFoundError
 from .session_service import get_session, now_iso
@@ -46,8 +46,58 @@ def _status_lists(session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def accept_all(session_id: str) -> dict[str, Any]:
+def _batch_diffs(
+    session: dict[str, Any], job_id: str, batch_no: int | None
+) -> list[dict[str, Any]]:
+    """Pending diffs of one review job (optionally one batch), in the
+    order they were applied (ADR-0026)."""
+    return [
+        d
+        for d in history.pending_diffs(session)
+        if d.get("job_id") == job_id
+        and (batch_no is None or d.get("batch_no") == batch_no)
+    ]
+
+
+async def accept_all(
+    session_id: str, job_id: str | None = None, batch_no: int | None = None
+) -> dict[str, Any]:
     session = await get_session(session_id)
+
+    if job_id is not None:
+        # Only this job's / batch's diffs: promote each into the baseline;
+        # other pending diffs stay previewed in working_json.
+        baseline = session.get("baseline_json", {})
+        changed = 0
+        for diff in _batch_diffs(session, job_id, batch_no):
+            try:
+                baseline = DiffUtils.apply(diff, baseline)
+            except DiffApplyError as exc:
+                logger.info(
+                    "accept_all batch skip session_id=%s diff_id=%s reason=%s",
+                    session_id,
+                    diff.get("id"),
+                    exc,
+                )
+                continue
+            diff["status"] = "accepted"
+            changed += 1
+        session["baseline_json"] = baseline
+        session["updated_at"] = now_iso()
+        await store.save_session(session)
+        logger.info(
+            "accept_all session_id=%s job=%s batch=%s accepted=%d",
+            session_id,
+            job_id,
+            batch_no,
+            changed,
+        )
+        return {
+            "working_json": session["working_json"],
+            "baseline_json": baseline,
+            "diffs": [],
+            **_status_lists(session),
+        }
 
     session["baseline_json"] = copy.deepcopy(session["working_json"])
     changed = history.mark_all_pending(session, "accepted")
@@ -63,8 +113,44 @@ async def accept_all(session_id: str) -> dict[str, Any]:
     }
 
 
-async def reject_all(session_id: str) -> dict[str, Any]:
+async def reject_all(
+    session_id: str, job_id: str | None = None, batch_no: int | None = None
+) -> dict[str, Any]:
     session = await get_session(session_id)
+
+    if job_id is not None:
+        # Revert only this job's / batch's diffs, newest first.
+        working = session.get("working_json", {})
+        changed = 0
+        for diff in reversed(_batch_diffs(session, job_id, batch_no)):
+            try:
+                working = DiffUtils.revert(diff, working)
+            except DiffApplyError as exc:
+                logger.info(
+                    "reject_all batch skip session_id=%s diff_id=%s reason=%s",
+                    session_id,
+                    diff.get("id"),
+                    exc,
+                )
+                continue
+            diff["status"] = "rejected"
+            changed += 1
+        session["working_json"] = working
+        session["updated_at"] = now_iso()
+        await store.save_session(session)
+        logger.info(
+            "reject_all session_id=%s job=%s batch=%s rejected=%d",
+            session_id,
+            job_id,
+            batch_no,
+            changed,
+        )
+        return {
+            "working_json": working,
+            "baseline_json": session.get("baseline_json", {}),
+            "diffs": [],
+            **_status_lists(session),
+        }
 
     session["working_json"] = copy.deepcopy(session.get("baseline_json", {}))
     changed = history.mark_all_pending(session, "rejected")

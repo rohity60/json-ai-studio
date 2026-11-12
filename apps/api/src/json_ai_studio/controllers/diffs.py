@@ -19,13 +19,15 @@ router = APIRouter(prefix="/api", tags=["sessions"])
 @router.post("/sessions/{session_id}/diffs/accept-all")
 async def endpoint_accept_all_diffs(
     session_id: str,
+    job_id: str | None = None,
+    batch_no: int | None = None,
     _auth=Depends(require_api_key),
 ):
     logger.info(
         "POST /api/sessions/%s/diffs/accept-all principal=%s", session_id, _auth.kind
     )
     try:
-        return await diff_service.accept_all(session_id)
+        return await diff_service.accept_all(session_id, job_id, batch_no)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -33,13 +35,15 @@ async def endpoint_accept_all_diffs(
 @router.post("/sessions/{session_id}/diffs/reject-all")
 async def endpoint_reject_all_diffs(
     session_id: str,
+    job_id: str | None = None,
+    batch_no: int | None = None,
     _auth=Depends(require_api_key),
 ):
     logger.info(
         "POST /api/sessions/%s/diffs/reject-all principal=%s", session_id, _auth.kind
     )
     try:
-        return await diff_service.reject_all(session_id)
+        return await diff_service.reject_all(session_id, job_id, batch_no)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 

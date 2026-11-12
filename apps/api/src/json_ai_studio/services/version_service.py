@@ -12,7 +12,7 @@ from ..models import RestoreVersionsRequest, VersionSnapshot
 from . import chat_history_service as history
 from .errors import ConflictError, NotFoundError
 from ..settings import get_settings
-from .session_service import get_session, now_iso
+from .session_service import cancel_active_job, get_session, now_iso
 
 logger = logging.getLogger("json_ai_studio.version_service")
 
@@ -83,6 +83,7 @@ async def select_version(session_id: str, version_id: str) -> dict[str, Any]:
     session["working_json"] = copy.deepcopy(json_data)
     session["baseline_json"] = copy.deepcopy(json_data)
     session["active_version_id"] = version_id
+    cancel_active_job(session)
     label = target.label if hasattr(target, "label") else target.get("label", "")
     if session.get("conversation_history"):
         history.mark_all_pending(session, "rejected")

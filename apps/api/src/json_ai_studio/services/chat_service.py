@@ -482,6 +482,7 @@ async def chat_event_stream(
             return
 
         history = chat_history_service.build_history_messages(session)
+        doc_at_start = session.get("working_json")
 
         # Whole-document review that cannot fit one turn: say what it costs
         # as a batch job instead of starting a lookup loop. No model call.
@@ -541,6 +542,31 @@ async def chat_event_stream(
             # Persist before the client sees "complete" so an immediate
             # accept/reject finds the diff ids in history.
             merged_json = payload.get("working_json")
+            if (
+                merged_json is not None
+                and session.get("working_json") is not doc_at_start
+            ):
+                # A review batch (ADR-0026) changed the document while this
+                # turn ran: put this turn's changes on top of the current
+                # document instead of overwriting it with a stale copy.
+                merged_json, _, stale = DiffUtils.apply_all_verbose(
+                    [
+                        {
+                            k: d[k]
+                            for k in ("path", "operation", "old_value", "new_value")
+                        }
+                        for d in outcome.get("applied", [])
+                    ],
+                    session["working_json"],
+                )
+                stale_paths = {d["path"] for d, _ in stale}
+                for d in outcome.get("applied", []):
+                    if d["path"] in stale_paths:
+                        d.update(
+                            status="failed",
+                            failure_reason="the document changed while the AI worked",
+                        )
+                payload["working_json"] = merged_json
             if merged_json is not None:
                 session["working_json"] = merged_json
             if outcome.get("store"):

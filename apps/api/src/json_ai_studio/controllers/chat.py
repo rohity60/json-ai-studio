@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import StreamingResponse
 
 from ..auth import Principal, get_principal
-from ..services import chat_service, session_service
+from ..services import chat_service, job_service, session_service
+from ..services.intent import QUESTION, classify_intent
 from ..services.errors import NotFoundError
 
 logger = logging.getLogger("json_ai_studio.controllers.chat")
@@ -41,6 +42,20 @@ async def endpoint_chat(
         session = await session_service.get_session(session_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+    # A review batch is in flight (ADR-0026): its diffs are about to land on
+    # the document, so other edits wait; questions are still answered.
+    if (
+        job_service.running_job(session) is not None
+        and classify_intent(message).kind != QUESTION
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "job_running",
+                "hint": "Pause the review to make other edits.",
+            },
+        )
 
     try:
         working_json = (
