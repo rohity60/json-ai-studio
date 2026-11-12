@@ -147,3 +147,85 @@ def test_every_result_names_its_rule():
 def test_might_be_review_prefilter():
     assert rules.might_be_review("look for errors")
     assert not rules.might_be_review("set timeout to 30")
+
+
+# ---------------------------------------------------------------------------
+# False positives found before the first deploy (2026-11-13): on a large
+# document each of these got a job proposal instead of an answer.
+# ---------------------------------------------------------------------------
+
+CONFIG = {
+    "entries": [
+        {"id": i, "content": "x", "enabled": True, "timeout": 30} for i in range(5)
+    ],
+    "settings": {"timeout": 30},
+}
+CONFIG_STATS = doc_stats(CONFIG)
+LOREBOOK = {
+    "entries": [
+        {"uid": i, "description": "long text " * 40, "content": "word " * 60}
+        for i in range(5)
+    ]
+}
+LOREBOOK_STATS = doc_stats(LOREBOOK)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "check all entries have an id",
+        "check if all timeouts are below 60",
+        "verify all ids are unique",
+        "verifique se todas as entradas têm id",
+        "comprueba que todos los ids son únicos",
+    ],
+)
+def test_check_with_a_condition_is_a_question(message):
+    intent = classify_intent(message, CONFIG_STATS)
+    assert (intent.kind, intent.rule) == (QUESTION, "question.condition_check")
+
+
+def test_check_for_errors_is_still_a_review():
+    assert classify_intent("check every entry for typos", CONFIG_STATS).kind == REVIEW
+    assert (
+        classify_intent("check all entries are spelled correctly", CONFIG_STATS).kind
+        == REVIEW
+    )
+
+
+def test_short_field_on_many_elements_is_a_bulk_edit():
+    intent = classify_intent("fix all timeouts", CONFIG_STATS)
+    assert (intent.kind, intent.rule) == (BULK_EDIT, "bulk.named_field")
+    # "make sure ... has" = add where missing: an edit, not a question.
+    assert (
+        classify_intent("make sure every entry has a timeout", CONFIG_STATS).kind
+        == BULK_EDIT
+    )
+
+
+def test_long_text_field_on_many_elements_is_a_review():
+    intent = classify_intent("improve all descriptions", LOREBOOK_STATS)
+    assert intent.kind == REVIEW
+
+
+@pytest.mark.parametrize("message", ["fix the json", "clean the file", "fix this json"])
+def test_the_document_alone_is_not_a_whole_document_scope(message):
+    assert classify_intent(message, CONFIG_STATS).kind == POINT_EDIT
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "review the json",
+        "fix the spelling in the document",
+        "proofread this file",
+        "revisa todo el documento",
+    ],
+)
+def test_the_document_with_a_review_verb_or_errors_is_a_review(message):
+    assert classify_intent(message, CONFIG_STATS).kind == REVIEW
+
+
+def test_text_keys_are_fields_with_long_strings():
+    assert "description" in LOREBOOK_STATS.text_keys
+    assert "timeout" not in CONFIG_STATS.text_keys

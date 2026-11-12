@@ -171,7 +171,7 @@ A <diff> is one of:
 {"path": "<JSON Pointer>", "operation": "delete", "old_value": <current value>, "new_value": null}
 
 RULES:
-1. Each record is one line: {"path": "<its JSON Pointer>", "value": <the record>}. A diff path is the record's path plus the keys inside it, joined by "/" (escape "/" in a key as "~1", "~" as "~0"). Only change what is shown in this batch.
+1. Each record is one line: {"path": "<its JSON Pointer>", "value": <the record>}. A diff path is the record's path PLUS the keys down to the changed value, joined by "/" (escape "/" in a key as "~1", "~" as "~0"). Example: to fix a word in the "content" field of the record {"path": "/entries/7", "value": {"content": "..."}}, use "path": "/entries/7/content" — never just "/entries/7". Only change what is shown in this batch.
 2. To change words INSIDE an existing string use "replace_text": "find" is copied EXACTLY from the text, covers WHOLE words and occurs exactly ONCE in that string (add surrounding words if it repeats; "all": true changes every occurrence). Several fixes in one string = several replace_text diffs on the same path.
 3. Use "modify" with a full new value only for short values, or to fill a field that is missing or empty. Never rewrite a long string in full.
 4. A line with "text_page" shows only PART of a long string (characters "offset".. of "length"). Use only replace_text on its path, only on text you see; a page that starts or ends mid-sentence is not an error.

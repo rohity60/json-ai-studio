@@ -16,6 +16,16 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def cancel_active_job(session: dict[str, Any]) -> None:
+    """The document was replaced (upload, version switch): a review job's
+    cursor no longer means anything (ADR-0026)."""
+    for job in (session.get("jobs") or {}).values():
+        if job.get("status") in ("ready", "running", "failed"):
+            job["status"] = "cancelled"
+            job["updated_at"] = now_iso()
+    session["active_job_id"] = None
+
+
 async def create_session(name: str | None = None) -> dict[str, Any]:
     session = await store.create_session(name=name)
     logger.info("session created id=%s name=%r", session["id"], name)
@@ -82,6 +92,7 @@ async def upload_json(data: Any, session_id: str | None) -> dict[str, Any]:
     session["baseline_json"] = data if isinstance(data, dict) else {}
     # New document → old turns' paths and diff ids no longer apply.
     session["conversation_history"] = []
+    cancel_active_job(session)
     session["updated_at"] = now_iso()
     await store.save_session(session)
     logger.info(
