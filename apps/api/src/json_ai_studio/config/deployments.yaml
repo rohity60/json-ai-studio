@@ -53,8 +53,12 @@
 # stay counted (Google counts them).
 
 deployments:
+  # Disabled 2026-11-12: nvidia_nim (Nemotron) is the default now — better
+  # answers on large docs, no 16k tokens/min cap, none of the free tier's
+  # bursts of fast 500s (see policy below).
+  # Re-enable as the fallback once gateway failover exists.
   google_ai_studio:
-    enabled: true
+    enabled: false
     base_model: "gemma-4-26b-a4b-it"
     reasoning: "minimal"
     supports_thinking: true
@@ -83,15 +87,51 @@ deployments:
     models:
         - "gemma-4-26b-a4b-it"
 
+  # Default deployment since 2026-11-12 (Nemotron 3.5 Super). Needs
+  # NVIDIA_NIM_API_KEY in the environment — a missing key disables it, and
+  # with google_ai_studio off that leaves NO deployment for chat.
   nvidia_nim:
-    enabled: false
-    base_model: "google/gemma-4-31b-it"
+    enabled: true
+    base_model: "nvidia/nemotron-3.5-super-vl-120b-a12b"
     reasoning: "none"
     supports_thinking: true
-    # Tool calls unverified: live probe 2026-10-24 got no response (3 × 90 s
-    # timeouts). Re-probe before enabling tools.
-    supports_tools: false
+    # Nemotron tool calls verified 2026-11-12: streamed + non-streamed, with
+    # thinking on and off (search tool, <1 s per call).
+    supports_tools: true
+    # Streamed tool rounds verified with Nemotron (unlike Google, above).
+    tool_streaming: true
+    # tpm_input_limit: omitted on purpose — none found. NIM documents no
+    # input-token cap, and an escalating probe (2026-11-12, unique prompts,
+    # no prefix caching) reached 14.4M input tokens/min (16 concurrent
+    # 300k-token calls, 100 calls, 0 errors, no rate-limit headers). Latency
+    # is the real cost: ~5 s at 75k tokens, ~22 s at 300k, flat under
+    # concurrency. policy.budget_headroom / window_margin_s only apply with a
+    # limit, so they are not set either. Pacing below is by call count.
+    # LiteLLM has no model-info entry for Nemotron. The model card lists a
+    # 262K context; NIM's endpoint accepts up to 1M ("maximum context length
+    # is 1000000 tokens", a 300k-token prompt answered in 24 s, 2026-11-12),
+    # but quality past the card's figure is unvalidated, so plan to 262K.
+    # Inline vs skeleton is decided by LLM_MAX_INLINE_CHARS (~49k tokens),
+    # not by this; it caps the skeleton's first call (else input_too_large).
+    context_tokens: 262144
+    # Free trial key: NVIDIA publishes no fixed number (varies by model and
+    # load; see your build.nvidia.com account); 40 RPM is the widely
+    # reported cap. Not enforced in a probe (180 calls in ~1 min, all 200,
+    # no rate-limit headers), so pace to the documented 40/min anyway.
+    min_call_interval_s: 1.5
+    policy:
+      # NIM 5xx / 429 behaviour not yet observed (0 errors in ~200 probe
+      # calls); moderate values, tune from prod logs like Google's.
+      # A fast 5xx (< 3 s) is a hiccup: retry twice per call, 4 per turn.
+      transient_fast_s: 3
+      transient_retry_attempts: 2
+      transient_retry_turn_max: 4
+      transient_retry_schedule_s: [3, 10]
+      # 429: retry once only when NIM sends a Retry-After of <= 10 s.
+      rate_limit_retry_attempts: 1
+      rate_limit_retry_max_wait_s: 10
     models:
+        - "nvidia/nemotron-3.5-super-vl-120b-a12b"
         - "google/gemma-4-31b-it"
 
   # Disabled 2026-10-18: the shared free pool for this model 429s on most
