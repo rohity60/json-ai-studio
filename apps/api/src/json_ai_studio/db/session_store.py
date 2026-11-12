@@ -92,9 +92,47 @@ class InMemorySessionStore(SessionStore):
         return existed
 
 
-store: SessionStore = InMemorySessionStore()
+class _ActiveStore(SessionStore):
+    """What services import as ``store``: forwards to the active backend.
+
+    Services bind the name at import time, so the backend is swapped behind
+    this object (``set_store``) rather than by rebinding the name.
+    """
+
+    def __init__(self, backend: SessionStore) -> None:
+        self._backend = backend
+
+    async def create_session(self, *, name: str | None = None) -> dict[str, Any]:
+        return await self._backend.create_session(name=name)
+
+    async def get_session(self, session_id: str) -> dict[str, Any] | None:
+        return await self._backend.get_session(session_id)
+
+    async def save_session(self, session: dict[str, Any]) -> None:
+        await self._backend.save_session(session)
+
+    async def list_sessions(self) -> list[str]:
+        return await self._backend.list_sessions()
+
+    async def delete_session(self, session_id: str) -> bool:
+        return await self._backend.delete_session(session_id)
+
+
+store: SessionStore = _ActiveStore(InMemorySessionStore())
 
 
 def get_store() -> SessionStore:
-    """Return the active store. Swap point for a future DB implementation."""
-    return store
+    """Return the active backend."""
+    return store._backend  # type: ignore[attr-defined]
+
+
+def set_store(backend: SessionStore) -> SessionStore:
+    """Swap the backend every service uses; returns the previous one.
+
+    The web API keeps the in-memory default. The Anna Executa installs a
+    store backed by Anna's per-user storage (ADR-0026).
+    """
+    previous = get_store()
+    store._backend = backend  # type: ignore[attr-defined]
+    logger.info("session store backend=%s", type(backend).__name__)
+    return previous

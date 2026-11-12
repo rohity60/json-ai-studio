@@ -25,3 +25,10 @@ apps/api/logs/
 .env
 .env.*
 !.env.example
+
+# Anna App: CLI dev state + local copy of Anna's LLM docs corpus (third-party, not redistributed)
+.anna/
+.anna-docs/
+*.egg-info/
+# Anna App bundle is build output of apps/anna/ui (npm run build)
+apps/anna/bundle/

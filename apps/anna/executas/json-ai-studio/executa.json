@@ -1,0 +1,9 @@
+{
+  "slug": "json-ai-studio",
+  "name": "json-ai-studio",
+  "version": "0.1.0",
+  "executa_type": "tool",
+  "description": "JSON AI Studio engine: chat edits as reviewable diffs, versions, explain.",
+  "tool_id": "tool-dev-json-ai-studio",
+  "type": "python"
+}

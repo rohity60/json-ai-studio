@@ -4,6 +4,7 @@ PROVIDER_CLASSES maps deployments.yaml entry names to provider classes.
 Adding a backend = new subclass file + one entry here + a yaml entry.
 """
 
+from .anna import AnnaProvider
 from .base import DeploymentProvider
 from .google_ai_studio import GoogleAIStudioProvider
 from .nvidia_nim import NvidiaNimProvider
@@ -17,10 +18,12 @@ PROVIDER_CLASSES: dict[str, type[DeploymentProvider]] = {
         NvidiaNimProvider,
         OpenRouterProvider,
         OllamaProvider,
+        AnnaProvider,
     )
 }
 
 __all__ = [
+    "AnnaProvider",
     "DeploymentProvider",
     "GoogleAIStudioProvider",
     "NvidiaNimProvider",

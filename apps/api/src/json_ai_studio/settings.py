@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # Ollama's own default is small and silently truncates long prompts.
     ollama_num_ctx: int = 32_768
 
+    # Anna App runtime (ADR-0026). True only inside the Anna Executa, where
+    # the `anna` deployment serves every call through the Anna host. The web
+    # API leaves it false, so that deployment stays disabled (env:
+    # ANNA_ENABLED).
+    anna_enabled: bool = False
+
     # Max output tokens per LLM call (env: LLM_MAX_TOKENS). Generic across
     # providers (litellm normalizes the param). Prevents silent truncation
     # of large diff payloads — a truncated JSON diff is unparseable and used

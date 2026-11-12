@@ -1,0 +1,6 @@
+{
+  "name": "JSON AI Studio",
+  "tagline": "Edit JSON configs by chatting. Review every change as a diff.",
+  "description": "Upload or paste a JSON config, describe the change in plain language, and review each proposed edit as a diff you accept or reject. Save versions as you go and get a plain-language explanation of any document. Your documents are stored in your own Anna storage.",
+  "category": "productivity"
+}

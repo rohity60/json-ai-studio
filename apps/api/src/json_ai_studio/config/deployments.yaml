@@ -122,3 +122,28 @@ deployments:
     models:
         - "qwen3.6:35b-mlx"
         - "gemma4:12b"
+
+  # Anna App runtime only (ADR-0026): served through the Anna host by the
+  # Executa's litellm custom provider. Stays disabled unless ANNA_ENABLED is
+  # true, whatever `enabled` says here.
+  anna:
+    enabled: true
+    # The Anna user's own default model; the host picks it.
+    base_model: "default"
+    reasoning: "none"
+    supports_thinking: true
+    # Anna caps one tool invoke at 8 LLM calls and 32k tokens in total, so
+    # a multi-round lookup loop cannot fit: no tools. Large documents use
+    # the skeleton prompt or the too-large -> focus_path flow instead.
+    supports_tools: false
+    # Budget for the single call of a turn: 24k input x 0.8 headroom,
+    # leaving room for the 8,192-token output cap inside the 32k total.
+    # The Executa resets the per-minute window at the start of each turn
+    # (the cap is per invoke, not per minute).
+    tpm_input_limit: 24000
+    context_tokens: 32000
+    policy:
+      # Host errors are quota or platform faults: do not retry.
+      transient_retry_attempts: 0
+    models:
+        - "default"

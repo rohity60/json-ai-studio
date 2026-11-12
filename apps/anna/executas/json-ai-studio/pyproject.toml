@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tool-dev-json-ai-studio"
+version = "0.1.0"
+description = "Executa for the JSON AI Studio Anna App"
+requires-python = ">=3.12"
+dependencies = [
+    "json-ai-studio-api",
+]
+
+[project.scripts]
+"tool-dev-json-ai-studio" = "json_ai_studio_plugin:main"
+
+[tool.setuptools]
+py-modules = ["json_ai_studio_plugin"]
+packages = ["jstudio"]
+
+[tool.uv.sources]
+# The shared core (gateway, planner, diff engine) lives in the API package.
+json-ai-studio-api = { path = "../../../api", editable = true }
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

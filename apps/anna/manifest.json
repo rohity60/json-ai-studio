@@ -1,0 +1,44 @@
+{
+  "schema": 4,
+  "required_executas": [
+    {
+      "tool_id": "tool-dev-json-ai-studio"
+    }
+  ],
+  "tags": [
+    "json",
+    "config",
+    "developer-tools"
+  ],
+  "ui": {
+    "bundle": {
+      "format": "static-spa",
+      "entry": "index.html",
+      "external_origins": []
+    },
+    "views": [
+      {
+        "name": "main",
+        "title": "JSON AI Studio",
+        "default": true,
+        "default_size": {
+          "w": 1280,
+          "h": 800
+        },
+        "min_size": {
+          "w": 900,
+          "h": 600
+        }
+      }
+    ],
+    "csp_overrides": {},
+    "state_merge": "last_writer_wins"
+  },
+  "dev": {
+    "fixtures": [
+      "fixtures/*.jsonl"
+    ],
+    "seed_storage": {},
+    "user_id": 1
+  }
+}
