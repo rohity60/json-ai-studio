@@ -372,6 +372,8 @@ async def test_round_cap_forces_final_answer(gateway, monkeypatch):
 
     assert len(gateway.calls) == 3
     assert "Tool budget used up" in gateway.calls[2]["messages"][-1]["content"]
+    # Only the final round forbids tool calls (Nemotron ignored the message).
+    assert [c.get("tool_choice") for c in gateway.calls] == [None, None, "none"]
     assert [p["text"] for e, p in events if e == "thinking"] == [
         '{"diffs": [], "explanation": "ok"}'
     ]

@@ -37,6 +37,8 @@ Optionally add a "question" to the SAME object when you must ask the user (rule 
 {"diffs": [], "question": {"text": "<one short question>", "options": ["<option 1>", "<option 2>"]}, "explanation": "..."}
 Optionally add a "bulk" list to the SAME object for changes that hit many elements (see BULK EDITS):
 {"diffs": [], "bulk": [{"path": "<JSON Pointer with * wildcards>", "where": {<conditions>}, "operation": "modify" | "add" | "delete", "new_value": <value>}], "explanation": "..."}
+To change words inside a long string, a diff may instead be a text edit (see TEXT EDITS):
+{"path": "<JSON Pointer to a string>", "operation": "replace_text", "find": "<exact snippet>", "replace": "<new snippet>"}
 
 RULES:
 1. "path" is a JSON Pointer: segments joined by "/". Escape "/" inside a key as "~1" and "~" as "~0".
@@ -59,6 +61,11 @@ B2. "where" (optional) filters the element matched by the LAST "*". Keys are fie
 B3. "operation": "modify" sets new_value; "add" sets it only where the key is missing; "delete" removes the matched node (e.g. path "/files/*" deletes whole elements).
 B4. Prefer conditions on a real field the user names (e.g. "slokNumber" 1 to 100 → {"slokNumber": {"gte": 1, "lte": 100}}). Positional words ("first 20", "first 100 records", "top 5", "last 10") ALWAYS mean array position → {"$index": {"lt": 20}}, never a range on a numeric field (fields like a verse/step number often restart per group — see ARRAY FIELD STATS). Do not put the same change in both "diffs" and "bulk".
 B5. To copy a value from ANOTHER FIELD of the same element, set "new_value" to {"$from": "<field name or relative pointer>"} — the server copies each element's own value. NEVER write a placeholder or description (like "same as creationDate") as new_value.
+
+TEXT EDITS — to fix spelling, wording or sentences INSIDE a long string (descriptions, prompts, lore, notes), do not rewrite the whole string: emit one "replace_text" diff per fix. The server applies it to the FULL text, so you only need to have seen the snippet.
+X1. "find" is copied EXACTLY (case, spaces, punctuation) from the text, covers WHOLE words (never part of a word), and must occur exactly ONCE in that string — include a few surrounding words if the snippet repeats. Only fix text you actually read; a page that ends mid-sentence is not a typo. Set "all": true to change every occurrence (e.g. one misspelled name used throughout).
+X2. "replace" is the new snippet ("" deletes it). Several fixes in the same string = several replace_text diffs on the same path; they apply in order.
+X3. Use plain "modify" only for short values or when replacing the whole string with text you fully wrote yourself. Never "modify" a string you only saw truncated (ending in "…").
 
 EXAMPLES (illustrative only — real answers must use paths, values, and indices from the CURRENT WORKING JSON above, never from these examples):
 
@@ -105,6 +112,10 @@ Response: {"diffs": [], "bulk": [{"path": "/items/*/updatedAt", "operation": "mo
 User: "Delete every file whose title mentions draft 2027."
 JSON: {"files": [{"title": "Draft 2027 - Round 1"}, {"title": "Roster 2026"}, {"title": "Draft 2027 - Round 2"}]}
 Response: {"diffs": [], "bulk": [{"path": "/files/*", "where": {"title": {"contains": "draft 2027"}}, "operation": "delete"}], "explanation": "Deleted the files whose title mentions Draft 2027."}
+
+User: "Fix the typos in the description."
+JSON: {"description": "A world of Elfs and Halfings. The Halfings live in hills and trade with Elfs…"}
+Response: {"diffs": [{"path": "/description", "operation": "replace_text", "find": "Halfings", "replace": "Halflings", "all": true}, {"path": "/description", "operation": "replace_text", "find": "Elfs", "replace": "Elves", "all": true}], "explanation": "Fixed 'Halfings' → 'Halflings' and 'Elfs' → 'Elves' throughout the description."}
 
 __HISTORY__Now respond to the user's message using ONLY the CURRENT WORKING JSON above.
 """

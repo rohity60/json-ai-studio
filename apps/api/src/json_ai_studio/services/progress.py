@@ -15,10 +15,12 @@ import json
 import math
 from typing import Any
 
+from ..providers.policy import policy_of, transient_wait
 from . import deployment_budget as budget
 
 _TERM_MAX = 40  # chars of a user search term shown back
 _AVG_CALL_S = 4.0  # typical model call latency used for the ETA
+_GROWTH_THRESHOLD = 3  # first call > 1/3 of the budget → later steps 1/window
 
 
 def sse(event: str, data: dict[str, Any]) -> str:
@@ -58,6 +60,26 @@ def calls_per_min(deployment: Any, model: str, est_tokens: int) -> float | None:
     return min(limits) if limits else None
 
 
+def _rounds_outgrow_window(deployment: Any, model: str, est_tokens: int) -> bool:
+    """True when the first call already uses over a third of the usable
+    per-minute budget. Live (Google, 2026-11-12): rounds grew 5.7k → 8.5k
+    tokens against 12.8k usable, so from step 2 only one fit per minute."""
+    usable = budget.plan_budget(deployment)
+    if not usable or est_tokens <= 0:
+        return False
+    tokens = budget.calibrated(budget.budget_key(deployment, model), est_tokens)
+    return tokens * _GROWTH_THRESHOLD > usable
+
+
+def retry_allowance_s(deployment: Any) -> float:
+    """Extra time one call may take when the provider errors and the
+    deployment policy retries it: every scheduled cooldown plus the repeat
+    calls (B-28a, static; learned rates come with B-28)."""
+    pol = policy_of(deployment)
+    attempts = max(0, int(pol.transient_retry_attempts))
+    return sum(transient_wait(pol, n) + _AVG_CALL_S for n in range(1, attempts + 1))
+
+
 def plan_event(
     mode: str, steps: int, deployment: Any, model: str, est_tokens: int
 ) -> str:
@@ -65,9 +87,15 @@ def plan_event(
     cpm = calls_per_min(deployment, model, est_tokens)
     if cpm is not None and cpm > 0:
         per_step = max(60.0 / cpm, _AVG_CALL_S)
+        if steps > 1 and _rounds_outgrow_window(deployment, model, est_tokens):
+            # Every lookup step resends the earlier results, so later steps
+            # grow past half the per-minute budget: one step per window.
+            per_step = max(per_step, budget.window_span(deployment))
+            cpm = min(cpm, 60.0 / per_step)
         eta_s = (steps - 1) * per_step + _AVG_CALL_S
     else:
         eta_s = steps * _AVG_CALL_S
+    retry_s = retry_allowance_s(deployment)
     if mode == "inline" or steps <= 1:
         message = "Sending your request to the AI model…"
     else:
@@ -77,8 +105,14 @@ def plan_event(
             message += (
                 f". This AI model allows about {per_min} step"
                 f"{'s' if per_min != 1 else ''} per minute, so this may take "
-                f"up to ~{_duration(eta_s)}."
+                f"up to ~{_duration(eta_s)}"
             )
+            if retry_s:
+                message += (
+                    f" (up to ~{_duration(eta_s + retry_s)} if the AI provider "
+                    "has temporary errors — it retries automatically)"
+                )
+            message += "."
         else:
             message += "."
     return sse(
@@ -89,6 +123,7 @@ def plan_event(
             "steps": steps,
             "calls_per_min": round(cpm, 2) if cpm is not None else None,
             "eta_s": int(round(eta_s)),
+            "eta_max_s": int(round(eta_s + retry_s)),
             "message": message,
         },
     )
@@ -176,6 +211,13 @@ def describe_tool_call(
     if name == "read":
         path = str(args.get("path") or "") or "the document"
         size = _value_size(doc, path)
+        if "text" in result and "length" in result:  # one page of a long string
+            start = int(result.get("offset") or 0)
+            end = start + len(str(result.get("text") or ""))
+            return (
+                f"Read {path} (characters {start + 1:,}–{end:,} "
+                f"of {int(result['length']):,})"
+            )
         if "value_truncated" in result:
             shown = len(str(result.get("value_truncated") or ""))
             total = f" of {size:,}" if size else ""

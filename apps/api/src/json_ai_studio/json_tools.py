@@ -98,11 +98,12 @@ class JsonToolbox:
 TOOLS — this document is too large to show in full. Scan the SKELETON above for keys, then use your read-only tools:
 - search(query, scope?, path_prefix?, context_levels?, limit?): find scalar VALUES (scope "values", default) or KEY names (scope "keys") containing the text, case-insensitive. Returns JSON Pointer paths in document order, each value, and with context_levels=1..3 the enclosing object(s).
 - query(path, where?, limit?): elements matching FIELD CONDITIONS, same syntax as "bulk" — path with "*" wildcards, "where" filters the element matched by the LAST "*" (field names / relative pointers, "$value", "$index"; plain value = equality; operators eq, ne, in, nin, gt, gte, lt, lte, contains, exists). Use it to match SEVERAL fields at once (e.g. path "/records/*", where {"slokNumber": 23, "sectionId": "bhagavad_gita_ch_3"}) and to find what REFERS to something (e.g. path "/Exports/*/ScriptBytecode/*", where {"StackNode": -2}).
-- read(path): the exact value at a JSON Pointer ("" = root). No wildcards — use query for those.
+- read(path, offset?): the exact value at a JSON Pointer ("" = root). No wildcards — use query for those. A long STRING comes back in pages ("text", "length", "next_offset"): read again with offset=next_offset until you have seen the part you need (all of it, for a full proofread).
 T0. Tool calls come BEFORE your final answer and are not "output": the "EXACTLY ONE JSON object" rule applies only to your final reply. If answering needs any value, element or reference not visible in the SKELETON, your first response MUST be a tool call — do not describe a plan to search, actually call search/read.
 T0b. search = free text inside ONE value; query = conditions on fields of the same element. Never put "field: value" pairs into search.
 T1. Never guess a value you cannot see: search for it, read it, and use the exact path and old_value the tools return.
 T2. Follow references (an index or id that points elsewhere, e.g. into /Imports or /Exports) by reading the target, not by assuming.
+T2b. To change words or sentences inside a long string, use "replace_text" diffs (TEXT EDITS) with "find" copied exactly from the "text" you read — never rewrite the whole string from a partial read.
 T3. Several targets matching one rule → prefer a single "bulk" op once you know the field and filter.
 T4. Tools only read. When done, reply with the usual single JSON object. Analysis requests may end with no diffs and a longer "explanation" citing the paths you found."""
 
@@ -203,12 +204,49 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
         text = json.dumps(value, ensure_ascii=False, default=str)
         budget = self.result_max_chars - 200
         out: dict[str, Any] = {"path": path, "type": _type(value)}
+        if isinstance(value, str) and (
+            len(text) > budget or args.get("offset") not in (None, 0, "0")
+        ):
+            return self._read_text(path, value, args, budget - 300)
         if len(text) <= budget:
             out["value"] = value
         else:
             out["value_truncated"] = text[:budget] + ELLIPSIS
             out["hint"] = (
                 "too large to return whole: read a deeper path, or search within it (path_prefix)"
+            )
+        return out
+
+    @staticmethod
+    def _read_text(
+        path: str, value: str, args: dict[str, Any], budget: int
+    ) -> dict[str, Any]:
+        """One page of a long string: raw text from `offset`, sized so its
+        JSON-escaped form fits the result cap. Pages are exact substrings,
+        so any snippet in them can be used as a replace_text "find"."""
+        offset = _int(args.get("offset"), 0, 0, len(value))
+        chunk = value[offset : offset + budget]
+        while chunk and len(json.dumps(chunk, ensure_ascii=False)) > budget:
+            chunk = chunk[: int(len(chunk) * 0.85)]  # escapes (\n, \") grow
+        if offset + len(chunk) < len(value):
+            # End on whitespace: a page cut mid-word ("…scaled with In") reads
+            # as a typo, and the model "fixed" it (prod 2026-11-12).
+            cut = max(chunk.rfind(" "), chunk.rfind("\n"), chunk.rfind("\t"))
+            if cut > len(chunk) // 2:
+                chunk = chunk[: cut + 1]
+        end = offset + len(chunk)
+        out: dict[str, Any] = {
+            "path": path,
+            "type": "str",
+            "length": len(value),
+            "offset": offset,
+            "text": chunk,
+        }
+        if end < len(value):
+            out["next_offset"] = end
+            out["hint"] = (
+                f"string continues: read again with offset={end} for the next "
+                "part. To fix text inside it, use a replace_text diff."
             )
         return out
 
@@ -302,14 +340,18 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
                 "type": "function",
                 "function": {
                     "name": "read",
-                    "description": "Return the exact value at a JSON Pointer path (e.g. /records/22 or /Imports/4). Very large values are truncated.",
+                    "description": "Return the exact value at a JSON Pointer path (e.g. /records/22 or /Imports/4). Long strings come back in pages (text, length, next_offset); other very large values are truncated.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "path": {
                                 "type": "string",
                                 "description": 'JSON Pointer; "" is the whole document.',
-                            }
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "description": "Long strings only: character offset to read from (use next_offset from the previous page).",
+                            },
                         },
                         "required": ["path"],
                     },

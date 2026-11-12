@@ -630,9 +630,11 @@ paths:
         sizes, counts and shortened user search terms — never document values:
           - "plan" — once, before the first model call.
             data: {"mode":"skeleton","rounds_planned":4,"steps":5,
-                   "calls_per_min":2.1,"eta_s":116,"message":"Large document — ..."}
+                   "calls_per_min":2.1,"eta_s":116,"eta_max_s":228,
+                   "message":"Large document — ..."}
             mode "inline" = one call (steps 1). calls_per_min null when the
-            deployment has no limits.
+            deployment has no limits. eta_max_s = eta_s + the time one call
+            may spend on the deployment policy's transient retries.
           - "progress" — at each stage change.
             data: {"stage":"calling","step":2,"steps":5,
                    "message":"Step 2/5 — asking the AI model"}
@@ -705,7 +707,7 @@ paths:
                    "event: <type>\ndata: <json_body>\n\n"
               example: |
                 event: plan
-                data: {"mode":"skeleton","rounds_planned":4,"steps":5,"calls_per_min":null,"eta_s":20,"message":"Large document — the AI will look things up in up to 5 steps."}
+                data: {"mode":"skeleton","rounds_planned":4,"steps":5,"calls_per_min":null,"eta_s":20,"eta_max_s":27,"message":"Large document — the AI will look things up in up to 5 steps."}
 
                 event: progress
                 data: {"stage":"calling","step":1,"steps":5,"message":"Step 1/5 — asking the AI model"}
