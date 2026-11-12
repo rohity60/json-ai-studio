@@ -55,6 +55,7 @@ Links to relevant discussions, PRDs, prior ADRs.
 | [0024](0024-lookup-tools-for-large-json.md) | Lookup tools (search/query/read) + key-union skeleton for large JSON | Accepted | 2026-10-24 |
 | [0025](0025-deployment-token-budget-and-turn-planner.md) | Deployment token budget and turn planner (inline vs skeleton by budget) | Proposed | 2026-10-30 |
 | [0026](0026-review-intent-and-client-driven-batch-jobs.md) | Whole-document review: intent rules + client-driven batch jobs | Proposed | 2026-11-13 |
+| [0027](0027-session-ownership-and-access-hardening.md) | Session ownership: owner-only access, claim on login, admin key, masked emails | Proposed | 2026-11-13 |
 
 ## Adding a New ADR
 

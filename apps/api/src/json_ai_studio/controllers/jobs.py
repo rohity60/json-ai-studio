@@ -7,7 +7,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from ..auth import Principal, get_principal, require_api_key
+from .access import require_session_owner
+from ..auth import Principal
 from ..models import CreateJobRequest
 from ..services import job_service
 from ..services.errors import ConflictError, InvalidInputError, NotFoundError
@@ -26,7 +27,7 @@ _CONFLICT_HINTS = {
 async def endpoint_create_job(
     session_id: str,
     req: CreateJobRequest,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     logger.info(
         "POST /api/sessions/%s/jobs principal=%s scope=%s instruction_len=%d",
@@ -58,7 +59,7 @@ async def endpoint_create_job(
 async def endpoint_get_job(
     session_id: str,
     job_id: str,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     try:
         return await job_service.get_job(session_id, job_id)
@@ -70,7 +71,7 @@ async def endpoint_get_job(
 async def endpoint_cancel_job(
     session_id: str,
     job_id: str,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     logger.info(
         "DELETE /api/sessions/%s/jobs/%s principal=%s", session_id, job_id, _auth.kind
@@ -90,7 +91,7 @@ async def endpoint_cancel_job(
 async def endpoint_next_batch(
     session_id: str,
     job_id: str,
-    principal: Principal = Depends(get_principal),
+    principal: Principal = Depends(require_session_owner),
 ):
     """Process exactly one batch; stream SSE (same budget/quota as chat)."""
     logger.info(

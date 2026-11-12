@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # Shared anonymous quota pool key (formerly hardcoded "dev-default-key").
     general_api_key: str = "dev-default-key"
 
+    # Support access to any session via the X-Admin-Key header (ADR-0027).
+    # None (default) disables it. Every use is logged at WARNING.
+    admin_api_key: str | None = None
+
     # postgresql+asyncpg://user:pass@host:5432/dbname — None disables login.
     database_url: str | None = None
 
