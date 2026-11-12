@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     chat_tools_enabled: bool = True
     chat_tool_max_rounds: int = 4  # tool rounds before a forced final answer
     chat_tool_result_max_chars: int = 4_000  # per tool result
+    # Batch read (read with `paths` / an index range): how many records fit is
+    # computed per call from the deployment's token budget and context window;
+    # this share of the free room is used, the rest is kept for later rounds.
+    chat_tool_batch_room_share: float = 0.5
+    chat_tool_batch_max_chars: int = 60_000  # hard cap on one batch result
     chat_tool_turn_timeout_s: float = 150.0  # whole tool loop wall clock
     # 429 retries per LLM call — defaults for policy.rate_limit_retry_*.
     # Default 0: pacing and

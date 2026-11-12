@@ -193,6 +193,21 @@ _OPERATOR_ALIASES = {
 }
 
 
+def _clean_key(key: Any) -> str:
+    return str(key).strip().strip("\\\"'").strip()
+
+
+def normalize_where(where: dict[str, Any]) -> dict[str, Any]:
+    """Undo quoting some models add to keys: {"\\"id\\"": {"\\"gte\\"": 5}}
+    silently matched nothing (prod 2026-11-10). Operators are lowercased."""
+    out: dict[str, Any] = {}
+    for field, cond in where.items():
+        if isinstance(cond, dict):
+            cond = {_clean_key(op).lower(): v for op, v in cond.items()}
+        out[_clean_key(field)] = cond
+    return out
+
+
 def _container(value: Any) -> bool:
     return isinstance(value, (dict, list))
 
@@ -276,6 +291,7 @@ def expand_bulk(op: dict[str, Any], doc: Any, max_matches: int) -> list[dict[str
     where = op.get("where") or {}
     if not isinstance(where, dict):
         raise BulkEditError("bulk 'where' must be an object")
+    where = normalize_where(where)
 
     parts = _split_path(path)
     diffs: list[dict[str, Any]] = []
