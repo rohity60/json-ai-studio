@@ -91,8 +91,15 @@ Stage C as built (differs from the table below):
 - Verified in harness with the real UI: load sample → chat chip → diff viewer → Accept All → reload.
   In the in-memory harness a reload loses host storage and the IndexedDB restore path took over.
 
-Left: commit; PyInstaller build of the real plugin + CI; ADR-0026; CLAUDE.md; mint real tool id;
-listing assets; `apps push` / `cut` / `submit-review`; trim APS round trips; stray dev app `anna` check.
+Done after that (2026-11-12): merged `release` (text edits, Nemotron default) — suites green, UI
+re-checked in harness; `build_binary.sh` (darwin-arm64: 51 MB archive / 96 MB unpacked, stdio test passes
+against the binary; litellm pinned to 1.89.3 — 1.109 doubled the size); `executa.json` `binary_artifacts`;
+`.github/workflows/anna-executa.yml`; ADR-0026; CLAUDE.md.
+
+Left (manual / outward-facing): mint real tool id and replace `tool-dev-json-ai-studio` (manifest,
+executa.json, `ui/src/anna/runtime.ts`); register CI as trusted publisher + set repo vars `ANNA_TOOL_ID`,
+`ANNA_APP_HOST`; logo + screenshots + privacy URL; `apps push` → `apps cut 0.1.0` → `submit-review` →
+`release`; first linux-x86_64 CI build (unverified natively); trim APS round trips; stray dev app `anna`.
 
 ## C. Bundle — `apps/anna/`
 

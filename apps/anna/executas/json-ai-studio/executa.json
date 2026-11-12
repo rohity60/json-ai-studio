@@ -5,5 +5,18 @@
   "executa_type": "tool",
   "description": "JSON AI Studio engine: chat edits as reviewable diffs, versions, explain.",
   "tool_id": "tool-dev-json-ai-studio",
-  "type": "python"
+  "type": "python",
+  "distribution": {
+    "type": "binary",
+    "binary_artifacts": {
+      "linux-x86_64": {
+        "path": "dist/json-ai-studio-{version}-linux-x86_64.tar.gz",
+        "entrypoint": "json-ai-studio"
+      },
+      "darwin-arm64": {
+        "path": "dist/json-ai-studio-{version}-darwin-arm64.tar.gz",
+        "entrypoint": "json-ai-studio"
+      }
+    }
+  }
 }

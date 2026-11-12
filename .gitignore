@@ -32,3 +32,6 @@ apps/api/logs/
 *.egg-info/
 # Anna App bundle is build output of apps/anna/ui (npm run build)
 apps/anna/bundle/
+# Executa binary build output
+apps/anna/executas/*/dist/
+apps/anna/executas/*/build/

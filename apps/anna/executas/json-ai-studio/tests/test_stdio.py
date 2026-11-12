@@ -5,6 +5,7 @@ plugin's own storage and sampling requests."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,13 +15,17 @@ from fake_host import FakeHost
 from jstudio.rpc import HostError
 
 PLUGIN = Path(__file__).resolve().parent.parent / "json_ai_studio_plugin.py"
+# Set JSTUDIO_PLUGIN_BINARY to a built launcher (build_binary.sh) to run the
+# same host conversation against the shipped binary instead of the source.
+BINARY = os.environ.get("JSTUDIO_PLUGIN_BINARY")
+COMMAND = [BINARY] if BINARY else [sys.executable, str(PLUGIN)]
 
 
 class HostSide:
     def __init__(self) -> None:
         self.fake = FakeHost()
         self.proc = subprocess.Popen(
-            [sys.executable, str(PLUGIN)],
+            COMMAND,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

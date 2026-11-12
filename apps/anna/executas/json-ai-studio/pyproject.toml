@@ -22,6 +22,11 @@ packages = ["jstudio"]
 # The shared core (gateway, planner, diff engine) lives in the API package.
 json-ai-studio-api = { path = "../../../api", editable = true }
 
+[tool.uv]
+# Keep in step with apps/api/uv.lock: the engine is tested against this
+# litellm, and newer releases roughly double the binary size.
+constraint-dependencies = ["litellm==1.89.3"]
+
 [dependency-groups]
 dev = ["pytest", "pytest-asyncio"]
 
