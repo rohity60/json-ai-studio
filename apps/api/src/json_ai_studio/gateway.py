@@ -953,6 +953,12 @@ class GatewayService:
                 max_tokens=settings.llm_max_tokens,
                 **extra_params,
             )
+            if final:
+                # The "do not call tools" message alone is not enough: Nemotron
+                # kept calling tools at the final round and the turn ended
+                # with no answer (2026-11-12). Tools stay declared (history
+                # holds tool calls) but can't be called.
+                request["tool_choice"] = "none"
             # Retry THIS round on transient provider errors (ADR-0024,
             # relaxes ADR-0007 inside the loop): nothing has reached the user
             # as an answer yet, and re-running one round is far cheaper than

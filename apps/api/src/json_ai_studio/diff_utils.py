@@ -440,8 +440,11 @@ def normalize_entry(d: Any) -> dict[str, Any] | None:
     entry = dict(d)
     if "operation" not in entry and "op" in entry:
         entry["operation"] = entry["op"]
-    op = _OP_ALIASES.get(str(entry.get("operation", "")).strip().lower())
-    if op is None:
+    raw_op = str(entry.get("operation", "")).strip().lower()
+    op = _OP_ALIASES.get(raw_op)
+    from .text_edits import TEXT_OPS, normalize_text_edit  # circular at import
+
+    if op is None and raw_op not in TEXT_OPS:
         return None
     path = entry.get("path")
     if not isinstance(path, str) or not path.strip():
@@ -452,6 +455,9 @@ def normalize_entry(d: Any) -> dict[str, Any] | None:
     path = path.strip()
     if not path.startswith("/"):
         path = "/" + path
+    if op is None:
+        # In-string find/replace; expanded to a modify diff server-side.
+        return normalize_text_edit(entry, path)
     new_value = entry.get("new_value", entry.get("value"))
     return {
         "path": path,

@@ -176,6 +176,13 @@ def describe_tool_call(
     if name == "read":
         path = str(args.get("path") or "") or "the document"
         size = _value_size(doc, path)
+        if "text" in result and "length" in result:  # one page of a long string
+            start = int(result.get("offset") or 0)
+            end = start + len(str(result.get("text") or ""))
+            return (
+                f"Read {path} (characters {start + 1:,}–{end:,} "
+                f"of {int(result['length']):,})"
+            )
         if "value_truncated" in result:
             shown = len(str(result.get("value_truncated") or ""))
             total = f" of {size:,}" if size else ""

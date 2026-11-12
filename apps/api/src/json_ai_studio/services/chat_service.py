@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from ..db.session_store import store
 from ..bulk_edits import expand_all, extract_bulk, extract_question
+from ..text_edits import expand_text_edits
 from ..diff_utils import (
     TRUNCATION_REASON,
     DiffApplyError,
@@ -260,11 +261,17 @@ async def _stream_llm(
                     op["path"] = focus_path + op["path"]
         if question:
             outcome["question"] = question
-        bulk_notes: list[str] = []
+        # Find/replace inside long strings → one full-value modify per field,
+        # computed against the FULL value the model may only have seen cut.
+        diffs, text_notes = expand_text_edits(diffs, working_json)
+        if text_notes:
+            logger.info("text edits notes=%s", text_notes)
+        bulk_notes: list[str] = list(text_notes)
         if bulk_ops:
-            bulk_diffs, bulk_notes = expand_all(
+            bulk_diffs, op_notes = expand_all(
                 bulk_ops, working_json, get_settings().bulk_max_matches
             )
+            bulk_notes.extend(op_notes)
             listed = {d.get("path") for d in diffs}
             diffs = [*diffs, *(d for d in bulk_diffs if d["path"] not in listed)]
             explanation = bulk_explanation or explanation
