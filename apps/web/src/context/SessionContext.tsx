@@ -10,6 +10,7 @@ import { showRateLimitModal } from '../components/RateLimitModal';
 import { showTooLargeModal } from '../components/TooLargeModal';
 import { trackEvent } from '../lib/gtagConversion';
 import { applyProgressEvent, legacyProgressText, newProgress, type TurnProgress } from '../lib/progress';
+import { newJobUi, phaseOf, type JobPhase, type JobUi } from '../lib/reviewJob';
 
 // A request is rate-limited when the backend answered HTTP 429 (status carried
 // on the error) or the message otherwise mentions 429.
@@ -82,13 +83,15 @@ type SessionState = {
   explaining: boolean;
   explainError: string | null;
   profile: Record<string, any> | null; // logged-in user profile + credits (GET /api/me)
+  job: JobUi | null; // whole-document review job of this session (ADR-0026)
 };
 
 type SessionContextValue = {
   state: SessionState;
   createSession: (name: string) => Promise<void>;
   uploadJson: (jsonData: Record<string, any>) => Promise<boolean>;
-  sendMessage: (message: string, thinking?: boolean, focusPath?: string) => Promise<void>;
+  /** false when the message was not sent (e.g. refused while a review batch runs). */
+  sendMessage: (message: string, thinking?: boolean, focusPath?: string) => Promise<boolean>;
   acceptDiff: (diffId: string) => Promise<void>;
   createVersion: (label: string) => void;
   selectVersion: (versionId: string) => Promise<void>;
@@ -106,6 +109,15 @@ type SessionContextValue = {
   }) => Promise<void>;
   clearSession: () => Promise<void>;
   clearChat: () => Promise<void>;
+  // Whole-document review job (ADR-0026): the client asks for one batch at
+  // a time; pausing stops asking, closing the tab pauses too.
+  startJob: (proposal: api.JobProposal, sourceTurnId?: string) => Promise<void>;
+  pauseJob: () => void;
+  resumeJob: () => void;
+  cancelJob: () => Promise<void>;
+  dismissJob: () => void;
+  acceptJobBatch: (jobId: string, batchNo: number) => Promise<void>;
+  rejectJobBatch: (jobId: string, batchNo: number) => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -135,8 +147,24 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     sessionId: null, workingJson: {}, baselineJson: {}, versions: [],
     conversationHistory: [], activeVersionId: null,
     loading: true, error: null, explainMarkdown: null,
-    explaining: false, explainError: null, profile: null,
+    explaining: false, explainError: null, profile: null, job: null,
     });
+
+    // Review-job loop control (ADR-0026). A ref, not state: the loop reads it
+    // between batches without re-rendering.
+  const jobLoopRef = useRef<{ active: boolean; pause: boolean; cancel: boolean; abort: (() => void) | null }>(
+    { active: false, pause: false, cancel: false, abort: null });
+  // Chat turns streaming in this tab: the job loop waits for them before
+  // asking for the next batch, so a question is not queued behind a batch
+  // that fills the model's per-minute budget.
+  const chatInFlightRef = useRef(0);
+  // Unmount (or a dev Fast Refresh remount) must not leave a loop asking
+  // for batches that nothing shows.
+  useEffect(() => () => {
+    jobLoopRef.current.pause = true;
+    jobLoopRef.current.abort?.();
+    }, []);
+  const stopJobLoop = () => { jobLoopRef.current.pause = true; };
 
     // Fetch the logged-in user's profile + quota (null when anonymous).
   useEffect(() => {
@@ -169,6 +197,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       explainMarkdown: null,
       explaining: false,
       explainError: null,
+      job: null,
       }));
 
     const hydrate = async () => {
@@ -188,6 +217,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         try {
           const data = await api.getSession(savedSessionId, apiKey);
           hydrated(savedSessionId, data);
+          // An unfinished review comes back PAUSED — never auto-run (WC-06).
+          if (data.active_job_id) {
+            try {
+              const job = await api.getJob(savedSessionId, data.active_job_id, apiKey);
+              setState((prev) => ({ ...prev, job: newJobUi(job) }));
+              } catch { /* job gone with a backend restart */ }
+            }
           return;
           } catch (err: any) {
           if (err?.status !== 404) {
@@ -285,7 +321,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         explainMarkdown: null,
         explaining: false,
         explainError: null,
+        job: null,
         });
+      stopJobLoop();
       } catch (err: any) {
       if (handleQuotaError(err)) {
         // popup shown
@@ -313,11 +351,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         workingJson: data.after || data.parsed_json || prev.workingJson,
         baselineJson: data.before || data.parsed_json || {},
         conversationHistory: [], // new document → backend dropped the thread
+        job: null, // …and cancelled its review job
         error: null,
         loading: false,
         explainMarkdown: null,
         explainError: null,
         }));
+      stopJobLoop();
       toast.success('JSON loaded');
       trackEvent('json_upload');
       return true;
@@ -334,8 +374,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       }
     }, [state.sessionId, apiKey]);
 
-  const sendMessage = useCallback(async (message: string, thinking: boolean = false, focusPath?: string) => {
-    if (!state.sessionId) return;
+  const sendMessage = useCallback(async (message: string, thinking: boolean = false, focusPath?: string): Promise<boolean> => {
+    if (!state.sessionId) return false;
+    chatInFlightRef.current += 1;
+    try {
+      return await sendMessageInner(message, thinking, focusPath);
+      } finally {
+      chatInFlightRef.current -= 1;
+      }
+    }, [state.workingJson, state.sessionId, apiKey]);
+
+  const sendMessageInner = async (message: string, thinking: boolean, focusPath?: string): Promise<boolean> => {
+    if (!state.sessionId) return false;
 
          // 1. Snapshot the initial payload variables
     const currentWorkingJson = JSON.parse(JSON.stringify(state.workingJson));
@@ -361,8 +411,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
     try {
         // Track streaming variables locally
-      let activeJson = currentWorkingJson;
-      let baselineJson = state.baselineJson || {};
+      let activeJson: Record<string, any> | null = null; // set by `complete`
+      let baselineJson: Record<string, any> | null = null;
       const diffs: any[] = [];
       let textAccumulator = '';
       let stored: { userId: string; assistantId: string } | null = null;
@@ -467,8 +517,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           ReactDOM.flushSync(() => {
             setState((prev) => {
               const historyCopy = [...prev.conversationHistory];
-              if (historyCopy.length > 0) {
-                const lastIndex = historyCopy.length - 1;
+              // By id, not "the last turn": a review batch may append its own
+              // turn while this one streams (ADR-0026).
+              const lastIndex = historyCopy.findIndex((t) => t.id === tempAssistantId);
+              if (lastIndex >= 0) {
                 historyCopy[lastIndex] = {
                     ...historyCopy[lastIndex],
                   content: textAccumulator || (progress.structured ? '' : legacyProgressText(progress)),
@@ -482,8 +534,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                     return {
                          ...prev,
                         conversationHistory: historyCopy,
-                          // Use activeJson if updated, otherwise fallback to the absolutely latest prev state
-                        workingJson: activeJson || currentWorkingJson,
+                          // Only `complete` carries a new document; until then keep
+                          // the latest state (a review batch may have changed it).
+                        workingJson: activeJson || prev.workingJson,
                         baselineJson: baselineJson || prev.baselineJson
                      };
                  });
@@ -510,6 +563,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         });
 
       } catch (err: any) {
+      if (err?.status === 409 && err?.detail?.error === 'job_running') {
+        // A review batch is in flight: edits wait, questions are fine (WC-07).
+        toast.warning('Pause the review to make other edits.');
+        setState((prev) => ({
+          ...prev,
+          conversationHistory: prev.conversationHistory.filter((t) => t.id !== tempUserId && t.id !== tempAssistantId),
+          }));
+        return false; // not sent: the caller keeps the text
+        }
       if (handleQuotaError(err)) {
         // popup shown
         } else if (err.message?.includes('401') || err.message?.includes('API key')) {
@@ -519,7 +581,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         }
       setState((prev) => ({ ...prev, error: String(err), loading: false }));
       }
-    }, [ state.workingJson, apiKey]);
+    return true;
+    };
 
 
   const acceptDiff = useCallback(async (diffId: string) => {
@@ -629,6 +692,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       active_version_id: payload.activeVersionId,
       }, apiKey);
     updateSessionStorage(sess.id);
+    stopJobLoop();
     setState((prev) => ({
       ...prev,
       sessionId: sess.id,
@@ -636,6 +700,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       baselineJson: (data.baseline_json as Record<string, any>) || payload.workingJson,
       versions: mapVersions(data.versions),
       conversationHistory: [],
+      job: null,
       activeVersionId: (data.active_version_id as string) ?? payload.activeVersionId,
       error: null,
       explainMarkdown: null,
@@ -650,6 +715,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const clearSession = useCallback(async () => {
     const sess = await api.createSession('My Config', apiKey);
     updateSessionStorage(sess.id);
+    stopJobLoop();
     setState((prev) => ({
       ...prev,
       sessionId: sess.id,
@@ -657,6 +723,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       baselineJson: {},
       versions: [],
       conversationHistory: [],
+      job: null,
       activeVersionId: null,
       error: null,
       explainMarkdown: null,
@@ -695,6 +762,281 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       }
     }, [state.sessionId, state.conversationHistory, apiKey]);
 
+  // ── Whole-document review job (ADR-0026, WC-02..WC-08) ──────────────────
+
+  const patchJob = (patch: Partial<JobUi>) =>
+    setState((prev) => (prev.job ? { ...prev, job: { ...prev.job, ...patch } } : prev));
+
+  // Countdown shown in the job panel; ends early when the user pauses.
+  const jobCountdown = async (seconds: number, message: string) => {
+    const until = Date.now() + seconds * 1000;
+    patchJob({ wait: { message, reason: 'tokens', until }, current: null });
+    while (Date.now() < until && !jobLoopRef.current.pause) {
+      await new Promise((r) => setTimeout(r, 250));
+      }
+    patchJob({ wait: null });
+    };
+
+  // The client loop: one POST .../next per batch until the job is done,
+  // paused or failed. Pausing never aborts a batch in flight — it stops
+  // after it, so no model call is wasted.
+  const runJobLoop = useCallback(async (sessionId: string, jobId: string) => {
+    const loop = jobLoopRef.current;
+    if (loop.active) return;
+    loop.active = true;
+    loop.pause = false;
+    loop.cancel = false;
+    patchJob({ phase: 'running', pausing: false, error: null, retryable: true });
+    let end: JobPhase = 'paused';
+    try {
+      while (!loop.pause) {
+        if (chatInFlightRef.current > 0) {
+          patchJob({ current: 'Waiting for your chat message to finish…', wait: null });
+          while (chatInFlightRef.current > 0 && !loop.pause) {
+            await new Promise((r) => setTimeout(r, 500));
+            }
+          if (loop.pause) break;
+          }
+        patchJob({ inFlight: true, current: 'Preparing the next batch…', wait: null });
+        let result: 'complete' | 'failed' | 'quota' | 'gone' | 'aborted' | 'none' = 'none';
+        let finished = false;
+        let retryIn = 0; // seconds; < 0 = do not retry automatically
+        // Until the model call starts the batch only waits for capacity and
+        // has reserved nothing: Pause/Cancel may abort it then (no tokens
+        // spent). Once the call starts it always runs to the end.
+        const abortCtrl = new AbortController();
+        loop.abort = () => abortCtrl.abort();
+        try {
+          for await (const chunk of api.nextBatch(sessionId, jobId, apiKey, abortCtrl.signal)) {
+            const d = chunk.data || {};
+            if (chunk.type === 'progress' && (d.stage === 'calling' || d.stage === 'answering')) {
+              loop.abort = null;
+              }
+            if (chunk.type === 'waiting') {
+              patchJob({
+                wait: {
+                  message: d.message || 'Waiting for AI model capacity…',
+                  reason: d.reason || 'tokens',
+                  until: Date.now() + (Number(d.retry_after) || 0) * 1000,
+                  },
+                });
+              } else if (chunk.type === 'progress' || chunk.type === 'retrying') {
+              patchJob({ current: d.message || 'Working…', wait: null });
+              } else if (chunk.type === 'batch_complete') {
+              const done = d as api.BatchComplete;
+              ReactDOM.flushSync(() => {
+                setState((prev) => ({
+                  ...prev,
+                  workingJson: done.working_json || prev.workingJson,
+                  conversationHistory: done.turn
+                    ? [...prev.conversationHistory, done.turn as UiChatTurn]
+                    : prev.conversationHistory,
+                  job: prev.job ? { ...prev.job, job: done.job, error: null } : prev.job,
+                  }));
+                });
+              result = 'complete';
+              finished = done.job.status === 'done';
+              } else if (chunk.type === 'batch_failed') {
+              const failed = d as api.BatchFailed;
+              patchJob({ job: failed.job, error: failed.error, retryable: failed.retryable !== false });
+              result = 'failed';
+              } else if (chunk.type === 'safety_block') {
+              // Provider refused the content: retrying the same batch cannot help (WC-05).
+              patchJob({ error: d.message || 'The AI provider refused this batch (content policy).', retryable: false });
+              result = 'failed';
+              } else if (chunk.type === 'credit_limit') {
+              showRateLimitModal({ scope: d.scope || 'api', kind: 'credits', message: d.message, loginAvailable: d.login_available === true });
+              patchJob({ error: d.message || 'The free credits are used up.' });
+              result = 'quota';
+              retryIn = -1;
+              } else if (chunk.type === 'rate_limit') {
+              result = 'quota';
+              retryIn = Number(d.retry_after) || 30;
+              }
+            }
+          } catch (err: any) {
+          if (err?.userAborted) {
+            result = 'aborted';
+            } else if (err?.status === 429) {
+            result = 'quota';
+            retryIn = Number(err.retryAfter) || 15;
+            } else if (err?.status === 402) {
+            handleQuotaError(err);
+            patchJob({ error: 'The free credits are used up.' });
+            result = 'quota';
+            retryIn = -1;
+            } else if (err?.status === 409 && err?.detail?.error === 'job_running') {
+            result = 'quota'; // another tab's batch is in flight
+            retryIn = 5;
+            } else if (err?.status === 409 || err?.status === 404) {
+            result = 'gone'; // finished elsewhere, or lost with a backend restart
+            } else {
+            patchJob({ error: String(err?.message || err), retryable: true });
+            result = 'failed';
+            }
+          }
+        loop.abort = null;
+        patchJob({ inFlight: false, current: null, wait: null });
+
+        if (result === 'aborted') { end = 'paused'; break; }
+        if (result === 'complete') {
+          if (finished) { end = 'done'; break; }
+          continue;
+          }
+        if (result === 'failed') { end = 'failed'; break; }
+        if (result === 'quota') {
+          if (retryIn < 0) { end = 'paused'; break; }
+          await jobCountdown(retryIn, 'Request limit reached — continuing shortly');
+          continue;
+          }
+        // 'gone' or a stream that ended without a result: ask the server.
+        try {
+          const job = await api.getJob(sessionId, jobId, apiKey);
+          patchJob({ job });
+          end = phaseOf(job);
+          if (result === 'none' && end === 'paused') {
+            patchJob({ error: 'The batch ended unexpectedly.', retryable: true });
+            end = 'failed';
+            }
+          } catch {
+          patchJob({ error: 'The review no longer exists on the server (it does not survive a backend restart).', retryable: false });
+          end = 'cancelled';
+          }
+        break;
+        }
+
+      if (loop.cancel && end !== 'done' && end !== 'cancelled') {
+        // After an abort the server notices the closed stream within a few
+        // seconds; until then it answers 409 job_running.
+        for (let attempt = 0; attempt < 12; attempt++) {
+          try {
+            const job = await api.cancelJob(sessionId, jobId, apiKey);
+            patchJob({ job });
+            end = 'cancelled';
+            break;
+            } catch (err: any) {
+            if (err?.status === 409 && attempt < 11) { await new Promise((r) => setTimeout(r, 1000)); continue; }
+            toast.error(String(err?.message || err));
+            break;
+            }
+          }
+        }
+      } finally {
+      loop.active = false;
+      patchJob({ phase: end, inFlight: false, pausing: false, current: null, wait: null });
+      }
+    }, [apiKey]);
+
+  const startJob = useCallback(async (proposal: api.JobProposal, sourceTurnId?: string) => {
+    if (!state.sessionId) return;
+    const sessionId = state.sessionId;
+    try {
+      const job = await api.createJob(sessionId, {
+        scope_path: proposal.scope_path,
+        instruction: proposal.instruction,
+        source_turn_id: sourceTurnId ?? null,
+        }, apiKey);
+      setState((prev) => ({ ...prev, job: newJobUi(job, 'running') }));
+      trackEvent('review_job_start');
+      void runJobLoop(sessionId, job.id);
+      } catch (err: any) {
+      if (err?.status === 409 && err?.detail?.job_id) {
+        // One active job per session: show the existing one instead.
+        toast.warning('A review is already in progress for this document.');
+        try {
+          const job = await api.getJob(sessionId, err.detail.job_id, apiKey);
+          setState((prev) => ({ ...prev, job: prev.job ?? newJobUi(job) }));
+          } catch { /* ignore */ }
+        } else if (!handleQuotaError(err)) {
+        toast.error(String(err?.message || err));
+        }
+      }
+    }, [state.sessionId, apiKey, runJobLoop]);
+
+  const pauseJob = useCallback(() => {
+    if (!jobLoopRef.current.active) return;
+    jobLoopRef.current.pause = true;
+    jobLoopRef.current.abort?.(); // only while still waiting for capacity
+    patchJob({ pausing: true });
+    }, []);
+
+  const resumeJob = useCallback(() => {
+    if (!state.sessionId || !state.job) return;
+    void runJobLoop(state.sessionId, state.job.job.id);
+    }, [state.sessionId, state.job, runJobLoop]);
+
+  const cancelJob = useCallback(async () => {
+    if (!state.sessionId || !state.job) return;
+    const loop = jobLoopRef.current;
+    if (loop.active) {
+      // A batch is in flight: let it finish, then cancel (the loop does it).
+      loop.cancel = true;
+      loop.pause = true;
+      loop.abort?.(); // only while still waiting for capacity
+      patchJob({ pausing: true });
+      return;
+      }
+    try {
+      const job = await api.cancelJob(state.sessionId, state.job.job.id, apiKey);
+      patchJob({ job, phase: 'cancelled', error: null });
+      } catch (err: any) {
+      if (err?.status === 404) { setState((prev) => ({ ...prev, job: null })); return; }
+      toast.error(String(err?.message || err));
+      }
+    }, [state.sessionId, state.job, apiKey]);
+
+  const dismissJob = useCallback(() => {
+    if (jobLoopRef.current.active) return;
+    setState((prev) => ({ ...prev, job: null }));
+    }, []);
+
+  const resolveJobBatch = async (fn: typeof api.acceptDiffBatch, jobId: string, batchNo: number) => {
+    if (!state.sessionId) return;
+    try {
+      const data = await fn(state.sessionId, apiKey, { jobId, batchNo });
+      setState((prev) => ({
+        ...prev,
+        workingJson: data.working_json,
+        baselineJson: data.baseline_json || prev.baselineJson,
+        conversationHistory: syncStatuses(prev.conversationHistory, data.conversation_history),
+        }));
+      } catch (err: any) { toast.error(String(err?.message || err)); }
+    };
+  const acceptJobBatch = useCallback((jobId: string, batchNo: number) =>
+    resolveJobBatch(api.acceptDiffBatch, jobId, batchNo), [state.sessionId, apiKey]);
+  const rejectJobBatch = useCallback((jobId: string, batchNo: number) =>
+    resolveJobBatch(api.rejectDiffBatch, jobId, batchNo), [state.sessionId, apiKey]);
+
+  // Tab refocus: re-read the job (another tab may have advanced or ended
+  // it). Never starts the loop (WC-06).
+  const jobId = state.job?.job.id ?? null;
+  useEffect(() => {
+    if (!jobId || !state.sessionId) return;
+    const sessionId = state.sessionId;
+    const onVisible = async () => {
+      if (document.visibilityState !== 'visible' || jobLoopRef.current.active) return;
+      try {
+        const job = await api.getJob(sessionId, jobId, apiKey);
+        setState((prev) => {
+          if (!prev.job || prev.job.job.id !== job.id || jobLoopRef.current.active) return prev;
+          const phase = job.status === 'done' || job.status === 'cancelled' ? phaseOf(job) : prev.job.phase;
+          return { ...prev, job: { ...prev.job, job, phase } };
+          });
+        } catch { /* keep what we have */ }
+      };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+    }, [jobId, state.sessionId, apiKey]);
+
+  // Leaving while a batch is in flight wastes that model call (WC-08).
+  const batchInFlight = !!state.job?.inFlight;
+  useEffect(() => {
+    if (!batchInFlight) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+    }, [batchInFlight]);
+
   const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false);
   const [pendingVersionId, setPendingVersionId] = useState<string | null>(null);
 
@@ -706,12 +1048,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!state.sessionId) return;
     try {
       const data = await api.selectVersion(state.sessionId, versionId, apiKey);
+      stopJobLoop();
       setState({
           ...state,
         workingJson: data.working_json || {},
         baselineJson: data.baseline_json || {},
         conversationHistory: (data.conversation_history as UiChatTurn[]) || [],
         activeVersionId: data.active_version_id,
+        job: null, // the backend cancels the review when the document is switched
         loading: false,
         error: null,
         explainMarkdown: null,
@@ -808,7 +1152,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   if (state.loading) return null;
 
   return (
-      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson, clearCache, loadSnapshot, clearSession, clearChat }}>
+      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson, clearCache, loadSnapshot, clearSession, clearChat, startJob, pauseJob, resumeJob, cancelJob, dismissJob, acceptJobBatch, rejectJobBatch }}>
         {children}
       </SessionContext.Provider>
     );

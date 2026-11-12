@@ -58,7 +58,7 @@ json-ai-studio/
 │     │         ├── api.ts            ← Minimal fetch-based API client (no retry, no interceptor).
 │     │         └── versionCache.ts   ← IndexedDB workspace mirror (idb pkg). Versions + working JSON survive backend restarts; restored via POST .../versions/restore.
 │     └── tailwind.config.ts   ← Tailwind config.
-├── docs/adr/                  ← 15 Architecture Decision Records. All tech decisions numbered & dated.
+├── docs/adr/                  ← Architecture Decision Records (0001–0026). All tech decisions numbered & dated.
 ├── docker-compose.yml         ← api + web + db (postgres:16, host port 5433).
 └── openapi/README.md           ← OpenAPI spec conventions.
 ```
@@ -74,6 +74,7 @@ json-ai-studio/
 - **Lookup tools (ADR-0024)**: docs too large to inline get a key-union skeleton and, on deployments with `supports_tools`, a read-only tool loop (`json_tools.py`: `search`, `query`, `read`, `outline`; `read` takes `paths` / index ranges `/entries/4..13` and returns as many values as fit — room computed per round by `turn_planner.tool_result_room_chars` from the deployment's token budget and context window; max 4 rounds, streamed by default, per-round retry on 429/5xx). Answers may carry `question: {text, options}` (UI buttons). Live evals: `tests/test_json_tools_live.py` (`LIVE_CALL_SPACING_S` paces calls for Google's 16k tokens/min free tier).
 - **Text edits**: for long strings the model emits `replace_text` diffs (`find`/`replace`/`all`) instead of a full-value `modify`; `text_edits.py` expands them against the FULL value into one ordinary `modify` per field (wire format unchanged). Refused with a note when `find` is missing, ambiguous without `all`, or splits a word. `read` pages long strings (`offset` → `text`/`next_offset`, pages end on whitespace).
 - **Deployment token budget (ADR-0025)**: per-deployment `tpm_input_limit` / `min_call_interval_s` in `deployments.yaml` (Google free tier: 16k input tokens/min, calls 15 s apart). `services/turn_planner.py` picks inline vs skeleton+tools by whether the first call fits limit × `DEPLOYMENT_BUDGET_HEADROOM`; else `input_too_large` (sections + trimmed copy via `json_trim.py`, resend with `focus_path`). `services/deployment_budget.py` paces and gates every LLM call globally, waiting up to 60 s with `waiting` SSE countdown. No retries (`CHAT_TOOL_RETRY_ATTEMPTS=0`); provider 429 → model-scope `rate_limit`. Independent of per-user caps. Manual test data: `apps/api/ai/feature/deployment-budget/test-data/`.
+- **Whole-document review (ADR-0026)**: `services/intent.py` classifies messages with keyword rules (no LLM call). A `review` that does not fit one inline turn gets SSE `job_proposal` (no model call). Jobs are client-driven: `POST /api/sessions/{id}/jobs`, then one batch per `POST .../jobs/{jobId}/next` (SSE `batch_complete` / `batch_failed`); `GET` / `DELETE`. Batches are packed by `services/job_packing.py` from the deployment's per-minute budget, context window and output cap and each record's calibrated token size (never a fixed count; oversized records are paged); the lean prompt has no skeleton, history or tools. Diffs are tagged `job_id`/`batch_no`; accept-all/reject-all accept those as filters. Job state is in memory with the session. Web: `JobProposalCard`, `JobPanel`, loop in `SessionContext` (`lib/reviewJob.ts`).
 - **Diff engine**: `deepdiff` for backend (ADR-0003); client-side `deep-diff` for DiffViewer. Business rules only (timeout > 0, retryCount <= 10). No JSON Schema validation yet.
 - **Error handling**: Fail-fast with 500 + hint string (ADR-0007). No retry logic at MVP.
 - **Logging (ADR-0017)**: Env-driven via `Settings` LOG_* fields. Console (stderr) + size-rotating file handler (`logs/app.log`, `RotatingFileHandler`). Plain text. `LOG_LEVEL=DEBUG` → full-payload debug logs (working JSON, prompts, LLM output, diffs). Secrets never logged (masked keys, claims-only, no bearer tokens). Docker bind-mounts `./logs/api`. API-only; frontend logging out of scope.
@@ -100,6 +101,9 @@ From `openapi/spec.yaml`, implemented in `controllers/`:
 | POST   | `/api/sessions/{id}/diffs/reject-all` | Reject all diffs |
 | DELETE | `/api/sessions/{id}/chat` | Clear chat history (409 while diffs pending, ADR-0021) |
 | POST   | `/api/explain` | LLM markdown explanation of working JSON |
+| POST   | `/api/sessions/{id}/jobs` | Create whole-document review job (ADR-0026) |
+| POST   | `/api/sessions/{id}/jobs/{jobId}/next` (SSE) | Process exactly one review batch |
+| GET/DELETE | `/api/sessions/{id}/jobs/{jobId}` | Job status / cancel (diffs stay pending) |
 | GET    | `/api/me` | Logged-in user profile + credit quota (Auth0 bearer only) |
 | GET/POST | `/api/workspaces` | List / create workspaces (bearer only, ADR-0018) |
 | PATCH/DELETE | `/api/workspaces/{id}` | Rename / delete workspace (default not deletable) |

@@ -291,6 +291,16 @@ class TestOneBatch:
         after = session_of(client, sid)["working_json"]["entries"][0]["content"]
         assert after == before.replace("teh entry", "the entry")
 
+    def test_eta_counts_the_deployment_pace_not_only_call_time(
+        self, client, sid, job, llm
+    ):
+        # The stub answers instantly; on a 16k/min budget a full batch still
+        # takes about one window, so the remaining time cannot be ~0.
+        done = event(next_batch(client, sid, job["id"]), "batch_complete")
+        left = done["job"]["batch_count"] - 1
+        assert left >= 1
+        assert done["eta_s"] >= left * 30
+
     def test_batch_is_a_compact_history_turn(self, client, sid, job, llm):
         done = event(next_batch(client, sid, job["id"]), "batch_complete")
         turn = session_of(client, sid)["conversation_history"][-1]

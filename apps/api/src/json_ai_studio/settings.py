@@ -135,8 +135,10 @@ class Settings(BaseSettings):
     # Strings outside the reviewed collection at least this long are
     # reviewed too (leading items of the job).
     job_long_string_min_chars: int = 400
-    # Typical duration of one batch call, for the ETA before any batch ran.
-    job_est_call_s: float = 20.0
+    # Typical duration of one batch model call, for the ETA before any
+    # batch ran (live 2026-11-13: Nemotron ~25 s, Google Gemma ~58 s for
+    # ~10-17k-token batches). The window wait is added on top.
+    job_est_call_s: float = 30.0
 
     # Anonymous (shared pool) quota defaults — match pre-login behavior.
     # Token limit sized for large-JSON editing: one inline doc at the

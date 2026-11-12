@@ -222,8 +222,11 @@ class TestPlan:
         assert tight.batch_count > loose.batch_count
         assert tight.eta_s > loose.eta_s
 
-    def test_eta_counts_one_window_per_full_batch(self):
-        d = deployment(tpm=16_000)  # usable 12,800 / 60 s
-        assert jp.batch_seconds(d, 12_800, call_s=5) == pytest.approx(60)
-        assert jp.batch_seconds(d, 6_400, call_s=5) == pytest.approx(30)
+    def test_eta_adds_call_time_and_window_share(self):
+        # Tokens count from when a call finishes, so the next batch waits
+        # for the call AND its share of the window.
+        d = deployment(tpm=16_000)  # usable 12,800 per 60 s
+        assert jp.batch_seconds(d, 12_800, call_s=5) == pytest.approx(65)
+        assert jp.batch_seconds(d, 6_400, call_s=5) == pytest.approx(35)
         assert jp.batch_seconds(deployment(interval=15), 50_000, call_s=5) == 15
+        assert jp.batch_seconds(deployment(), 50_000, call_s=5) == 5
