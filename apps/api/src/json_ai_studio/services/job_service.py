@@ -263,28 +263,55 @@ def _unreadable(text: str) -> bool:
         return True
 
 
-def _retarget_text_edits(diffs: list[dict[str, Any]], doc: Any) -> list[dict[str, Any]]:
-    """Point a replace_text aimed at a whole record at the string inside it.
+def _string_hits(path: str, node: Any, find: str) -> list[str]:
+    """Paths of the strings at/under `path` that contain `find`."""
+    if isinstance(node, str):
+        return [path] if find in node else []
+    if isinstance(node, (dict, list)):
+        return [
+            p
+            for p, value in job_packing._leaves(job_packing.Unit(path, node))
+            if isinstance(value, str) and find in value
+        ]
+    return []
 
-    Models often name the record they were shown ("/entries/7") instead of
-    the field ("/entries/7/content") — live run 2026-11-13, Nemotron: every
-    fix of a batch addressed the record. When exactly one string under that
-    path contains the "find" text, that string is the only possible target.
+
+def _retarget_text_edits(
+    diffs: list[dict[str, Any]], doc: Any, shown: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Point a replace_text at the one string that holds its "find" text.
+
+    - Models often name the record they were shown ("/entries/7") instead
+      of the field ("/entries/7/content") — live run 2026-11-13, Nemotron:
+      every fix of a batch addressed the record.
+    - They also put a fix on a NEIGHBOURING record of the batch (live
+      2026-11-13: the typo of entry 42 addressed to /entries/22, 45's to
+      /entries/42). When the named path does not contain the text, every
+      record of this batch is searched.
+    "find" is exact text, so exactly one containing string is the only
+    possible target; zero or several → left as is (the edit then fails
+    with its normal note).
     """
     out = []
     for d in diffs:
-        if d.get("operation") == REPLACE_TEXT and isinstance(d.get("find"), str):
-            node = job_packing.resolve(doc, str(d.get("path", "")))
-            if isinstance(node, (dict, list)):
-                hits = [
-                    path
-                    for path, value in job_packing._leaves(
-                        job_packing.Unit(str(d["path"]), node)
-                    )
-                    if isinstance(value, str) and d["find"] in value
-                ]
+        find = d.get("find")
+        if d.get("operation") == REPLACE_TEXT and isinstance(find, str) and find:
+            path = str(d.get("path", ""))
+            hits = _string_hits(path, job_packing.resolve(doc, path), find)
+            if not hits and shown:
+                hits = sorted(
+                    {
+                        h
+                        for unit in shown
+                        for h in _string_hits(
+                            unit, job_packing.resolve(doc, unit), find
+                        )
+                    }
+                )
                 if len(hits) == 1:
-                    d = {**d, "path": hits[0]}
+                    logger.info("job text edit retargeted from=%s to=%s", path, hits[0])
+            if len(hits) == 1 and hits[0] != path:
+                d = {**d, "path": hits[0]}
         out.append(d)
     return out
 
@@ -475,7 +502,7 @@ async def run_batch(
         # is NOW. Text edits run on the full value; every diff goes through
         # the truncation guard and the normal failed-diff path (C-36).
         doc = session["working_json"]
-        diffs = _retarget_text_edits(diffs, doc)
+        diffs = _retarget_text_edits(diffs, doc, shown)
         diffs, notes = expand_text_edits(diffs, doc)
         if notes:
             logger.info(

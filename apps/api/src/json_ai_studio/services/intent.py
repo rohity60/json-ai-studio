@@ -56,6 +56,9 @@ class DocStats:
     # Field names that hold long text somewhere (reviewing them is a job;
     # short fields — numbers, ids, flags — are bulk edits or questions).
     text_keys: frozenset[str] = field(default_factory=frozenset)
+    # Long-text fields that occur ONCE in the document ("description" of a
+    # character card): naming one is a point edit, not a review.
+    single_text_keys: frozenset[str] = field(default_factory=frozenset)
 
 
 def _esc(part: str) -> str:
@@ -67,6 +70,7 @@ def doc_stats(doc: Any) -> DocStats:
     collections: list[Collection] = []
     leaf_keys: set[str] = set()
     text_keys: set[str] = set()
+    key_counts: dict[str, int] = {}
 
     def visit(node: Any, path: str, key: str, depth: int) -> int:
         if isinstance(node, dict):
@@ -84,6 +88,7 @@ def doc_stats(doc: Any) -> DocStats:
         else:
             if depth <= _MAX_DEPTH and key and not key.isdigit():
                 leaf_keys.add(_norm(key))
+                key_counts[_norm(key)] = key_counts.get(_norm(key), 0) + 1
                 if isinstance(node, str) and len(node) >= _TEXT_CHARS:
                     text_keys.add(_norm(key))
             return len(node) + 2 if isinstance(node, str) else len(str(node))
@@ -98,6 +103,7 @@ def doc_stats(doc: Any) -> DocStats:
         collections=tuple(collections),
         leaf_keys=frozenset(leaf_keys - container_keys),
         text_keys=frozenset(text_keys),
+        single_text_keys=frozenset(k for k in text_keys if key_counts.get(k) == 1),
     )
 
 
@@ -174,6 +180,13 @@ _SPECIFIC = _rx(
     r"|\b(first|last|second|third|primeir[oa]s?|ultim[oa]s?|segund[oa]s?|"
     r"primer[oa]?s?)\b"
 )
+# "fix the typo", "corrija o erro": ONE error the user has in mind — a point
+# edit even when the field name is in another language than the keys.
+_ONE_ERROR = _rx(
+    r"\b(the|this|that|o|a|este|esse|esta|essa|el|la|ese|esa)\s+"
+    r"(error|mistake|typo|misspelling|problem|issue|erro|falha|problema|"
+    r"fallo|errata)\b(?!s)"
+)
 _BULK_VERB = _rx(
     r"\b(set|change|update|replace|rename|remove|delete|add|increase|decrease|"
     r"convert|make|translate|defin(a|ir|e)|mud(e|ar|a)|alter(e|ar|a)|"
@@ -242,6 +255,8 @@ def _classify(text: str, stats: DocStats) -> Intent:
     if strong or weak or open_search:
         if _SPECIFIC.search(text):
             return Intent(POINT_EDIT, rule="point.specific_target")
+        if _ONE_ERROR.search(text) and not scope_all and not strong:
+            return Intent(POINT_EDIT, rule="point.one_error")
         if (
             not strong
             and not errors
@@ -256,6 +271,11 @@ def _classify(text: str, stats: DocStats) -> Intent:
             if scope_all and not errors:
                 return Intent(BULK_EDIT, named, "bulk.named_field")
             return Intent(POINT_EDIT, rule="point.named_field")
+        if (fields & stats.single_text_keys) and not scope_all and not named:
+            # "fix the spelling mistakes in the character description": one
+            # long field named, no whole scope — one lookup turn, not a job
+            # over the largest collection (live 2026-11-13).
+            return Intent(POINT_EDIT, rule="point.named_text_field")
         if (strong or weak) and scope and not assignment:
             if strong or errors or not bulk_verb:
                 return Intent(REVIEW, named, "review.verb_scope")

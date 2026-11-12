@@ -51,6 +51,23 @@ def _compact(value: Any, chars: int) -> str:
     return text if len(text) <= chars else text[:chars] + ELLIPSIS
 
 
+def _snippet(value: Any, needle: str) -> Any:
+    """Preview of a match: for a long string, the text AROUND the match
+    (exact characters, usable as a replace_text "find"), not its start."""
+    if not isinstance(value, str) or len(value) <= _PREVIEW_CHARS:
+        return _compact(value, _PREVIEW_CHARS)
+    at = value.casefold().find(needle) if needle else -1
+    if at < 0:
+        return _compact(value, _PREVIEW_CHARS)
+    start = max(0, at - 60)
+    end = min(len(value), start + _PREVIEW_CHARS)
+    return (
+        (ELLIPSIS if start else "")
+        + value[start:end]
+        + (ELLIPSIS if end < len(value) else "")
+    )
+
+
 def _type(value: Any) -> str:
     if isinstance(value, dict):
         return f"object({len(value)} keys)"
@@ -164,15 +181,24 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
             raise ToolError("scope must be values, keys or both")
         limit = _int(args.get("limit"), 20, 1, _MAX_LIMIT)
         levels = _int(args.get("context_levels"), 0, 0, _MAX_CONTEXT_LEVELS)
-        prefix = _parts(str(args.get("path_prefix", "") or ""))
-        root = _resolve(self.doc, prefix)
+        raw_prefix = str(args.get("path_prefix", "") or "")
+        roots = self._search_roots(raw_prefix)
+        prefix = roots[0][0][:-1] if _RANGE.match(raw_prefix) else _parts(raw_prefix)
 
         needle = query.casefold()
         matches: list[dict[str, Any]] = []
         total = 0
         # Pre-order walk: pop a node, test it, push its children reversed —
-        # matches come out in document order without sorting.
-        stack = list(reversed(_children(root, prefix)))
+        # matches come out in document order without sorting. A prefix that
+        # IS a value (a long string) is searched itself: before, searching
+        # inside /data/description found nothing (live 2026-11-13).
+        stack: list[tuple[list[str], Any, Any, bool]] = []
+        for parts, value in reversed(roots):
+            if isinstance(value, (dict, list)):
+                stack.extend(reversed(_children(value, parts)))
+            else:
+                key = parts[-1] if parts else ""
+                stack.append((parts, key, value, bool(parts) and not key.isdigit()))
         while stack:
             parts, key, value, keyed = stack.pop()
             hit = scope in ("keys", "both") and keyed and needle in str(key).casefold()
@@ -187,7 +213,7 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
                 if len(matches) < limit:
                     match = {
                         "path": _pointer(parts),
-                        "value": _compact(value, _PREVIEW_CHARS),
+                        "value": _snippet(value, needle),
                     }
                     if levels and len(parts) - len(prefix) >= 1:
                         up = parts[: max(len(prefix), len(parts) - levels)]
@@ -204,6 +230,23 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
             "matches": matches,
             "truncated": total > len(matches),
         }
+
+    def _search_roots(self, raw_prefix: str) -> list[tuple[list[str], Any]]:
+        """(parts, value) to search under: the prefix itself, or each element
+        of an index range such as /entries/40..50."""
+        m = _RANGE.match(raw_prefix)
+        if not m:
+            parts = _parts(raw_prefix)
+            return [(parts, _resolve(self.doc, parts))]
+        base = _parts(m.group(1))
+        items = _resolve(self.doc, base)
+        if not isinstance(items, list):
+            raise ToolError(f"{m.group(1) or '/'}: index ranges need an array")
+        start = int(m.group(2))
+        if start >= len(items):
+            raise ToolError(f"{m.group(1)}: array has only {len(items)} items")
+        end = min(int(m.group(3)), len(items) - 1) if m.group(3) else len(items) - 1
+        return [(base + [str(i)], items[i]) for i in range(start, end + 1)]
 
     def query(self, args: dict[str, Any]) -> dict[str, Any]:
         path = str(args.get("path", "") or "")
@@ -524,7 +567,7 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
                             },
                             "path_prefix": {
                                 "type": "string",
-                                "description": "Only search under this JSON Pointer, e.g. /Exports/12.",
+                                "description": "Only search under this JSON Pointer (e.g. /Exports/12), inside one long string (e.g. /data/description), or in an index range (e.g. /entries/40..50).",
                             },
                             "context_levels": {
                                 "type": "integer",
