@@ -107,10 +107,13 @@ deployments:
     # is the real cost: ~5 s at 75k tokens, ~22 s at 300k, flat under
     # concurrency. policy.budget_headroom / window_margin_s only apply with a
     # limit, so they are not set either. Pacing below is by call count.
-    # LiteLLM has no model-info entry for Nemotron. NIM's 400 states "maximum
-    # context length is 1000000 tokens"; a 300k-token prompt answered in 24 s
-    # (probed 2026-11-12).
-    context_tokens: 1000000
+    # LiteLLM has no model-info entry for Nemotron. The model card lists a
+    # 262K context; NIM's endpoint accepts up to 1M ("maximum context length
+    # is 1000000 tokens", a 300k-token prompt answered in 24 s, 2026-11-12),
+    # but quality past the card's figure is unvalidated, so plan to 262K.
+    # Inline vs skeleton is decided by LLM_MAX_INLINE_CHARS (~49k tokens),
+    # not by this; it caps the skeleton's first call (else input_too_large).
+    context_tokens: 262144
     # Free trial key: NVIDIA publishes no fixed number (varies by model and
     # load; see your build.nvidia.com account); 40 RPM is the widely
     # reported cap. Not enforced in a probe (180 calls in ~1 min, all 200,
