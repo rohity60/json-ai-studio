@@ -368,6 +368,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       let stored: { userId: string; assistantId: string } | null = null;
       let quotaStopped = false;
       let question: { text: string; options: string[] } | null = null;
+      // Whole-document review too large for one turn (ADR-0026): the server
+      // proposes a batch job instead of calling the model.
+      let jobProposal: api.JobProposal | null = null;
       // Turn progress (PRD B §8): plan, step X/N, finished lookups, waits
       // and retries, folded from plan/progress/tool/waiting/retrying events
       // and rendered by ChatPanel's progress panel. Older backends send only
@@ -443,6 +446,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           if (chunk.data.question?.text) {
             question = chunk.data.question;
             }
+          if (chunk.data.job_proposal) {
+            jobProposal = chunk.data.job_proposal;
+            }
           structureChanged = true;
           } else if (progressNext) {
           progress = progressNext;
@@ -469,6 +475,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                   progress: textAccumulator ? { ...progress, finishedAt: progress.finishedAt ?? Date.now() } : progress,
                   diffs: [...diffs],
                   question,
+                  ...(jobProposal ? { kind: 'job_proposal' as const, job_proposal: jobProposal } : {}),
                   };
                 }
 

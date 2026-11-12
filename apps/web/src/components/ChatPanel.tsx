@@ -9,6 +9,7 @@ import { peekStarterPrompts, clearStarterPrompts } from '@/lib/openInWorkspace';
 import { trackEvent } from '@/lib/gtagConversion';
 import Button from '@/components/ui/Button';
 import { formatDuration, type TurnProgress } from '@/lib/progress';
+import JobProposalCard from '@/components/JobProposalCard';
 
 // JSON-agnostic fallbacks — shown when no sample-specific prompts are wired
 // in (e.g. user's own upload or a restored session), so they must make sense
@@ -176,6 +177,8 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
   const [isStreaming, setIsStreaming] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [starterPrompts, setStarterPrompts] = useState<string[]>([]);
+  // Proposal cards the user dismissed (by turn id); the turn text stays.
+  const [dismissedProposals, setDismissedProposals] = useState<Set<string>>(new Set());
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -319,6 +322,12 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
                   <TurnProgressPanel progress={msg.progress} finished />
                 )}
                 {msg.role === 'assistant' && !!msg.diffs?.length && <DiffStatusList diffs={msg.diffs} />}
+                {msg.role === 'assistant' && msg.job_proposal && !dismissedProposals.has(msg.id) && (
+                  <JobProposalCard
+                    proposal={msg.job_proposal}
+                    onDismiss={() => setDismissedProposals((prev) => new Set(prev).add(msg.id))}
+                  />
+                )}
                 {msg.role === 'assistant' && msg.question?.text && (
                   <div className="mt-2 space-y-1.5">
                     {!msg.content.includes(msg.question.text) && (
