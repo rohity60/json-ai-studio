@@ -660,6 +660,16 @@ paths:
             {count,to}.
           - "service_unavailable" — provider outage (not rate limits).
             data: {"scope":"model","message":"...","retry_after":30}
+
+        Whole-document review (ADR-0026). A request to review or repair the
+        whole document (or a whole collection) that does not fit one planned
+        turn is not sent to the model. The stream is thinking → job_proposal
+        → complete; the complete explanation states the same numbers:
+          - "job_proposal" — what the review would cost as a batch job.
+            data: {"scope_path":"/entries","record_count":876,"batch_count":35,
+                   "est_tokens":412000,"eta_s":2400,"instruction":"..."}
+            (schema JobProposal). The client offers to start the job
+            (POST /api/sessions/{id}/jobs). Nothing is charged.
       operationId: sendChatTurn
       security:
          - simpleApiKey: []
@@ -1387,9 +1397,11 @@ components:
           description: Speaker of the chat turn
         kind:
           type: string
-          enum: [message, boundary]
+          enum: [message, boundary, job_proposal]
           default: message
-          description: boundary = context reset (e.g. version switch); earlier turns are not replayed to the LLM
+          description: |-
+            boundary = context reset (e.g. version switch); earlier turns are not replayed to the LLM.
+            job_proposal = the assistant proposed a batch review job instead of calling the model (see job_proposal).
         content:
           type: string
           description: User text, or the assistant's final explanation
@@ -1426,7 +1438,40 @@ components:
               items:
                 type: string
           required: [text]
+        job_proposal:
+          nullable: true
+          allOf:
+             - $ref: '#/components/schemas/JobProposal'
+          description: Set on kind=job_proposal turns so the proposal card can be shown again from history.
       required: [role, content]
+
+    JobProposal:
+      type: object
+      description: |-
+        Cost of reviewing a whole document as a batch job (ADR-0026). Computed
+        without a model call by the same packing function that sizes the real
+        batches: from the AI deployment's per-minute token budget and context
+        window and each record's token size — never a fixed record count.
+      properties:
+        scope_path:
+          type: string
+          description: JSON Pointer of the collection whose members are reviewed one by one ("" = the document root)
+        record_count:
+          type: integer
+          description: Items to review (members of scope_path plus long text fields outside it)
+        batch_count:
+          type: integer
+          description: Model calls the job needs on the current AI deployment
+        est_tokens:
+          type: integer
+          description: Estimated input tokens over all batches
+        eta_s:
+          type: integer
+          description: Estimated run time in seconds on the current AI deployment
+        instruction:
+          type: string
+          description: What to do with every record (the user's request)
+      required: [scope_path, record_count, batch_count, est_tokens, eta_s, instruction]
 
      # -- Wire Contracts --
 

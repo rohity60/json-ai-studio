@@ -24,7 +24,8 @@ from ..diff_utils import (
 )
 from ..settings import get_settings
 from ..gateway import SERVICE_BUSY_MESSAGE, GatewayService
-from . import chat_history_service, progress
+from . import chat_history_service, intent as intent_rules, progress
+from . import review_proposal
 from .turn_planner import plan_turn
 from .session_service import now_iso
 
@@ -418,6 +419,34 @@ async def _stream_llm(
         )
 
 
+def _job_proposal(
+    session: dict[str, Any],
+    working_json: dict[str, Any],
+    message: str,
+    history: list[dict[str, str]],
+) -> dict[str, Any] | None:
+    """JobProposal payload when this message is a whole-document review
+    that does not fit one turn (ADR-0026); None → run the turn as usual.
+    Never raises: a failed estimate must not break the chat."""
+    if not get_settings().intent_review_enabled:
+        return None
+    if not intent_rules.might_be_review(message):
+        return None
+    try:
+        intent = intent_rules.classify_intent(
+            message, intent_rules.doc_stats(working_json)
+        )
+        if intent.kind != intent_rules.REVIEW:
+            return None
+        target = review_proposal.default_deployment()
+        if target is None:
+            return None
+        return review_proposal.propose(working_json, message, intent, history, *target)
+    except Exception:
+        logger.exception("job proposal failed session=%s", session.get("id"))
+        return None
+
+
 async def chat_event_stream(
     session: dict[str, Any],
     working_json: dict[str, Any],
@@ -453,6 +482,46 @@ async def chat_event_stream(
             return
 
         history = chat_history_service.build_history_messages(session)
+
+        # Whole-document review that cannot fit one turn: say what it costs
+        # as a batch job instead of starting a lookup loop. No model call.
+        proposal = (
+            None
+            if focus_path
+            else _job_proposal(session, working_json, message, history)
+        )
+        if proposal is not None:
+            yield sse("thinking", {"text": "Sizing the review..."})
+            yield sse("job_proposal", proposal)
+            explanation = review_proposal.explanation(proposal)
+            user_turn = chat_history_service.make_turn("user", message)
+            assistant_turn = chat_history_service.make_turn(
+                "assistant", explanation, kind="job_proposal"
+            )
+            assistant_turn["job_proposal"] = proposal
+            chat_history_service.append_turns(session, user_turn, assistant_turn)
+            session["updated_at"] = now_iso()
+            await store.save_session(session)
+            logger.info(
+                "chat job proposal session=%s scope=%s records=%d batches=%d eta_s=%d",
+                session.get("id"),
+                proposal["scope_path"] or "/",
+                proposal["record_count"],
+                proposal["batch_count"],
+                proposal["eta_s"],
+            )
+            yield sse(
+                "complete",
+                {
+                    "working_json": working_json,
+                    "explanation": explanation,
+                    "job_proposal": proposal,
+                    "user_turn_id": user_turn["id"],
+                    "assistant_turn_id": assistant_turn["id"],
+                },
+            )
+            return
+
         outcome: dict[str, Any] = {}
         async for event_text in _stream_llm(
             session.get("id", "chat-session"),

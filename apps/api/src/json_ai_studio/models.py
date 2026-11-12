@@ -54,14 +54,27 @@ class ChatTurn(BaseModel):
 
     id: str = Field(default_factory=lambda: uuid4().hex)
     role: Literal["user", "assistant"]
-    kind: Literal["message", "boundary"] = "message"
+    kind: Literal["message", "boundary", "job_proposal"] = "message"
     content: str
     diffs: list[DiffEntry] | None = None
     # Bulk ops the model emitted (pattern + where), expanded into `diffs`.
     bulk: list[dict[str, Any]] | None = None
     # Clarifying question the model asked: {"text": str, "options": [str]}.
     question: dict[str, Any] | None = None
+    # kind="job_proposal": the proposed batch review job (ADR-0026).
+    job_proposal: JobProposal | None = None
     created_at: datetime | None = None
+
+
+class JobProposal(BaseModel):
+    """Cost of a whole-document review as a batch job (spec: JobProposal)."""
+
+    scope_path: str
+    record_count: int
+    batch_count: int
+    est_tokens: int
+    eta_s: int
+    instruction: str
 
 
 # -- Wire Contracts --

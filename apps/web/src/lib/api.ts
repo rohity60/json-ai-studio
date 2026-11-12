@@ -59,18 +59,31 @@ export type DiffEntry = {
     failure_reason?: string | null;
 };
 
+/** Cost of reviewing the whole document as a batch job (ADR-0026). Sent as
+ *  the SSE `job_proposal` event and stored on the proposal turn. */
+export type JobProposal = {
+    scope_path: string;
+    record_count: number;
+    batch_count: number;
+    est_tokens: number;
+    eta_s: number;
+    instruction: string;
+};
+
 /** One stored chat turn. `boundary` = context reset (version switch):
- *  earlier turns stay visible but are no longer sent to the model. */
+ *  earlier turns stay visible but are no longer sent to the model.
+ *  `job_proposal` = the assistant proposed a batch review job. */
 export type ChatTurn = {
     id: string;
     role: 'user' | 'assistant';
-    kind?: 'message' | 'boundary';
+    kind?: 'message' | 'boundary' | 'job_proposal';
     content: string;
     diffs?: DiffEntry[] | null;
     created_at?: string | null;
     /** Clarifying question (ADR-0024): options render as buttons; a click
      *  sends the option as the next message. */
     question?: { text: string; options: string[] } | null;
+    job_proposal?: JobProposal | null;
 };
 
 export async function createSession(name: string, apiKey: string) {
