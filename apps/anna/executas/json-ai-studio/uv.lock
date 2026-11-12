@@ -2454,7 +2454,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tool-dev-json-ai-studio"
+name = "tool-json-ai-studio-json-ai-studio-nk262zbg"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

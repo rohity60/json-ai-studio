@@ -23,7 +23,7 @@ _PROTOCOL_OUT = sys.stdout
 sys.stdout = sys.stderr
 
 VERSION = "0.1.0"
-NAME = "tool-dev-json-ai-studio"
+NAME = "tool-json-ai-studio-json-ai-studio-nk262zbg"
 
 logging.basicConfig(
     stream=sys.stderr,

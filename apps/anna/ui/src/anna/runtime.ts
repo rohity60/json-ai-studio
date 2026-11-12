@@ -4,7 +4,7 @@
 // an npm dependency of the bundle, so it is loaded at runtime.
 
 const SDK_URL = '/static/anna-apps/_sdk/latest/index.js';
-export const TOOL_ID = 'tool-dev-json-ai-studio';
+export const TOOL_ID = 'tool-json-ai-studio-json-ai-studio-nk262zbg';
 
 // Sync tool calls may run up to 90 s on the host.
 const SYNC_TIMEOUT_MS = 90_000;

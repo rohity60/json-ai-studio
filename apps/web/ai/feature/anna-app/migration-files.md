@@ -96,8 +96,10 @@ re-checked in harness; `build_binary.sh` (darwin-arm64: 51 MB archive / 96 MB un
 against the binary; litellm pinned to 1.89.3 — 1.109 doubled the size); `executa.json` `binary_artifacts`;
 `.github/workflows/anna-executa.yml`; ADR-0026; CLAUDE.md.
 
-Left (manual / outward-facing): mint real tool id and replace `tool-dev-json-ai-studio` (manifest,
-executa.json, `ui/src/anna/runtime.ts`); register CI as trusted publisher + set repo vars `ANNA_TOOL_ID`,
+Tool id minted 2026-11-12: `tool-json-ai-studio-json-ai-studio-nk262zbg` (manifest, executa.json,
+plugin, pyproject, `ui/src/anna/runtime.ts`).
+
+Left (manual / outward-facing): register CI as trusted publisher + set repo vars `ANNA_TOOL_ID`,
 `ANNA_APP_HOST`; logo + screenshots + privacy URL; `apps push` → `apps cut 0.1.0` → `submit-review` →
 `release`; first linux-x86_64 CI build (unverified natively); trim APS round trips; stray dev app `anna`.
 
