@@ -155,3 +155,29 @@ def test_progress_lines_for_batch_read_and_outline():
     assert progress.describe_tool_call("outline", {}, box.last_result).startswith(
         "Measured the document ("
     )
+
+
+def test_last_round_says_stop_and_report_instead_of_read_more():
+    box = JsonToolbox(_doc(), 4000, 60_000)
+    box.set_batch_room(12_000, last_round=True)
+    out = _call(box, "read", path="/entries/0..39")
+    assert "next_paths" not in out
+    assert out["covered"]["first"] == "/entries/0"
+    assert out["continue_from"] == f"/entries/{out['returned']}"
+    assert "Do NOT read again" in out["hint"]
+    # room down to one single result → same, even before the last round
+    box.set_batch_room(5_000)
+    assert "continue_from" in _call(box, "read", path="/entries/0..39")
+    # plenty of room, not the last round → keep reading
+    box.set_batch_room(12_000)
+    assert "next_paths" in _call(box, "read", path="/entries/0..39")
+
+
+def test_explicit_range_reads_only_that_range():
+    box = JsonToolbox(_doc(60, 50), 4000, 60_000)
+    box.set_batch_room(12_000)
+    out = _call(box, "read", path="/entries/40..50")
+    assert [r["path"] for r in out["results"]] == [
+        f"/entries/{i}" for i in range(40, 51)
+    ]
+    assert "remaining" not in out

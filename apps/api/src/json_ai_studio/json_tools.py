@@ -110,6 +110,8 @@ TOOLS — this document is too large to show in full. Scan the SKELETON above fo
 T0. Tool calls come BEFORE your final answer and are not "output": the "EXACTLY ONE JSON object" rule applies only to your final reply. If answering needs any value, element or reference not visible in the SKELETON, your first response MUST be a tool call — do not describe a plan to search, actually call search/read.
 T0b. search = free text inside ONE value; query = conditions on fields of the same element. Never put "field: value" pairs into search.
 T0c. search finds LITERAL text that is in the document. Never search for words describing the task ("errors", "typos", "censorship", a language name, the user's sentence) — for reviews use outline, then read.
+T0d. When the user names a part ("entries 40 to 50", "the next 20 from 38"), read exactly that range (path "/entries/40..50") and nothing else. Indexes are 0-based as in the paths; if the user counts from 1, say which indexes you used.
+T0e. If a read result says the turn has no room for more, stop reading: answer for what you read and state which range was covered and where to continue.
 T1. Never guess a value you cannot see: search for it, read it, and use the exact path and old_value the tools return.
 T2. Follow references (an index or id that points elsewhere, e.g. into /Imports or /Exports) by reading the target, not by assuming.
 T2b. To change words or sentences inside a long string, use "replace_text" diffs (TEXT EDITS) with "find" copied exactly from the "text" you read — never rewrite the whole string from a partial read.
@@ -130,13 +132,21 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
             result_max_chars, batch_max_chars or result_max_chars * 3
         )
         self.batch_room = min(self.batch_max_chars, result_max_chars * 3)
+        self.reads_end = False  # no further read can follow this round
         self.last_result: dict[str, Any] | None = None
 
-    def set_batch_room(self, chars: int | None) -> None:
+    def set_batch_room(self, chars: int | None, last_round: bool = False) -> None:
         """Characters batch reads may return in the coming round. `chars`
         comes from the deployment's token budget and context window (None =
         no known limit → 3 single results). Never below one single result,
         never above the hard cap."""
+        # After this round nothing more can be read in this turn: either
+        # the model must answer next, or the room left is already down to a
+        # single result. Batch reads then say "stop and report" instead of
+        # "read the rest".
+        self.reads_end = last_round or (
+            chars is not None and chars < self.result_max_chars * 2
+        )
         if chars is None:
             chars = self.result_max_chars * 3
         self.batch_room = max(
@@ -362,11 +372,26 @@ T4. Tools only read. When done, reply with the usual single JSON object. Analysi
         rest = paths[done:]
         if rest:
             out["remaining"] = len(rest)
-            out["next_paths"] = rest[:20]
-            out["hint"] = (
-                f"{done} of {len(paths)} values fit this AI model's limit for "
-                "one call; read the rest with paths=next_paths."
-            )
+            if self.reads_end:
+                # The turn has no room for more: a model told to "read the
+                # rest" keeps trying and is cut off without saying how far
+                # it got.
+                out["covered"] = {"first": paths[0], "last": paths[done - 1]}
+                out["continue_from"] = rest[0]
+                out["hint"] = (
+                    f"Only {done} of {len(paths)} values fit and this turn has "
+                    "no room for more. Do NOT read again. Answer now for what "
+                    "you have read, and state in the explanation exactly what "
+                    f"was covered ({paths[0]} to {paths[done - 1]}) and that "
+                    f"{len(rest)} remain, starting at {rest[0]} — the user can "
+                    "ask to continue from there."
+                )
+            else:
+                out["next_paths"] = rest[:20]
+                out["hint"] = (
+                    f"{done} of {len(paths)} values fit this AI model's limit "
+                    "for one call; read the rest with paths=next_paths."
+                )
         # Calls of the same round share the room.
         self.batch_room = max(self.result_max_chars, self.batch_room - used)
         return out

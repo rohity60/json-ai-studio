@@ -1102,7 +1102,8 @@ class GatewayService:
             # budget and context window leave room for (shared by the calls
             # of this round).
             toolbox.set_batch_room(
-                tool_result_room_chars(deployment, litellm_model, messages)
+                tool_result_room_chars(deployment, litellm_model, messages),
+                last_round=round_no + 1 >= max_rounds,
             )
             for c in calls:
                 result = toolbox.call(c.function.name, c.function.arguments)
