@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import time
 from typing import Any, AsyncGenerator
 from uuid import uuid4
@@ -27,7 +28,7 @@ from ..db.session_store import store
 from ..diff_utils import DiffUtils, parse_llm_response
 from ..gateway import SERVICE_BUSY_MESSAGE, GatewayService
 from ..settings import get_settings
-from ..text_edits import expand_text_edits
+from ..text_edits import REPLACE_TEXT, expand_text_edits
 from . import chat_history_service, job_packing, review_proposal
 from . import deployment_budget as budget
 from .errors import ConflictError, InvalidInputError, NotFoundError
@@ -262,6 +263,35 @@ def _unreadable(text: str) -> bool:
         return True
 
 
+def _retarget_text_edits(diffs: list[dict[str, Any]], doc: Any) -> list[dict[str, Any]]:
+    """Point a replace_text aimed at a whole record at the string inside it.
+
+    Models often name the record they were shown ("/entries/7") instead of
+    the field ("/entries/7/content") — live run 2026-11-13, Nemotron: every
+    fix of a batch addressed the record. When exactly one string under that
+    path contains the "find" text, that string is the only possible target.
+    """
+    out = []
+    for d in diffs:
+        if d.get("operation") == REPLACE_TEXT and isinstance(d.get("find"), str):
+            node = job_packing.resolve(doc, str(d.get("path", "")))
+            if isinstance(node, (dict, list)):
+                hits = [
+                    path
+                    for path, value in job_packing._leaves(
+                        job_packing.Unit(str(d["path"]), node)
+                    )
+                    if isinstance(value, str) and d["find"] in value
+                ]
+                if len(hits) == 1:
+                    d = {**d, "path": hits[0]}
+        out.append(d)
+    return out
+
+
+_NOTE_PATH = re.compile(r"^Text edit on (\S+) ")
+
+
 def _hash(value: Any) -> str:
     text = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
@@ -433,7 +463,16 @@ async def run_batch(
         # is NOW. Text edits run on the full value; every diff goes through
         # the truncation guard and the normal failed-diff path (C-36).
         doc = session["working_json"]
+        diffs = _retarget_text_edits(diffs, doc)
         diffs, notes = expand_text_edits(diffs, doc)
+        if notes:
+            logger.info(
+                "job batch text edits skipped session=%s job=%s batch=%d notes=%s",
+                session_id,
+                job["id"],
+                batch_no,
+                notes[:10],
+            )
         from .chat_service import _is_noop
 
         diffs = [d for d in diffs if not _is_noop(d, doc)]
@@ -447,6 +486,22 @@ async def run_batch(
             for d, r in [*failed, *((d, _OUT_OF_BATCH) for d in outside)]
             if d.get("operation") in ("add", "modify", "delete")
         ]
+        # Text edits that could not apply are shown as failed changes too,
+        # so a batch whose fixes all missed never looks clean.
+        for note in notes:
+            match = _NOTE_PATH.match(note)
+            failed_entries.append(
+                {
+                    "path": match.group(1) if match else "",
+                    "operation": "modify",
+                    "old_value": None,
+                    "new_value": None,
+                    "id": str(uuid4()),
+                    "status": "failed",
+                    "failure_reason": note,
+                    **tag,
+                }
+            )
         session["working_json"] = merged
 
         # Progress.
@@ -473,8 +528,6 @@ async def run_batch(
         )
         if failed_entries:
             content += f", {len(failed_entries)} could not be applied"
-        if notes:
-            content += f" ({len(notes)} text edit(s) skipped)"
         content += "."
         turn = chat_history_service.make_turn(
             "assistant",

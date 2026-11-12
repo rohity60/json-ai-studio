@@ -321,6 +321,54 @@ class TestOneBatch:
         assert len({len(s) for s in llm.systems}) == 1
         assert max(p.raw_estimate for p in llm.plans) <= room + 1_500
 
+    def test_text_edit_on_a_record_path_is_retargeted_to_its_field(
+        self, client, sid, job, llm
+    ):
+        # Live 2026-11-13 (Nemotron): every fix named the record, not the
+        # field. The one string field that contains "find" is the target.
+        llm.script = [
+            lambda records: {
+                "diffs": [
+                    {
+                        "path": records[0]["path"],
+                        "operation": "replace_text",
+                        "find": "teh entry",
+                        "replace": "the entry",
+                    }
+                ],
+                "explanation": "x",
+            }
+        ]
+        done = event(next_batch(client, sid, job["id"]), "batch_complete")
+        assert [(d["path"], d["status"]) for d in done["diffs"]] == [
+            ("/entries/0/content", "pending")
+        ]
+
+    def test_text_edit_that_cannot_apply_is_a_failed_change(
+        self, client, sid, job, llm
+    ):
+        llm.script = [
+            lambda records: {
+                "diffs": [
+                    {
+                        "path": "/entries/0/content",
+                        "operation": "replace_text",
+                        "find": "not in the text",
+                        "replace": "x",
+                    }
+                ],
+                "explanation": "x",
+            }
+        ]
+        done = event(next_batch(client, sid, job["id"]), "batch_complete")
+        assert [(d["path"], d["status"]) for d in done["diffs"]] == [
+            ("/entries/0/content", "failed")
+        ]
+        assert "not found" in done["diffs"][0]["failure_reason"]
+        assert done["job"]["batches"][0]["failed"] == 1
+        turn = session_of(client, sid)["conversation_history"][-1]
+        assert "1 could not be applied" in turn["content"]
+
     def test_change_outside_the_batch_is_refused(self, client, sid, job, llm):
         llm.script = [
             lambda records: {
