@@ -20,6 +20,7 @@ from . import deployment_budget as budget
 
 _TERM_MAX = 40  # chars of a user search term shown back
 _AVG_CALL_S = 4.0  # typical model call latency used for the ETA
+_GROWTH_THRESHOLD = 3  # first call > 1/3 of the budget → later steps 1/window
 
 
 def sse(event: str, data: dict[str, Any]) -> str:
@@ -59,6 +60,17 @@ def calls_per_min(deployment: Any, model: str, est_tokens: int) -> float | None:
     return min(limits) if limits else None
 
 
+def _rounds_outgrow_window(deployment: Any, model: str, est_tokens: int) -> bool:
+    """True when the first call already uses over a third of the usable
+    per-minute budget. Live (Google, 2026-11-12): rounds grew 5.7k → 8.5k
+    tokens against 12.8k usable, so from step 2 only one fit per minute."""
+    usable = budget.plan_budget(deployment)
+    if not usable or est_tokens <= 0:
+        return False
+    tokens = budget.calibrated(budget.budget_key(deployment, model), est_tokens)
+    return tokens * _GROWTH_THRESHOLD > usable
+
+
 def retry_allowance_s(deployment: Any) -> float:
     """Extra time one call may take when the provider errors and the
     deployment policy retries it: every scheduled cooldown plus the repeat
@@ -75,6 +87,11 @@ def plan_event(
     cpm = calls_per_min(deployment, model, est_tokens)
     if cpm is not None and cpm > 0:
         per_step = max(60.0 / cpm, _AVG_CALL_S)
+        if steps > 1 and _rounds_outgrow_window(deployment, model, est_tokens):
+            # Every lookup step resends the earlier results, so later steps
+            # grow past half the per-minute budget: one step per window.
+            per_step = max(per_step, budget.window_span(deployment))
+            cpm = min(cpm, 60.0 / per_step)
         eta_s = (steps - 1) * per_step + _AVG_CALL_S
     else:
         eta_s = steps * _AVG_CALL_S
