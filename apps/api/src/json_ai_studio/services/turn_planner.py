@@ -86,6 +86,27 @@ def turn_budget(deployment: Any, litellm_model: str) -> int | None:
     return min(limits) if limits else None
 
 
+def tool_result_room_chars(
+    deployment: Any, litellm_model: str, messages: list[dict[str, Any]]
+) -> int | None:
+    """Characters one batch tool result may add so that the NEXT call —
+    everything sent so far plus that result — still fits the deployment's
+    per-minute token budget and the model's context window. Only
+    `chat_tool_batch_room_share` of the free room is used; the rest stays
+    for later rounds and the answer. None: the deployment has no known limit."""
+    limit = turn_budget(deployment, litellm_model)
+    if limit is None:
+        return None
+    settings = get_settings()
+    key = budget.budget_key(deployment, litellm_model)
+    used = budget.calibrated(key, budget.estimate_tokens(litellm_model, messages))
+    room_tokens = max(0, limit - used) * settings.chat_tool_batch_room_share
+    chars = sum(len(str(m.get("content") or "")) for m in messages)
+    # Characters per (provider-counted) token of this very conversation.
+    per_token = min(4.0, max(2.0, chars / used)) if used else 3.0
+    return int(room_tokens * per_token)
+
+
 def plan_turn(
     working_json: Any,
     message: str,
@@ -122,7 +143,11 @@ def plan_turn(
             mode="skeleton" if skeleton else "inline",
             messages=msgs,
             toolbox=(
-                JsonToolbox(working_json, settings.chat_tool_result_max_chars)
+                JsonToolbox(
+                    working_json,
+                    settings.chat_tool_result_max_chars,
+                    settings.chat_tool_batch_max_chars,
+                )
                 if skeleton
                 else None
             ),
@@ -133,7 +158,11 @@ def plan_turn(
     def toolbox() -> JsonToolbox | None:
         if not tools_ok:
             return None
-        return JsonToolbox(working_json, settings.chat_tool_result_max_chars)
+        return JsonToolbox(
+            working_json,
+            settings.chat_tool_result_max_chars,
+            settings.chat_tool_batch_max_chars,
+        )
 
     histories = [history, []] if history else [[]]
 

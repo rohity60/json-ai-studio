@@ -208,6 +208,17 @@ def describe_tool_call(
         )
         return f"Queried {path}{cond} — {found}"
 
+    if name == "outline":
+        where = str(args.get("path") or "") or "the document"
+        return f"Measured {where} ({int(result.get('total_chars') or 0):,} characters)"
+
+    if name == "read" and "results" in result:
+        got = [str(r.get("path")) for r in result.get("results") or []]
+        span = got[0] if len(got) == 1 else f"{got[0]} … {got[-1]}" if got else ""
+        left = int(result.get("remaining") or 0)
+        more = f" — {left:,} more did not fit this AI model's limit" if left else ""
+        return f"Read {_count(len(got), 'item', 'items')} ({span}){more}"
+
     if name == "read":
         path = str(args.get("path") or "") or "the document"
         size = _value_size(doc, path)

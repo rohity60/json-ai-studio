@@ -39,7 +39,7 @@ from .json_tools import JsonToolbox
 from .services import chat_history_service, credit_service
 from .services import deployment_budget as budget
 from .services import progress
-from .services.turn_planner import TooLarge, TurnPlan
+from .services.turn_planner import TooLarge, TurnPlan, tool_result_room_chars
 from .settings import get_settings
 
 logger = logging.getLogger("json_ai_studio.gateway")
@@ -1097,6 +1097,12 @@ class GatewayService:
                         for c in calls
                     ],
                 }
+            )
+            # Batch reads return as many records as this deployment's token
+            # budget and context window leave room for (shared by the calls
+            # of this round).
+            toolbox.set_batch_room(
+                tool_result_room_chars(deployment, litellm_model, messages)
             )
             for c in calls:
                 result = toolbox.call(c.function.name, c.function.arguments)
