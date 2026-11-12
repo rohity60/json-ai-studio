@@ -309,7 +309,9 @@ def _estimate_rest(job: dict[str, Any], total: int) -> None:
     else:  # still inside the first (split) record
         left = max(1, (job.get("batch_count") or done + 1) - done)
     job["batch_count"] = done + left
-    per_batch = max(job["elapsed_s"], job.get("pace_s", 0.0)) / max(1, done)
+    # The last batch's real time is the best guide: the first batch of a
+    # run usually skips the budget wait every later batch pays.
+    per_batch = max(job.get("last_s", 0.0), job.get("pace_s", 0.0) / max(1, done))
     job["eta_s"] = int(math.ceil(left * per_batch))
 
 
@@ -521,7 +523,8 @@ async def run_batch(
         job["shrink"] = 1.0
         job["error"] = None
         job["total"] = len(units)
-        job["elapsed_s"] += time.monotonic() - started
+        job["last_s"] = time.monotonic() - started
+        job["elapsed_s"] += job["last_s"]
         job["pace_s"] = job.get("pace_s", 0.0) + holder.get("pace_s", 0.0)
         finished = job["cursor"] >= len(units)
         job["status"] = "done" if finished else "ready"

@@ -369,14 +369,19 @@ class JobPlan:
 
 
 def batch_seconds(deployment: Any, total_tokens: int, call_s: float) -> float:
-    """Wall time one batch of `total_tokens` takes at a sustained pace:
-    the call itself, the pacing interval, and — on a per-minute budget —
-    its share of the window."""
-    seconds = max(call_s, float(getattr(deployment, "min_call_interval_s", 0) or 0))
+    """Wall time one batch of `total_tokens` takes at a sustained pace.
+
+    On a per-minute budget a call's tokens count from when it FINISHES
+    (deployment_budget.finish), so the next batch waits for the call
+    itself plus this batch's share of the window — they add up (live,
+    Google 2026-11-13: ~58 s call + ~58 s window share ≈ 118 s per batch).
+    Pacing (min_call_interval_s) is a floor.
+    """
+    seconds = call_s
     usable = budget.plan_budget(deployment)
     if usable:
-        seconds = max(seconds, total_tokens / usable * budget.window_span(deployment))
-    return seconds
+        seconds += total_tokens / usable * budget.window_span(deployment)
+    return max(seconds, float(getattr(deployment, "min_call_interval_s", 0) or 0))
 
 
 def simulate(
