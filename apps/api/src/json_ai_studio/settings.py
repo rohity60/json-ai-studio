@@ -105,6 +105,34 @@ class Settings(BaseSettings):
     # matches per op so a bad pattern can't rewrite a whole huge document.
     bulk_max_matches: int = 5_000
 
+    # Whole-document review as batch jobs (ADR-0026). A "review everything"
+    # request that does not fit one turn becomes a job proposal; the client
+    # then asks for one batch at a time. Batch size is computed, never a
+    # fixed record count: tokens of records per batch =
+    #   min(per-minute budget − prompt overhead − retry reserve,
+    #       context window − prompt overhead,
+    #       llm_max_tokens × job_input_per_output).
+    intent_review_enabled: bool = True
+    # Floor for the lean batch prompt's overhead (instruction + output
+    # contract + framing); the measured prompt is used when it is larger.
+    job_lean_overhead_tokens: int = 1_500
+    # Share of the per-minute budget held back per batch (estimate error; a
+    # failed call still counts against the provider's minute).
+    job_retry_reserve_share: float = 0.1
+    # Input tokens of records per output token the model may write: a batch
+    # the model cannot answer in full (llm_max_tokens) would be cut off.
+    job_input_per_output: float = 1.0
+    # Optional safety cap on records per batch; 0 = no cap (size decides).
+    job_max_records_per_batch: int = 0
+    # Batch room when the deployment has neither a per-minute limit nor a
+    # known context window (local models).
+    job_fallback_batch_tokens: int = 8_000
+    # Strings outside the reviewed collection at least this long are
+    # reviewed too (leading items of the job).
+    job_long_string_min_chars: int = 400
+    # Typical duration of one batch call, for the ETA before any batch ran.
+    job_est_call_s: float = 20.0
+
     # Anonymous (shared pool) quota defaults — match pre-login behavior.
     # Token limit sized for large-JSON editing: one inline doc at the
     # llm_max_inline_chars cap costs ~49k prompt tokens (~2.7 chars/token);
