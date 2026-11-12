@@ -3,6 +3,7 @@
 import json
 from types import SimpleNamespace
 
+from src.json_ai_studio.providers.policy import DeploymentPolicy
 from src.json_ai_studio.services import deployment_budget as budget
 from src.json_ai_studio.services import progress
 from src.json_ai_studio.services.chat_service import parse_sse
@@ -104,3 +105,72 @@ def test_calling_messages():
         and final["message"] == "Step 5/5 — writing the answer"
     )
     assert _ev(progress.applying(1))[1]["message"] == "Applying 1 change…"
+
+
+def _policy(**kw):
+    return DeploymentPolicy.from_config(kw) if kw else DeploymentPolicy.defaults()
+
+
+def test_retry_allowance_follows_policy_schedule():
+    dep = SimpleNamespace(
+        policy=_policy(
+            transient_retry_attempts=3, transient_retry_schedule_s=[10, 30, 60]
+        )
+    )
+    # 10 + 30 + 60 s of cooldowns + 3 repeat calls of ~4 s
+    assert progress.retry_allowance_s(dep) == 112
+    off = SimpleNamespace(policy=_policy(transient_retry_attempts=0))
+    assert progress.retry_allowance_s(off) == 0
+
+
+def test_plan_reports_eta_with_retries():
+    budget.reset()
+    dep = SimpleNamespace(
+        name="g",
+        min_call_interval_s=15,
+        tpm_input_limit=16_000,
+        policy=_policy(
+            transient_retry_attempts=3, transient_retry_schedule_s=[10, 30, 60]
+        ),
+    )
+    _, data = _ev(progress.plan_event("skeleton", 5, dep, "m", 6000))
+    assert data["eta_max_s"] == data["eta_s"] + 112
+    assert "if the AI provider has temporary errors" in data["message"]
+    assert data["message"].endswith("retries automatically).")
+
+
+def test_plan_without_retries_keeps_short_message():
+    budget.reset()
+    dep = SimpleNamespace(
+        name="g",
+        min_call_interval_s=15,
+        tpm_input_limit=16_000,
+        policy=_policy(transient_retry_attempts=0),
+    )
+    _, data = _ev(progress.plan_event("skeleton", 5, dep, "m", 6000))
+    assert data["eta_max_s"] == data["eta_s"]
+    assert "temporary errors" not in data["message"]
+    assert data["message"].endswith(".")
+
+
+def test_plan_assumes_one_step_per_window_when_rounds_grow():
+    """Live Google card turn: first call ~5.7k of 12.8k usable → later
+    steps waited a full window each (337 s actual vs ~2 min planned)."""
+    budget.reset()
+    dep = SimpleNamespace(
+        name="g",
+        min_call_interval_s=15,
+        tpm_input_limit=16_000,
+        policy=_policy(
+            budget_headroom=0.8,
+            window_margin_s=4,
+            transient_retry_attempts=0,
+        ),
+    )
+    _, data = _ev(progress.plan_event("skeleton", 5, dep, "m", 5_700))
+    assert data["eta_s"] == 4 * 64 + 4  # four later steps, one 64 s window each
+    assert data["calls_per_min"] < 1
+    assert "about 1 step per minute" in data["message"]
+    # Small first call: two+ steps still fit per minute.
+    _, small = _ev(progress.plan_event("skeleton", 5, dep, "m", 2_000))
+    assert small["eta_s"] < 100
