@@ -26,8 +26,13 @@ class SessionStore(ABC):
     """Abstract session persistence."""
 
     @abstractmethod
-    async def create_session(self, *, name: str | None = None) -> dict[str, Any]:
-        """Create and persist a new session; return the full session dict."""
+    async def create_session(
+        self, *, name: str | None = None, owner: str | None = None
+    ) -> dict[str, Any]:
+        """Create and persist a new session; return the full session dict.
+
+        ``owner`` is the creating caller's owner id (ADR-0027).
+        """
 
     @abstractmethod
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
@@ -52,12 +57,15 @@ class InMemorySessionStore(SessionStore):
     def __init__(self) -> None:
         self._sessions: dict[str, dict[str, Any]] = {}
 
-    async def create_session(self, *, name: str | None = None) -> dict[str, Any]:
+    async def create_session(
+        self, *, name: str | None = None, owner: str | None = None
+    ) -> dict[str, Any]:
         sid = uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
         session: dict[str, Any] = {
             "id": sid,
             "name": name,
+            "owner": owner,
             "working_json": {},
             "baseline_json": {},
             "versions": [],
@@ -102,8 +110,15 @@ class _ActiveStore(SessionStore):
     def __init__(self, backend: SessionStore) -> None:
         self._backend = backend
 
-    async def create_session(self, *, name: str | None = None) -> dict[str, Any]:
-        return await self._backend.create_session(name=name)
+    def __getattr__(self, name: str) -> Any:
+        # Anything beyond the interface (e.g. the in-memory dict tests
+        # inspect) comes from the active backend.
+        return getattr(self._backend, name)
+
+    async def create_session(
+        self, *, name: str | None = None, owner: str | None = None
+    ) -> dict[str, Any]:
+        return await self._backend.create_session(name=name, owner=owner)
 
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
         return await self._backend.get_session(session_id)
@@ -130,7 +145,7 @@ def set_store(backend: SessionStore) -> SessionStore:
     """Swap the backend every service uses; returns the previous one.
 
     The web API keeps the in-memory default. The Anna Executa installs a
-    store backed by Anna's per-user storage (ADR-0026).
+    store backed by Anna's per-user storage (ADR-0028).
     """
     previous = get_store()
     store._backend = backend  # type: ignore[attr-defined]

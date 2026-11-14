@@ -1,4 +1,4 @@
-"""Anna provider tests (ADR-0026).
+"""Anna provider tests (ADR-0028).
 
 The Anna App's Executa serves LLM calls through a litellm custom provider
 registered under ``anna/``. These tests register a stand-in handler there

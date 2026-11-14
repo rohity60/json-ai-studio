@@ -1,4 +1,4 @@
-"""JSON AI Studio — Anna Executa adapters (ADR-0026).
+"""JSON AI Studio — Anna Executa adapters (ADR-0028).
 
 The engine itself (gateway, turn planner, diff engine, services) is the
 shared ``json_ai_studio`` package. This package only adapts it to the

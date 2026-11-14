@@ -205,6 +205,7 @@ class TestTools:
             "search",
             "query",
             "read",
+            "outline",
         ]
 
     def test_query_matches_two_fields_at_once(self):

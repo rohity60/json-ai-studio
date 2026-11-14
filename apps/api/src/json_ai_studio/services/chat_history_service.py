@@ -182,10 +182,38 @@ def _replayable_pairs(session: dict[str, Any]) -> list[list[dict[str, str]]]:
             start = i + 1
     pairs: list[list[dict[str, str]]] = []
     pending_user: dict[str, Any] | None = None
+    job_progress: dict[str, Any] | None = None
+
+    def flush_job() -> None:
+        # A review job's batches (ADR-0026) replay as ONE compact pair: the
+        # latest progress line, without the batches' diffs.
+        nonlocal job_progress
+        if job_progress is not None:
+            pairs.append(
+                [
+                    {"role": "user", "content": "(review job progress)"},
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "diffs": [],
+                                "explanation": job_progress.get("content", ""),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ]
+            )
+            job_progress = None
+
     for turn in history[start:]:
         if turn.get("kind") == "boundary":
             continue
+        if turn.get("kind") == "job_batch":
+            job_progress = turn
+            continue
         if turn.get("role") == "user":
+            flush_job()
             pending_user = turn
         elif turn.get("role") == "assistant" and pending_user is not None:
             pairs.append(
@@ -195,6 +223,7 @@ def _replayable_pairs(session: dict[str, Any]) -> list[list[dict[str, str]]]:
                 ]
             )
             pending_user = None
+    flush_job()
     return pairs
 
 

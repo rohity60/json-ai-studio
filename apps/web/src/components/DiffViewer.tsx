@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { useSession } from '@/context/SessionContext';
 import Button from '@/components/ui/Button';
 import { pendingDiffs } from '@/lib/chatHistory';
+import type { DiffEntry } from '@/lib/api';
 
 type DiffViewerProps = {
   before: Record<string, unknown>;
@@ -28,7 +29,7 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'diffviewer' | 'sidebyside'>('diffviewer');
 
-  const { acceptDiff, removeDiff, acceptAllDiffs, rejectAllDiffs, state } = useSession();
+  const { acceptDiff, removeDiff, acceptAllDiffs, rejectAllDiffs, acceptJobBatch, rejectJobBatch, state } = useSession();
 
   // Pending diffs from every turn: the user may have kept chatting without
   // resolving earlier proposals, which are still previewed in working_json.
@@ -42,6 +43,21 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
   };
 
   const hasDiffs = localDiffs.length > 0;
+
+  // Review-job diffs are grouped by batch, each with its own Accept all /
+  // Reject all (ADR-0026, WC-04); chat diffs stay in one flat group.
+  const groups = useMemo(() => {
+    const out: { key: string; jobId: string | null; batchNo: number | null; diffs: DiffEntry[] }[] = [];
+    for (const d of localDiffs) {
+      const jobId = d.job_id ?? null;
+      const batchNo = jobId ? d.batch_no ?? null : null;
+      const key = jobId ? `${jobId}:${batchNo}` : 'chat';
+      let group = out.find((g) => g.key === key);
+      if (!group) { group = { key, jobId, batchNo, diffs: [] }; out.push(group); }
+      group.diffs.push(d);
+    }
+    return out;
+  }, [localDiffs]);
 
   if (Object.keys(before).length === 0 && Object.keys(after).length === 0) {
     return (
@@ -120,37 +136,64 @@ export default function DiffViewer({ before, after, onResolved }: DiffViewerProp
       {hasDiffs && (
         <div className='border-t pt-4'>
           <p className='text-sm font-semibold mb-2'>Change List ({localDiffs.length})</p>
-          {localDiffs.map((diff) => (
-            <div
-              key={diff.id}
-              className={`flex items-center justify-between p-2 rounded-lg mb-1 ${opColors[diff.operation] || ''}`}
-            >
-              <span className='text-xs font-mono flex gap-2'>
-                {diff.path}{' '}
-                <span className='uppercase'>{diff.operation}</span>
-              </span>
-              <div className='flex gap-1'>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => resolve(diff.id, acceptDiff)}
-                  disabled={busy.has(diff.id)}
-                  className='hover:bg-black/10'
-                  title='Accept'
+          {groups.map((group) => (
+            <div key={group.key} className='mb-3' data-testid={group.jobId ? 'batch-group' : 'chat-group'}>
+              {group.jobId && group.batchNo != null && (
+                <div className='flex items-center justify-between gap-2 mb-1'>
+                  <p className='text-xs font-semibold text-purple-800'>
+                    Review batch {group.batchNo} ({group.diffs.length} change{group.diffs.length === 1 ? '' : 's'})
+                  </p>
+                  <div className='flex gap-1'>
+                    <Button
+                      variant="secondary"
+                      disabled={busy.has(group.key)}
+                      onClick={() => resolve(group.key, () => acceptJobBatch(group.jobId!, group.batchNo!))}
+                    >
+                      <Check className='w-3.5 h-3.5' /> Accept all
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      disabled={busy.has(group.key)}
+                      onClick={() => resolve(group.key, () => rejectJobBatch(group.jobId!, group.batchNo!))}
+                    >
+                      <X className='w-3.5 h-3.5' /> Reject all
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {group.diffs.map((diff) => (
+                <div
+                  key={diff.id}
+                  className={`flex items-center justify-between p-2 rounded-lg mb-1 ${opColors[diff.operation] || ''}`}
                 >
-                  <Check className='w-4 h-4 text-green-600' />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => resolve(diff.id, removeDiff)}
-                  disabled={busy.has(diff.id)}
-                  className='hover:bg-black/10'
-                  title='Reject'
-                >
-                  <X className='w-4 h-4 text-red-600' />
-                </Button>
-              </div>
+                  <span className='text-xs font-mono flex gap-2'>
+                    {diff.path}{' '}
+                    <span className='uppercase'>{diff.operation}</span>
+                  </span>
+                  <div className='flex gap-1'>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => resolve(diff.id, acceptDiff)}
+                      disabled={busy.has(diff.id) || busy.has(group.key)}
+                      className='hover:bg-black/10'
+                      title='Accept'
+                    >
+                      <Check className='w-4 h-4 text-green-600' />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => resolve(diff.id, removeDiff)}
+                      disabled={busy.has(diff.id) || busy.has(group.key)}
+                      className='hover:bg-black/10'
+                      title='Reject'
+                    >
+                      <X className='w-4 h-4 text-red-600' />
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
           ))}
         </div>

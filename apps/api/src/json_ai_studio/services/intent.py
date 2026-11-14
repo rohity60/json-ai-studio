@@ -1,0 +1,316 @@
+"""Intent classification for chat messages (ADR-0026, PRD C §1).
+
+Deterministic keyword rules — no LLM call, so it costs nothing on a
+per-minute token budget and always answers. English, Portuguese and
+Spanish first. The classifier only decides *routing*:
+
+  review     — review / repair the WHOLE document or a whole collection.
+               Needs a scope signal ("all entries", "everything", an open
+               "look for errors"); "review entry 5" is a point edit.
+  bulk_edit  — one stated change applied to many elements ("set all … to").
+  question   — asks about the document, changes nothing.
+  point_edit — everything else, and anything unknown (today's behaviour).
+
+Every result carries the id of the rule that matched (logged at INFO).
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import unicodedata
+from dataclasses import dataclass, field
+from typing import Any
+
+logger = logging.getLogger("json_ai_studio.intent")
+
+POINT_EDIT = "point_edit"
+BULK_EDIT = "bulk_edit"
+REVIEW = "review"
+QUESTION = "question"
+
+_MAX_DEPTH = 4  # how deep doc_stats looks for collections and key names
+_TEXT_CHARS = 200  # a string this long makes its field a "text" field
+
+
+@dataclass(frozen=True)
+class Intent:
+    kind: str
+    scope_path: str | None = None  # collection the user named, if any
+    rule: str = "default"
+
+
+@dataclass(frozen=True)
+class Collection:
+    path: str  # JSON Pointer
+    key: str  # last path segment, lowercased
+    count: int
+    chars: int  # approximate serialised size
+
+
+@dataclass(frozen=True)
+class DocStats:
+    chars: int = 0
+    collections: tuple[Collection, ...] = ()
+    leaf_keys: frozenset[str] = field(default_factory=frozenset)
+    # Field names that hold long text somewhere (reviewing them is a job;
+    # short fields — numbers, ids, flags — are bulk edits or questions).
+    text_keys: frozenset[str] = field(default_factory=frozenset)
+    # Long-text fields that occur ONCE in the document ("description" of a
+    # character card): naming one is a point edit, not a review.
+    single_text_keys: frozenset[str] = field(default_factory=frozenset)
+
+
+def _esc(part: str) -> str:
+    return part.replace("~", "~0").replace("/", "~1")
+
+
+def doc_stats(doc: Any) -> DocStats:
+    """Sizes of the document's containers and its field names, one pass."""
+    collections: list[Collection] = []
+    leaf_keys: set[str] = set()
+    text_keys: set[str] = set()
+    key_counts: dict[str, int] = {}
+
+    def visit(node: Any, path: str, key: str, depth: int) -> int:
+        if isinstance(node, dict):
+            size = 2
+            for k, v in node.items():
+                size += (
+                    len(str(k))
+                    + 4
+                    + visit(v, f"{path}/{_esc(str(k))}", str(k), depth + 1)
+                )
+        elif isinstance(node, list):
+            size = 2
+            for i, v in enumerate(node):
+                size += 1 + visit(v, f"{path}/{i}", key, depth + 1)
+        else:
+            if depth <= _MAX_DEPTH and key and not key.isdigit():
+                leaf_keys.add(_norm(key))
+                key_counts[_norm(key)] = key_counts.get(_norm(key), 0) + 1
+                if isinstance(node, str) and len(node) >= _TEXT_CHARS:
+                    text_keys.add(_norm(key))
+            return len(node) + 2 if isinstance(node, str) else len(str(node))
+        if path and depth <= _MAX_DEPTH and len(node) >= 2:
+            collections.append(Collection(path, _norm(key), len(node), size))
+        return size
+
+    total = visit(doc, "", "", 0)
+    container_keys = {c.key for c in collections}
+    return DocStats(
+        chars=total,
+        collections=tuple(collections),
+        leaf_keys=frozenset(leaf_keys - container_keys),
+        text_keys=frozenset(text_keys),
+        single_text_keys=frozenset(k for k in text_keys if key_counts.get(k) == 1),
+    )
+
+
+def _norm(text: str) -> str:
+    """Lowercase, accents stripped, whitespace collapsed."""
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return " ".join(text.lower().split())
+
+
+def _rx(pattern: str) -> re.Pattern[str]:
+    return re.compile(pattern, re.IGNORECASE)
+
+
+# Verbs that by themselves mean "read it all and judge".
+_STRONG_REVIEW = _rx(
+    r"\b(review|revise|proof-?read|audit|look over|look through|go through|"
+    r"go over|revis(ar|e|a|em|ao|ion)|audit(ar|e|a|oria))\b"
+)
+# Verbs that mean review only with an errors-object or a whole scope.
+_WEAK_REVIEW = _rx(
+    r"\b(check|inspect|repair|fix|correct|clean ?up|polish|improve|validate|"
+    r"verify|corrig(ir|e|a|am)|corrij(a|am)|correg(ir|imos)|consert(ar|e|a)|"
+    r"repar(ar|e|a)|verifi(car|que|ca)|chec(ar|a)|cheque|comprob(ar|a)|"
+    r"comprueba|melhor(ar|e|a)|mejor(ar|a|e)|arregl(ar|a|e)|limp(ar|e|a)|"
+    r"analis(ar|e|a)|analiz(ar|a|e))\b"
+)
+_ERRORS = (
+    r"(errors?|mistakes?|typos?|problems?|issues?|inconsistenc(y|ies)|"
+    r"misspellings?|misspelled|spelling|spelled|grammar|grammatical|"
+    r"erros?|errores?|problemas?|falhas?|fallos?|faltas?|inconsistencias?|"
+    r"ortografi(a|cos?)|gramatica(l|is)?)"
+)
+_ERRORS_OBJECT = _rx(rf"\b{_ERRORS}\b")
+# "look for errors": inherently about the whole document.
+_OPEN_SEARCH = _rx(
+    r"\b(find|look for|search for|spot|detect|hunt for|procur(e|ar|a)|"
+    r"encontr(e|ar|a)|ach(e|ar)|busc(a|ar|que)|localiz(e|ar|a))\b"
+    rf".{{0,40}}\b{_ERRORS}\b"
+)
+_SCOPE = _rx(
+    r"\b(entire|whole|everything|all|every|each|full|throughout|todo|toda|"
+    r"todos|todas|tudo|inteir[oa]s?|enter[oa]s?|cada|complet[oa]s?)\b"
+)
+# "the json", "this file": whole-document scope only together with a strong
+# review verb or an errors word — "fix the json" is an ordinary edit.
+_SCOPE_DOC = _rx(
+    r"\b(the|this|o|el|este|esta|esse|essa) (document|file|json|lorebook|"
+    r"documento|arquivo|ficheiro|archivo)\b"
+)
+# A stated condition after check / verify / validate: a question about the
+# data ("check all entries have an id", "verify all ids are unique"), which
+# one lookup turn answers — not a review of every record.
+_CHECK_VERB = _rx(
+    r"\b(check|verify|validate|inspect|confirm|ensure|make sure|"
+    r"verifi(car|que|ca)|confirm(ar|e|a)|chec(ar|a)|cheque|comprob(ar|a)|"
+    r"comprueba|asegur(ar|a|e))\b"
+)
+_CONDITION = _rx(
+    r"\b(have|has|contain|contains|are|is|exist|exists|unique|duplicated?|"
+    r"missing|empty|null|below|above|under|over|less|greater|more than|"
+    r"equal|equals|match|matches|between|tem|possui|possuem|sao|esta|estao|"
+    r"existe|existem|unic[oa]s?|vazi[oa]s?|tiene|tienen|son|estan|existen|"
+    r"vaci[oa]s?|mayor|menor|maior)\b"
+)
+# One named element or a subset: never a whole-document review.
+_SPECIFIC = _rx(
+    r"/[\w~.-]+(/[\w~.-]+)*/\d+\b"
+    r"|\b(entry|entries|item|items|record|records|element|row|line|index|"
+    r"number|entrada|entradas|registro|registros|elemento|linha|fila|indice|"
+    r"numero)\s*#?\d+"
+    r"|#\d+"
+    r"|\b(only|just|apenas|somente|solo|solamente|unicamente)\b"
+    r"|\b(first|last|second|third|primeir[oa]s?|ultim[oa]s?|segund[oa]s?|"
+    r"primer[oa]?s?)\b"
+)
+# "fix the typo", "corrija o erro": ONE error the user has in mind — a point
+# edit even when the field name is in another language than the keys.
+_ONE_ERROR = _rx(
+    r"\b(the|this|that|o|a|este|esse|esta|essa|el|la|ese|esa)\s+"
+    r"(error|mistake|typo|misspelling|problem|issue|erro|falha|problema|"
+    r"fallo|errata)\b(?!s)"
+)
+_BULK_VERB = _rx(
+    r"\b(set|change|update|replace|rename|remove|delete|add|increase|decrease|"
+    r"convert|make|translate|defin(a|ir|e)|mud(e|ar|a)|alter(e|ar|a)|"
+    r"troqu?(e|ar|a)|substitu(a|ir|i)|renome(ie|ar)|remov(a|er|e)|"
+    r"apag(ue|ar|a)|exclu(a|ir|i)|adicion(e|ar|a)|aument(e|ar|a)|"
+    r"diminu(a|ir|i)|convert(a|er|ir|e)|traduz(a|ir)?|cambi(a|ar|e)|"
+    r"actualiz(a|ar|e)|reemplaz(a|ar)|elimin(a|ar|e)|borr(a|ar|e)|"
+    r"agreg(a|ar)|anad(e|ir)|traduc(e|ir))\b"
+)
+# "… to 60", "= true": a stated new value → an edit, not a review.
+_ASSIGNMENT = _rx(r"(\bto\b|\bpara\b|=|->|→)\s*(\"|'|“|\d|(true|false|null)\b)")
+_QUESTION_START = _rx(
+    r"^(what|which|why|how|where|who|when|is|are|does|do|did|can|could|would|"
+    r"should|explain|describe|tell me|show|list|count|summari[sz]e|o que|qual|"
+    r"quais|por ?que|como|quant[oa]s?|onde|quem|explique|descreva|mostre|"
+    r"liste|conte|resum(a|e|ir)|que|cual|cuales|cuant[oa]s?|donde|quien|"
+    r"explica|muestra|lista|cuenta)\b"
+)
+_POINTER = re.compile(r"(?<![\w/])(/[\w~.-]+(?:/[\w~.-]+)*)")
+
+
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[\w-]+", text))
+
+
+def _stem(word: str) -> str:
+    return word[:-1] if len(word) > 3 and word.endswith("s") else word
+
+
+def _named_scope(text: str, stats: DocStats) -> str | None:
+    """Collection the message names: an explicit pointer, else a key."""
+    by_path = {c.path.lower(): c.path for c in stats.collections}
+    for match in _POINTER.finditer(text):
+        path = by_path.get(match.group(1))
+        if path is not None:
+            return path
+    words = {_stem(w) for w in _words(text)}
+    named = [c for c in stats.collections if c.key and _stem(c.key) in words]
+    if not named:
+        return None
+    return max(named, key=lambda c: c.chars).path
+
+
+def _named_fields(text: str, stats: DocStats) -> set[str]:
+    """Plain (non-collection) field names the message mentions, so that
+    "timeouts" finds the field "timeout"."""
+    words = _words(text) | {_stem(w) for w in _words(text)}
+    return {k for k in stats.leaf_keys if k in words or _stem(k) in words}
+
+
+def _classify(text: str, stats: DocStats) -> Intent:
+    strong = bool(_STRONG_REVIEW.search(text))
+    weak = bool(_WEAK_REVIEW.search(text))
+    errors = bool(_ERRORS_OBJECT.search(text))
+    scope_all = bool(_SCOPE.search(text))
+    # "the json" / "this file" count as whole-document only with a strong
+    # verb or an errors word.
+    scope = scope_all or (bool(_SCOPE_DOC.search(text)) and (strong or errors))
+    open_search = bool(_OPEN_SEARCH.search(text))
+    bulk_verb = bool(_BULK_VERB.search(text))
+    assignment = bool(_ASSIGNMENT.search(text))
+    named = _named_scope(text, stats)
+    fields = _named_fields(text, stats)
+    short_fields = fields - stats.text_keys
+
+    if strong or weak or open_search:
+        if _SPECIFIC.search(text):
+            return Intent(POINT_EDIT, rule="point.specific_target")
+        if _ONE_ERROR.search(text) and not scope_all and not strong:
+            return Intent(POINT_EDIT, rule="point.one_error")
+        if (
+            not strong
+            and not errors
+            and _CHECK_VERB.search(text)
+            and _CONDITION.search(text)
+        ):
+            # "check all entries have an id": a question about the data.
+            return Intent(QUESTION, rule="question.condition_check")
+        if short_fields and not strong and not (fields & stats.text_keys):
+            # A short field (numbers, ids, flags): "fix all timeouts" is one
+            # change on many elements, "find errors in timeout" a point edit.
+            if scope_all and not errors:
+                return Intent(BULK_EDIT, named, "bulk.named_field")
+            return Intent(POINT_EDIT, rule="point.named_field")
+        if (fields & stats.single_text_keys) and not scope_all and not named:
+            # "fix the spelling mistakes in the character description": one
+            # long field named, no whole scope — one lookup turn, not a job
+            # over the largest collection (live 2026-11-13).
+            return Intent(POINT_EDIT, rule="point.named_text_field")
+        if (strong or weak) and scope and not assignment:
+            if strong or errors or not bulk_verb:
+                return Intent(REVIEW, named, "review.verb_scope")
+        if strong and named and not assignment and not bulk_verb:
+            # "review the entries": the collection is the scope.
+            return Intent(REVIEW, named, "review.named_collection")
+        if (open_search or errors) and not assignment:
+            return Intent(REVIEW, named, "review.open_search")
+
+    if (bulk_verb or weak) and scope_all:
+        return Intent(BULK_EDIT, named, "bulk.verb_scope")
+    if (_QUESTION_START.search(text) or text.endswith("?")) and not (
+        bulk_verb or weak or strong
+    ):
+        return Intent(QUESTION, rule="question")
+    return Intent(POINT_EDIT)
+
+
+def might_be_review(message: str) -> bool:
+    """Cheap pre-check on the text alone, before doc_stats() is paid for."""
+    text = _norm(message or "")
+    return bool(
+        _STRONG_REVIEW.search(text)
+        or _WEAK_REVIEW.search(text)
+        or _OPEN_SEARCH.search(text)
+    )
+
+
+def classify_intent(message: str, stats: DocStats | None = None) -> Intent:
+    """Route a chat message. Unknown → point_edit (C-03)."""
+    intent = _classify(_norm(message or ""), stats or DocStats())
+    logger.info(
+        "intent kind=%s rule=%s scope_path=%s",
+        intent.kind,
+        intent.rule,
+        intent.scope_path,
+    )
+    return intent

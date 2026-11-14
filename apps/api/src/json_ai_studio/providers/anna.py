@@ -1,4 +1,4 @@
-"""Anna provider — LLM calls served by the Anna host (ADR-0026).
+"""Anna provider — LLM calls served by the Anna host (ADR-0028).
 
 Inside the Anna App's Executa there are no provider keys: completions go
 to the Anna host over sampling reverse-RPC, billed to the signed-in Anna

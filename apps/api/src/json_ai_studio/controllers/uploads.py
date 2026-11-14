@@ -50,4 +50,4 @@ async def endpoint_upload_json(
         except (_json.JSONDecodeError, UnicodeDecodeError):
             raise HTTPException(status_code=400, detail="Invalid JSON in upload body")
 
-    return await session_service.upload_json(data, sid)
+    return await session_service.upload_json(data, sid, _auth)

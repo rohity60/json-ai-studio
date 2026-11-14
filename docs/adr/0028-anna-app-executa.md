@@ -1,4 +1,4 @@
-# 0026-anna-app-executa
+# 0028-anna-app-executa
 
 **Date**: 2026-11-12
 **Status**: Accepted

@@ -54,14 +54,30 @@ class ChatTurn(BaseModel):
 
     id: str = Field(default_factory=lambda: uuid4().hex)
     role: Literal["user", "assistant"]
-    kind: Literal["message", "boundary"] = "message"
+    kind: Literal["message", "boundary", "job_proposal", "job_batch"] = "message"
     content: str
     diffs: list[DiffEntry] | None = None
     # Bulk ops the model emitted (pattern + where), expanded into `diffs`.
     bulk: list[dict[str, Any]] | None = None
     # Clarifying question the model asked: {"text": str, "options": [str]}.
     question: dict[str, Any] | None = None
+    # kind="job_proposal": the proposed batch review job (ADR-0026).
+    job_proposal: JobProposal | None = None
+    # kind="job_batch": the review job and 1-based batch this turn records.
+    job_id: str | None = None
+    batch_no: int | None = None
     created_at: datetime | None = None
+
+
+class JobProposal(BaseModel):
+    """Cost of a whole-document review as a batch job (spec: JobProposal)."""
+
+    scope_path: str
+    record_count: int
+    batch_count: int
+    est_tokens: int
+    eta_s: int
+    instruction: str
 
 
 # -- Wire Contracts --
@@ -79,6 +95,9 @@ class DiffEntry(BaseModel):
     # failed = proposed but did not resolve against the JSON (never applied).
     status: DiffStatus = "pending"
     failure_reason: str | None = None
+    # Review job / batch that produced this diff (ADR-0026).
+    job_id: str | None = None
+    batch_no: int | None = None
 
 
 class ValidationErrorItem(BaseModel):
@@ -93,6 +112,48 @@ class Error(BaseModel):
 
     error: str
     hint: str | None = None
+
+
+class CreateJobRequest(BaseModel):
+    """Body for POST /api/sessions/{id}/jobs (spec: CreateJobRequest)."""
+
+    scope_path: str | None = None
+    instruction: str = Field(min_length=1, max_length=4_000)
+    source_turn_id: str | None = None
+
+
+class JobBatch(BaseModel):
+    """Summary of one finished review batch (spec: JobBatch)."""
+
+    batch_no: int
+    start: int
+    end: int
+    diffs: int
+    failed: int
+    explanation: str = ""
+
+
+JobStatus = Literal["ready", "running", "done", "failed", "cancelled"]
+
+
+class Job(BaseModel):
+    """Client-driven whole-document review (spec: Job, ADR-0026)."""
+
+    id: str
+    status: JobStatus
+    scope_path: str
+    instruction: str
+    source_turn_id: str | None = None
+    cursor: int
+    total: int
+    batches_done: int
+    batch_count: int | None = None
+    diffs_pending: int = 0
+    eta_s: int | None = None
+    error: str | None = None
+    batches: list[JobBatch] = []
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 # -- Request / Response Wrappers --

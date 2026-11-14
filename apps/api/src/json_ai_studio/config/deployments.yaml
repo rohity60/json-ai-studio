@@ -163,7 +163,7 @@ deployments:
         - "qwen3.6:35b-mlx"
         - "gemma4:12b"
 
-  # Anna App runtime only (ADR-0026): served through the Anna host by the
+  # Anna App runtime only (ADR-0028): served through the Anna host by the
   # Executa's litellm custom provider. Stays disabled unless ANNA_ENABLED is
   # true, whatever `enabled` says here.
   anna:

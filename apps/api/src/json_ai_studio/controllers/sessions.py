@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+from .access import require_session_owner
 from ..auth import require_api_key
 from ..models import CreateSessionRequest, SeedFromTemplateRequest
 from ..services import chat_history_service, session_service
@@ -25,7 +26,9 @@ async def endpoint_create_session(
 ):
     """Create a new session. Returns session ID and initial state."""
     logger.info("POST /api/sessions principal=%s name=%r", _auth.kind, req.name)
-    return await session_service.create_session(name=req.name)
+    return session_service.public_session(
+        await session_service.create_session(name=req.name, principal=_auth)
+    )
 
 
 @router.post("/sessions/from-template", status_code=201)
@@ -53,18 +56,21 @@ async def endpoint_seed_from_template(
         json_doc=req.json_doc,
         name=req.templateTitle or req.templateSlug,
         starter_prompts=req.starterPrompts,
+        principal=_auth,
     )
 
 
 @router.get("/sessions/{session_id}")
 async def endpoint_get_session(
     session_id: str,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """Retrieve full session state."""
     logger.info("GET /api/sessions/%s principal=%s", session_id, _auth.kind)
     try:
-        return await session_service.get_session(session_id)
+        return session_service.public_session(
+            await session_service.get_session(session_id)
+        )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -72,7 +78,7 @@ async def endpoint_get_session(
 @router.delete("/sessions/{session_id}/chat", status_code=204)
 async def endpoint_clear_chat(
     session_id: str,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """Clear the chat thread (LLM context). 409 while diffs are pending."""
     logger.info("DELETE /api/sessions/%s/chat principal=%s", session_id, _auth.kind)

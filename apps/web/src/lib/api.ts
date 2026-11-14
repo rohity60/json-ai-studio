@@ -8,14 +8,17 @@ const BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
 /** Auth headers for every backend call: logged-in users send the Auth0
  *  bearer token (per-user quota); anonymous users send X-API-Key against
- *  the shared free pool (ADR-0015). */
+ *  the shared free pool (ADR-0015). The browser key rides along with the
+ *  bearer too: sessions belong to the caller that created them, and a user
+ *  who logs in mid-session keeps the anonymous session only by presenting
+ *  both credentials (ADR-0027). */
 async function authHeaders(
     apiKey: string,
     extra: Record<string, string> = {},
 ): Promise<Record<string, string>> {
     const token = await getBearerToken();
     return token
-        ? {...extra, Authorization: `Bearer ${token}`}
+        ? {...extra, Authorization: `Bearer ${token}`, 'X-API-Key': apiKey}
         : {...extra, 'X-API-Key': apiKey};
 }
 
@@ -57,20 +60,40 @@ export type DiffEntry = {
     new_value?: unknown;
     status?: DiffStatus;
     failure_reason?: string | null;
+    /** Review job / 1-based batch that produced this diff (ADR-0026). */
+    job_id?: string | null;
+    batch_no?: number | null;
+};
+
+/** Cost of reviewing the whole document as a batch job (ADR-0026). Sent as
+ *  the SSE `job_proposal` event and stored on the proposal turn. */
+export type JobProposal = {
+    scope_path: string;
+    record_count: number;
+    batch_count: number;
+    est_tokens: number;
+    eta_s: number;
+    instruction: string;
 };
 
 /** One stored chat turn. `boundary` = context reset (version switch):
- *  earlier turns stay visible but are no longer sent to the model. */
+ *  earlier turns stay visible but are no longer sent to the model.
+ *  `job_proposal` = the assistant proposed a batch review job;
+ *  `job_batch` = one finished batch of that job, with its diffs. */
 export type ChatTurn = {
     id: string;
     role: 'user' | 'assistant';
-    kind?: 'message' | 'boundary';
+    kind?: 'message' | 'boundary' | 'job_proposal' | 'job_batch';
     content: string;
     diffs?: DiffEntry[] | null;
     created_at?: string | null;
     /** Clarifying question (ADR-0024): options render as buttons; a click
      *  sends the option as the next message. */
     question?: { text: string; options: string[] } | null;
+    job_proposal?: JobProposal | null;
+    /** kind=job_batch: the review job and batch this turn records. */
+    job_id?: string | null;
+    batch_no?: number | null;
 };
 
 export async function createSession(name: string, apiKey: string) {
@@ -470,7 +493,21 @@ export async function* streamChat(sessionId: string, message: string, workingJso
         formData.append('focus_path', focusPath);
     }
 
+    yield* sseEvents(
+        `${BASE}/chat`,
+        {method: 'POST', headers: await authHeaders(apiKey), body: formData},
+        'Chat failed',
+        'LLM request timed out. Server may be slow or unavailable.',
+    );
+}
+
+/** POST and yield the response's SSE events as {type, data}. Shared by the
+ *  chat stream and review-job batches (ADR-0026). */
+async function* sseEvents(url: string, init: RequestInit, errorPrefix: string, timeoutMessage: string, signal?: AbortSignal) {
     const controller = new AbortController();
+    // Caller abort (e.g. pausing a review while it only waits for capacity).
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort);
     // Idle timeout, re-armed on every chunk: a turn may legitimately run for
     // minutes (tool rounds waiting for model capacity, ADR-0025) as long as
     // events keep arriving; only 2 min of silence counts as a hang.
@@ -481,13 +518,8 @@ export async function* streamChat(sessionId: string, message: string, workingJso
     };
     armTimeout();
     try {
-        const res = await fetch(`${BASE}/chat`, {
-            method: 'POST',
-            headers: await authHeaders(apiKey),
-            body: formData,
-            signal: controller.signal,
-        });
-        if (!res.ok) throw await httpError(res, 'Chat failed');
+        const res = await fetch(url, {...init, signal: controller.signal});
+        if (!res.ok) throw await httpError(res, errorPrefix);
 
         const reader = res.body!.getReader();
         const decoder = new TextDecoder();
@@ -521,16 +553,131 @@ export async function* streamChat(sessionId: string, message: string, workingJso
         }
     } catch (err: any) {
         if (err.name === 'AbortError') {
-            throw new Error('LLM request timed out. Server may be slow or unavailable.');
+            if (signal?.aborted) {
+                const aborted: any = new Error('Aborted');
+                aborted.userAborted = true;
+                throw aborted;
+            }
+            throw new Error(timeoutMessage);
         }
         throw err;
     } finally {
         clearTimeout(timeoutId);
+        signal?.removeEventListener('abort', onAbort);
     }
 }
 
-export async function acceptDiffBatch(sessionId: string, apiKey: string) {
-    const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/accept-all`, {
+// -- Review jobs (ADR-0026): the client asks for one batch at a time --------
+
+export type JobStatus = 'ready' | 'running' | 'done' | 'failed' | 'cancelled';
+
+/** Summary of one finished batch. start/end = item indexes (0-based, inclusive). */
+export type JobBatch = {
+    batch_no: number;
+    start: number;
+    end: number;
+    diffs: number;
+    failed: number;
+    explanation?: string;
+};
+
+export type Job = {
+    id: string;
+    status: JobStatus;
+    scope_path: string;
+    instruction: string;
+    source_turn_id?: string | null;
+    cursor: number;
+    total: number;
+    batches_done: number;
+    batch_count?: number | null;
+    diffs_pending: number;
+    eta_s?: number | null;
+    error?: string | null;
+    batches: JobBatch[];
+    created_at?: string | null;
+    updated_at?: string | null;
+};
+
+/** SSE `batch_complete` payload (terminal event of a successful /next). */
+export type BatchComplete = {
+    batch_no: number;
+    range: [number, number] | null;
+    diffs: DiffEntry[];
+    cursor: number;
+    total: number;
+    eta_s: number | null;
+    explanation: string;
+    working_json: Record<string, any>;
+    turn?: ChatTurn;
+    job: Job;
+};
+
+/** SSE `batch_failed` payload: the cursor did not move; /next retries. */
+export type BatchFailed = {
+    batch_no: number;
+    error: string;
+    retryable: boolean;
+    job: Job;
+};
+
+export async function createJob(
+    sessionId: string,
+    body: {scope_path?: string | null; instruction: string; source_turn_id?: string | null},
+    apiKey: string,
+): Promise<Job> {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/jobs`, {
+        method: 'POST',
+        headers: await authHeaders(apiKey, {'Content-Type': 'application/json'}),
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to start the review');
+    return await res.json();
+}
+
+export async function getJob(sessionId: string, jobId: string, apiKey: string): Promise<Job> {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/jobs/${jobId}`, {
+        headers: await authHeaders(apiKey),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to load the review');
+    return await res.json();
+}
+
+export async function cancelJob(sessionId: string, jobId: string, apiKey: string): Promise<Job> {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/jobs/${jobId}`, {
+        method: 'DELETE',
+        headers: await authHeaders(apiKey),
+    });
+    if (!res.ok) throw await httpError(res, 'Failed to cancel the review');
+    return await res.json();
+}
+
+/** Process exactly one batch; yields the SSE events (waiting, progress,
+ *  retrying, diff, then batch_complete | batch_failed | a quota event).
+ *  `signal` aborts the stream (error.userAborted); only safe before the
+ *  model call starts — the server reserves nothing while it waits. */
+export async function* nextBatch(sessionId: string, jobId: string, apiKey: string, signal?: AbortSignal) {
+    yield* sseEvents(
+        `${BASE}/sessions/${sessionId}/jobs/${jobId}/next`,
+        {method: 'POST', headers: await authHeaders(apiKey)},
+        'Review batch failed',
+        'The review batch timed out. Server may be slow or unavailable.',
+        signal,
+    );
+}
+
+/** Narrow accept-all / reject-all to one review job, or one of its batches. */
+export type DiffBatchFilter = {jobId: string; batchNo?: number};
+
+function batchQuery(filter?: DiffBatchFilter): string {
+    if (!filter) return '';
+    const q = new URLSearchParams({job_id: filter.jobId});
+    if (filter.batchNo != null) q.set('batch_no', String(filter.batchNo));
+    return `?${q.toString()}`;
+}
+
+export async function acceptDiffBatch(sessionId: string, apiKey: string, filter?: DiffBatchFilter) {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/accept-all${batchQuery(filter)}`, {
         method: 'POST',
         headers: await authHeaders(apiKey),
     });
@@ -538,8 +685,8 @@ export async function acceptDiffBatch(sessionId: string, apiKey: string) {
     return await res.json();
 }
 
-export async function rejectDiffBatch(sessionId: string, apiKey: string) {
-    const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/reject-all`, {
+export async function rejectDiffBatch(sessionId: string, apiKey: string, filter?: DiffBatchFilter) {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/diffs/reject-all${batchQuery(filter)}`, {
         method: 'POST',
         headers: await authHeaders(apiKey),
     });

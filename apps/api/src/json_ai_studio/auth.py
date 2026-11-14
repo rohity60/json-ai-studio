@@ -18,6 +18,8 @@ Returns 429 (with login_available flag) when exceeded.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import time
 import uuid
@@ -58,6 +60,34 @@ def mask_secret(value: str | None) -> str:
     return f"...{value[-4:]} (len={len(value)})"
 
 
+def mask_email(value: str | None) -> str:
+    """Redact an email for logging: ``rohit@gmail.com`` -> ``r***@g***.com``.
+
+    Keeps the first letter of the local part and of the domain plus the
+    top-level domain, enough to tell users apart in a log without storing
+    personal data (ADR-0027). ``sub`` and ``user_id`` stay unmasked.
+    """
+    if not value:
+        return "<none>"
+    local, sep, domain = value.partition("@")
+    if not sep:
+        return "***"
+    host, dot, tld = domain.rpartition(".")
+    if not dot:
+        host, tld = domain, ""
+    masked_domain = f"{host[:1]}***" + (f".{tld}" if tld else "")
+    return f"{local[:1]}***@{masked_domain}"
+
+
+def anon_owner(api_key: str) -> str:
+    """Session owner id for an anonymous X-API-Key (ADR-0027).
+
+    A digest, not the key itself: session dicts are returned to clients and
+    logged at DEBUG, and the raw key must never appear in either.
+    """
+    return "key:" + hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
 @dataclass
 class Principal:
     """Resolved caller identity for quota + rate limiting."""
@@ -68,6 +98,18 @@ class Principal:
     auth0_sub: str | None = None
     user_id: uuid.UUID | None = None
     email: str | None = None
+    # Owner id of the X-API-Key sent next to a bearer token: lets a user who
+    # logged in mid-session take over that anonymous session (ADR-0027).
+    claim_owner: str | None = None
+    # Valid X-Admin-Key header (support access, ADR-0027).
+    admin: bool = False
+
+    @property
+    def owner(self) -> str:
+        """Session owner id for this caller (ADR-0027)."""
+        if self.kind == "user":
+            return f"user:{self.auth0_sub}"
+        return anon_owner(self.rate_key)
 
     @property
     def login_available(self) -> bool:
@@ -153,6 +195,7 @@ async def get_principal(request: Request) -> Principal:
         from .services import user_service
 
         user = await user_service.upsert_from_claims(claims, token)
+        side_key = request.headers.get("x-api-key") or ""
         principal = Principal(
             kind="user",
             quota_key=f"user:{claims['sub']}",
@@ -160,13 +203,18 @@ async def get_principal(request: Request) -> Principal:
             auth0_sub=claims["sub"],
             user_id=user.id,
             email=user.email,
+            claim_owner=(
+                anon_owner(side_key)
+                if len(side_key) >= 8 and side_key != settings.general_api_key
+                else None
+            ),
         )
         limit = settings.user_requests_per_minute
         logger.info(
             "principal resolved kind=user sub=%s user_id=%s email=%s",
             claims["sub"],
             user.id,
-            user.email,
+            mask_email(user.email),
         )
     else:
         client_key = request.headers.get("x-api-key") or settings.general_api_key
@@ -210,6 +258,19 @@ async def get_principal(request: Request) -> Principal:
             },
             headers={"Retry-After": str(_RATE_WINDOW)},
         )
+
+    admin_header = request.headers.get("x-admin-key")
+    if admin_header and settings.admin_api_key:
+        if hmac.compare_digest(
+            admin_header.encode("utf-8"), settings.admin_api_key.encode("utf-8")
+        ):
+            principal.admin = True
+        else:
+            logger.warning(
+                "admin key rejected path=%s key=%s",
+                request.url.path,
+                mask_secret(admin_header),
+            )
 
     return principal
 

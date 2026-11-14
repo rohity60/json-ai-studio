@@ -9,6 +9,9 @@ import { peekStarterPrompts, clearStarterPrompts } from '@/lib/openInWorkspace';
 import { trackEvent } from '@/lib/gtagConversion';
 import Button from '@/components/ui/Button';
 import { formatDuration, type TurnProgress } from '@/lib/progress';
+import JobProposalCard from '@/components/JobProposalCard';
+import JobPanel from '@/components/JobPanel';
+import { isActivePhase } from '@/lib/reviewJob';
 
 // JSON-agnostic fallbacks — shown when no sample-specific prompts are wired
 // in (e.g. user's own upload or a restored session), so they must make sense
@@ -171,11 +174,14 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
   onNewJson?: () => void;
   suggestions?: string[];
 }) {
-  const { state, sendMessage, clearChat } = useSession();
+  const { state, sendMessage, clearChat, startJob } = useSession();
+  const jobActive = !!state.job && isActivePhase(state.job.phase);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [starterPrompts, setStarterPrompts] = useState<string[]>([]);
+  // Proposal cards the user dismissed (by turn id); the turn text stays.
+  const [dismissedProposals, setDismissedProposals] = useState<Set<string>>(new Set());
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -205,7 +211,8 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
     trackEvent('chat_submit');
 
     try {
-      await sendMessage(message.trim(), thinking);
+      const sent = await sendMessage(message.trim(), thinking);
+      if (!sent) setInput(message); // refused (review batch running): keep the text
        } catch {
          // Message sent or failed - stop streaming
        } finally {
@@ -298,6 +305,13 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
               <span className="text-center">{msg.content} — earlier messages are not used as context</span>
               <span className="h-px flex-1 bg-gray-200" />
              </div>
+          ) : msg.kind === 'job_batch' ? (
+             // One finished review batch (ADR-0026): a compact line; its
+             // diffs are resolved per batch in the diff viewer.
+             <div key={msg.id || i} className="flex items-center gap-1.5 px-1 text-[11px] text-gray-500" data-testid="job-batch-line">
+              <CheckCircle2 className="w-3 h-3 shrink-0 text-green-600" />
+              <span>{msg.content}</span>
+             </div>
           ) : (
              <div key={msg.id || i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[80%] rounded-lg p-3 text-sm whitespace-pre-wrap break-words ${
@@ -319,6 +333,18 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
                   <TurnProgressPanel progress={msg.progress} finished />
                 )}
                 {msg.role === 'assistant' && !!msg.diffs?.length && <DiffStatusList diffs={msg.diffs} />}
+                {msg.role === 'assistant' && msg.job_proposal && !dismissedProposals.has(msg.id) && (
+                  state.job?.job.source_turn_id === msg.id ? (
+                    <p className="mt-2 text-[11px] text-purple-700">Review started — follow it in the panel below.</p>
+                  ) : (
+                    <JobProposalCard
+                      proposal={msg.job_proposal}
+                      disabled={jobActive || !!msg.ephemeral}
+                      onStart={() => startJob(msg.job_proposal!, msg.id)}
+                      onDismiss={() => setDismissedProposals((prev) => new Set(prev).add(msg.id))}
+                    />
+                  )
+                )}
                 {msg.role === 'assistant' && msg.question?.text && (
                   <div className="mt-2 space-y-1.5">
                     {!msg.content.includes(msg.question.text) && (
@@ -353,6 +379,8 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
           )}
 
          </div>
+
+         <JobPanel />
 
          <form onSubmit={handleSubmit} className="border-t p-4">
            <div className="flex gap-2">

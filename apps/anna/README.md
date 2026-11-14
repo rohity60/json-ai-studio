@@ -1,6 +1,6 @@
 # JSON AI Studio — Anna App
 
-The Anna App build of JSON AI Studio (slug `json-ai-studio`, ADR-0026 pending).
+The Anna App build of JSON AI Studio (slug `json-ai-studio`, ADR-0028).
 
 ```
 apps/anna/

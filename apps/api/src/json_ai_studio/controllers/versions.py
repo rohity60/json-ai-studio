@@ -6,13 +6,13 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import require_api_key
+from .access import require_session_owner
 from ..models import (
     CreateVersionRequest,
     RestoreVersionsRequest,
     SelectVersionRequest,
 )
-from ..services import version_service
+from ..services import session_service, version_service
 from ..services.errors import ConflictError, NotFoundError
 
 logger = logging.getLogger("json_ai_studio.controllers.versions")
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api", tags=["sessions"])
 async def endpoint_create_version_snapshot(
     session_id: str,
     req: CreateVersionRequest,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """Create a named snapshot of the current working JSON."""
     logger.info(
@@ -45,7 +45,7 @@ async def endpoint_create_version_snapshot(
 async def endpoint_select_version(
     session_id: str,
     req: SelectVersionRequest,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """Select a version snapshot as the new working baseline."""
     logger.info(
@@ -63,7 +63,7 @@ async def endpoint_select_version(
 @router.get("/sessions/{session_id}/versions")
 async def endpoint_list_versions(
     session_id: str,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """List all version snapshots for a session (V-10)."""
     logger.info("GET /api/sessions/%s/versions principal=%s", session_id, _auth.kind)
@@ -77,7 +77,7 @@ async def endpoint_list_versions(
 async def endpoint_restore_versions(
     session_id: str,
     req: RestoreVersionsRequest,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """Bulk-restore cached version snapshots into an empty session.
 
@@ -91,7 +91,9 @@ async def endpoint_restore_versions(
         len(req.versions),
     )
     try:
-        return await version_service.restore_versions(session_id, req)
+        return session_service.public_session(
+            await version_service.restore_versions(session_id, req)
+        )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ConflictError as exc:

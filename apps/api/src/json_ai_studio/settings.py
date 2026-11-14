@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # Shared anonymous quota pool key (formerly hardcoded "dev-default-key").
     general_api_key: str = "dev-default-key"
 
+    # Support access to any session via the X-Admin-Key header (ADR-0027).
+    # None (default) disables it. Every use is logged at WARNING.
+    admin_api_key: str | None = None
+
     # postgresql+asyncpg://user:pass@host:5432/dbname — None disables login.
     database_url: str | None = None
 
@@ -41,7 +45,7 @@ class Settings(BaseSettings):
     # Ollama's own default is small and silently truncates long prompts.
     ollama_num_ctx: int = 32_768
 
-    # Anna App runtime (ADR-0026). True only inside the Anna Executa, where
+    # Anna App runtime (ADR-0028). True only inside the Anna Executa, where
     # the `anna` deployment serves every call through the Anna host. The web
     # API leaves it false, so that deployment stays disabled (env:
     # ANNA_ENABLED).
@@ -77,6 +81,11 @@ class Settings(BaseSettings):
     chat_tools_enabled: bool = True
     chat_tool_max_rounds: int = 4  # tool rounds before a forced final answer
     chat_tool_result_max_chars: int = 4_000  # per tool result
+    # Batch read (read with `paths` / an index range): how many records fit is
+    # computed per call from the deployment's token budget and context window;
+    # this share of the free room is used, the rest is kept for later rounds.
+    chat_tool_batch_room_share: float = 0.5
+    chat_tool_batch_max_chars: int = 60_000  # hard cap on one batch result
     chat_tool_turn_timeout_s: float = 150.0  # whole tool loop wall clock
     # 429 retries per LLM call — defaults for policy.rate_limit_retry_*.
     # Default 0: pacing and
@@ -110,6 +119,36 @@ class Settings(BaseSettings):
     # that the server expands against the full JSON (bulk_edits.py). Caps
     # matches per op so a bad pattern can't rewrite a whole huge document.
     bulk_max_matches: int = 5_000
+
+    # Whole-document review as batch jobs (ADR-0026). A "review everything"
+    # request that does not fit one turn becomes a job proposal; the client
+    # then asks for one batch at a time. Batch size is computed, never a
+    # fixed record count: tokens of records per batch =
+    #   min(per-minute budget − prompt overhead − retry reserve,
+    #       context window − prompt overhead,
+    #       llm_max_tokens × job_input_per_output).
+    intent_review_enabled: bool = True
+    # Floor for the lean batch prompt's overhead (instruction + output
+    # contract + framing); the measured prompt is used when it is larger.
+    job_lean_overhead_tokens: int = 1_500
+    # Share of the per-minute budget held back per batch (estimate error; a
+    # failed call still counts against the provider's minute).
+    job_retry_reserve_share: float = 0.1
+    # Input tokens of records per output token the model may write: a batch
+    # the model cannot answer in full (llm_max_tokens) would be cut off.
+    job_input_per_output: float = 1.0
+    # Optional safety cap on records per batch; 0 = no cap (size decides).
+    job_max_records_per_batch: int = 0
+    # Batch room when the deployment has neither a per-minute limit nor a
+    # known context window (local models).
+    job_fallback_batch_tokens: int = 8_000
+    # Strings outside the reviewed collection at least this long are
+    # reviewed too (leading items of the job).
+    job_long_string_min_chars: int = 400
+    # Typical duration of one batch model call, for the ETA before any
+    # batch ran (live 2026-11-13: Nemotron ~25 s, Google Gemma ~58 s for
+    # ~10-17k-token batches). The window wait is added on top.
+    job_est_call_s: float = 30.0
 
     # Anonymous (shared pool) quota defaults — match pre-login behavior.
     # Token limit sized for large-JSON editing: one inline doc at the

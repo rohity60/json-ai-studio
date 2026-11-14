@@ -25,6 +25,23 @@ securitySchemes:
       Auth0 access token (RS256). Optional: anonymous callers use
       simpleApiKey with the shared free quota; logged-in callers get a
       per-user quota persisted in the database (ADR-0015).
+
+      Session ownership (ADR-0027): every session records the caller that
+      created it (the anonymous X-API-Key, or the logged-in user). All
+      session-scoped endpoints (/api/sessions/{sessionId}/**, /api/chat,
+      /api/explain) answer 404 to any other caller, exactly as for an
+      unknown id; /api/json/upload treats such a session_id as unknown.
+      A logged-in user takes over an anonymous session by sending both the
+      bearer token and the X-API-Key that created it; the session then
+      belongs to the user.
+  adminApiKey:
+    type: apiKey
+    in: header
+    name: X-Admin-Key
+    description: |-
+      Optional support access (ADR-0027). When the server sets
+      ADMIN_API_KEY, a matching X-Admin-Key header (sent together with the
+      normal credentials) may open any session. Every use is logged.
 servers:
    - url: http://localhost:8000
      description: Local development server
@@ -511,6 +528,273 @@ paths:
    # JSON UPLOAD & PARSING
    # =====================================================================
 
+   /api/sessions/{sessionId}/diffs/accept-all:
+    post:
+      tags: [sessions]
+      summary: Accept all pending diffs (optionally one review batch)
+      description: |-
+        Without parameters: promote every pending diff into baseline_json.
+        With job_id (and optionally batch_no): accept only the pending diffs
+        of that review job / batch (ADR-0026); other pending diffs stay.
+      operationId: acceptAllDiffs
+      security:
+         - simpleApiKey: []
+         - bearerAuth: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           schema:
+             type: string
+         - name: job_id
+           in: query
+           required: false
+           description: Only diffs produced by this review job
+           schema:
+             type: string
+         - name: batch_no
+           in: query
+           required: false
+           description: Only diffs of this batch (needs job_id)
+           schema:
+             type: integer
+      responses:
+         '200':
+          description: Diffs accepted
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/DiffAcceptResponse'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   /api/sessions/{sessionId}/diffs/reject-all:
+    post:
+      tags: [sessions]
+      summary: Reject all pending diffs (optionally one review batch)
+      description: |-
+        Without parameters: revert working_json to baseline_json and mark
+        every pending diff rejected. With job_id (and optionally batch_no):
+        revert only that review job's / batch's pending diffs (ADR-0026).
+      operationId: rejectAllDiffs
+      security:
+         - simpleApiKey: []
+         - bearerAuth: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           schema:
+             type: string
+         - name: job_id
+           in: query
+           required: false
+           schema:
+             type: string
+         - name: batch_no
+           in: query
+           required: false
+           schema:
+             type: integer
+      responses:
+         '200':
+          description: Diffs rejected
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/DiffRejectResponse'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   # =====================================================================
+   # REVIEW JOBS (ADR-0026) — client-driven batches
+   # =====================================================================
+
+   /api/sessions/{sessionId}/jobs:
+    post:
+      tags: [jobs]
+      summary: Create a whole-document review job
+      description: |-
+        Creates a batch review job over the members of scope_path (plus long
+        text fields outside it). The job does nothing by itself: the client
+        asks for one batch at a time with POST .../jobs/{jobId}/next, so
+        closing the tab pauses it. Job state is kept in memory with the
+        session and is lost when the backend restarts. One active
+        (ready/running/failed) job per session.
+      operationId: createJob
+      security:
+         - simpleApiKey: []
+         - bearerAuth: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           schema:
+             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+               $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+         '201':
+          description: Job created (status ready, cursor 0)
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/Job'
+         '400':
+           $ref: '#/components/responses/Error400'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+          description: The session already has an active job (detail.error = "job_active", detail.job_id)
+         '429':
+           $ref: '#/components/responses/Error429'
+
+   /api/sessions/{sessionId}/jobs/{jobId}:
+    get:
+      tags: [jobs]
+      summary: Job status, cursor and per-batch summaries
+      operationId: getJob
+      security:
+         - simpleApiKey: []
+         - bearerAuth: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           schema:
+             type: string
+         - name: jobId
+           in: path
+           required: true
+           schema:
+             type: string
+      responses:
+         '200':
+          description: The job
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/Job'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+    delete:
+      tags: [jobs]
+      summary: Cancel a job
+      description: |-
+        Marks the job cancelled. Diffs it already produced stay pending and
+        are accepted or rejected as usual.
+      operationId: cancelJob
+      security:
+         - simpleApiKey: []
+         - bearerAuth: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           schema:
+             type: string
+         - name: jobId
+           in: path
+           required: true
+           schema:
+             type: string
+      responses:
+         '200':
+          description: The cancelled job
+          content:
+            application/json:
+              schema:
+                 $ref: '#/components/schemas/Job'
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+          description: A batch is in flight (detail.error = "job_running"); cancel after it ends
+
+   /api/sessions/{sessionId}/jobs/{jobId}/next:
+    post:
+      tags: [jobs]
+      summary: Process exactly one batch; stream SSE
+      description: |-
+        Packs the next batch from the job's cursor, makes ONE lean model call
+        (job instruction + output contract + that batch's records with their
+        JSON Pointer paths — no skeleton, no chat history, no tools), applies
+        the diffs as pending (tagged job_id, batch_no) and advances the
+        cursor. On a failed job it retries the failed batch.
+
+        Batch size is computed per call from the AI deployment that serves
+        it — per-minute token budget, context window, output cap — and each
+        record's token size; a record larger than one batch is sent in
+        pieces (its long strings in pages) over several batches.
+
+        The call shares the deployment budget and the caller's credit/quota
+        checks with /api/chat. Events:
+          - deployment, plan, progress, waiting, retrying, usage — as in
+            /api/chat.
+          - "draft" — raw model text while it streams (keep-alive; ignore).
+          - "diff" — one per applied change. data: {"entry": DiffEntry}
+          - "batch_complete" — terminal, the batch is stored.
+            data: {"batch_no":3,"range":[24,35],"diffs":[DiffEntry],
+                   "cursor":36,"total":876,"eta_s":1920,"explanation":"...",
+                   "working_json":{...},"turn":ChatTurn,"job":Job}
+            range = first and last item index (0-based, inclusive). diffs
+            holds applied (pending) and failed entries. job.status is
+            "done" after the last batch.
+          - "batch_failed" — terminal, the cursor did not move.
+            data: {"batch_no":3,"error":"...","retryable":true,"job":Job}
+            job.status is "failed"; calling /next again retries the batch.
+          - rate_limit / credit_limit — terminal quota stop as in
+            /api/chat; the cursor did not move and the job stays "ready".
+      operationId: nextJobBatch
+      security:
+         - simpleApiKey: []
+         - bearerAuth: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           schema:
+             type: string
+         - name: jobId
+           in: path
+           required: true
+           schema:
+             type: string
+      responses:
+         '200':
+          description: SSE stream ending in batch_complete, batch_failed or a quota event
+          content:
+            text/event-stream:
+              schema:
+                type: string
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
+         '409':
+          description: |-
+            detail.error = "job_running" (a batch is already in flight) or
+            "job_finished" (status done or cancelled).
+         '429':
+           $ref: '#/components/responses/Error429'
+
    /api/json/upload:
     post:
       tags: [upload]
@@ -520,7 +804,9 @@ paths:
         syntax, generate a schema summary (top-level keys, nested depth, array
         lengths), and return the structured tree along with session metadata.
         The response includes a sessionId that the frontend uses for all
-        subsequent chat operations.
+        subsequent chat operations. A session_id the caller does not own is
+        treated like an unknown one: the upload goes to a new session owned
+        by the caller (ADR-0027).
       operationId: uploadJson
       security:
          - simpleApiKey: []
@@ -660,6 +946,21 @@ paths:
             {count,to}.
           - "service_unavailable" — provider outage (not rate limits).
             data: {"scope":"model","message":"...","retry_after":30}
+
+        Whole-document review (ADR-0026). A request to review or repair the
+        whole document (or a whole collection) that does not fit one planned
+        turn is not sent to the model. The stream is thinking → job_proposal
+        → complete; the complete explanation states the same numbers:
+          - "job_proposal" — what the review would cost as a batch job.
+            data: {"scope_path":"/entries","record_count":876,"batch_count":35,
+                   "est_tokens":412000,"eta_s":2400,"instruction":"..."}
+            (schema JobProposal). The client offers to start the job
+            (POST /api/sessions/{id}/jobs). Nothing is charged.
+
+        While a review batch is in flight (job status "running") a message
+        that is not a question is refused before the stream starts with
+        HTTP 409, detail {"error":"job_running","hint":"..."}; questions
+        are answered. Between batches chat edits are allowed.
       operationId: sendChatTurn
       security:
          - simpleApiKey: []
@@ -728,6 +1029,8 @@ paths:
                 data: {"working_json":{"services":{"api":{"timeout":60},"payment":{"timeout":60}}},"explanation":"Done — 2 changes applied.","user_turn_id":"u1","assistant_turn_id":"a1"}
          '401':
            $ref: '#/components/responses/Error401'
+         '404':
+           $ref: '#/components/responses/Error404'
          '429':
            $ref: '#/components/responses/Error429'
          '500':
@@ -1339,6 +1642,10 @@ components:
           items:
              $ref: '#/components/schemas/ChatTurn'
           description: Full chat history for this session
+        active_job_id:
+          type: string
+          nullable: true
+          description: Review job that is ready, running or failed (ADR-0026); fetch it with GET .../jobs/{jobId}
         created_at:
           type: string
           format: date-time
@@ -1387,9 +1694,13 @@ components:
           description: Speaker of the chat turn
         kind:
           type: string
-          enum: [message, boundary]
+          enum: [message, boundary, job_proposal, job_batch]
           default: message
-          description: boundary = context reset (e.g. version switch); earlier turns are not replayed to the LLM
+          description: |-
+            boundary = context reset (e.g. version switch); earlier turns are not replayed to the LLM.
+            job_proposal = the assistant proposed a batch review job instead of calling the model (see job_proposal).
+            job_batch = one finished review batch ("Review batch 3: items 25–36 of 876, 12 changes") with its diffs;
+            replayed to the LLM as a single compact progress line.
         content:
           type: string
           description: User text, or the assistant's final explanation
@@ -1426,7 +1737,48 @@ components:
               items:
                 type: string
           required: [text]
+        job_proposal:
+          nullable: true
+          allOf:
+             - $ref: '#/components/schemas/JobProposal'
+          description: Set on kind=job_proposal turns so the proposal card can be shown again from history.
+        job_id:
+          type: string
+          nullable: true
+          description: kind=job_batch — the review job
+        batch_no:
+          type: integer
+          nullable: true
+          description: kind=job_batch — 1-based batch number
       required: [role, content]
+
+    JobProposal:
+      type: object
+      description: |-
+        Cost of reviewing a whole document as a batch job (ADR-0026). Computed
+        without a model call by the same packing function that sizes the real
+        batches: from the AI deployment's per-minute token budget and context
+        window and each record's token size — never a fixed record count.
+      properties:
+        scope_path:
+          type: string
+          description: JSON Pointer of the collection whose members are reviewed one by one ("" = the document root)
+        record_count:
+          type: integer
+          description: Items to review (members of scope_path plus long text fields outside it)
+        batch_count:
+          type: integer
+          description: Model calls the job needs on the current AI deployment
+        est_tokens:
+          type: integer
+          description: Estimated input tokens over all batches
+        eta_s:
+          type: integer
+          description: Estimated run time in seconds on the current AI deployment
+        instruction:
+          type: string
+          description: What to do with every record (the user's request)
+      required: [scope_path, record_count, batch_count, est_tokens, eta_s, instruction]
 
      # -- Wire Contracts --
 
@@ -1460,7 +1812,108 @@ components:
           type: string
           nullable: true
           description: Why a failed diff did not apply
+        job_id:
+          type: string
+          nullable: true
+          description: Review job that produced this diff (ADR-0026); absent for chat diffs
+        batch_no:
+          type: integer
+          nullable: true
+          description: 1-based batch of that job
       required: [path, operation]
+
+    CreateJobRequest:
+      type: object
+      properties:
+        scope_path:
+          type: string
+          nullable: true
+          description: JSON Pointer of the collection to review (from the JobProposal); null = the collection holding most of the document
+        instruction:
+          type: string
+          description: What to do with every record
+        source_turn_id:
+          type: string
+          nullable: true
+          description: The job_proposal turn this job was started from
+      required: [instruction]
+
+    JobBatch:
+      type: object
+      description: Summary of one finished batch.
+      properties:
+        batch_no:
+          type: integer
+        start:
+          type: integer
+          description: First item index (0-based)
+        end:
+          type: integer
+          description: Last item index (inclusive)
+        diffs:
+          type: integer
+          description: Changes applied as pending diffs
+        failed:
+          type: integer
+          description: Proposed changes that did not apply
+        explanation:
+          type: string
+      required: [batch_no, start, end, diffs, failed]
+
+    Job:
+      type: object
+      description: |-
+        A client-driven whole-document review (ADR-0026). In memory only.
+        ready → running (during /next) → ready … → done; failed when a batch
+        fails after the deployment's retries (/next retries it); cancelled
+        after DELETE.
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [ready, running, done, failed, cancelled]
+        scope_path:
+          type: string
+        instruction:
+          type: string
+        source_turn_id:
+          type: string
+          nullable: true
+        cursor:
+          type: integer
+          description: Items fully processed (index of the next item)
+        total:
+          type: integer
+          description: Items in the job
+        batches_done:
+          type: integer
+        batch_count:
+          type: integer
+          nullable: true
+          description: Estimated total batches on the current AI deployment (re-estimated after every batch)
+        diffs_pending:
+          type: integer
+          description: This job's diffs still pending
+        eta_s:
+          type: integer
+          nullable: true
+          description: Estimated seconds left
+        error:
+          type: string
+          nullable: true
+          description: Why the last batch failed (status failed)
+        batches:
+          type: array
+          items:
+             $ref: '#/components/schemas/JobBatch'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, status, scope_path, instruction, cursor, total, batches_done, diffs_pending, batches]
 
     ValidationError:
       type: object
@@ -1929,7 +2382,9 @@ components:
             hint: null
 
     Error404:
-      description: Not found — session does not exist
+      description: |-
+        Not found — the session does not exist, or it belongs to another
+        caller (ADR-0027). The two cases are indistinguishable on purpose.
       content:
         application/json:
           schema:

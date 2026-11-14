@@ -36,9 +36,19 @@ export function contextPairCount(history: UiChatTurn[]): number {
   history.forEach((t, i) => {
     if (t.kind === 'boundary') start = i + 1;
   });
-  const pairs = history
-    .slice(start)
-    .filter((t) => !t.ephemeral && t.kind !== 'boundary' && t.role === 'assistant').length;
+  // A run of review-batch turns replays as ONE progress pair (ADR-0026).
+  let pairs = 0;
+  let inJobRun = false;
+  for (const t of history.slice(start)) {
+    if (t.ephemeral || t.kind === 'boundary') continue;
+    if (t.kind === 'job_batch') {
+      if (!inJobRun) pairs += 1;
+      inJobRun = true;
+      continue;
+    }
+    if (t.role === 'user') inJobRun = false;
+    if (t.role === 'assistant') pairs += 1;
+  }
   return Math.min(pairs, MAX_CONTEXT_PAIRS);
 }
 

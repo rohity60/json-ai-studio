@@ -133,11 +133,16 @@ class ApsSessionStore(SessionStore):
 
     # --- SessionStore ---------------------------------------------------
 
-    async def create_session(self, *, name: str | None = None) -> dict[str, Any]:
+    async def create_session(
+        self, *, name: str | None = None, owner: str | None = None
+    ) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         session: dict[str, Any] = {
             "id": uuid4().hex,
             "name": name,
+            # The bucket is already per Anna user; kept for the shared
+            # services' owner checks (ADR-0027).
+            "owner": owner,
             "working_json": {},
             "baseline_json": {},
             "versions": [],

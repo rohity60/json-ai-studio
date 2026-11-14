@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import require_api_key
+from .access import require_session_owner
 from ..diff_utils import DiffApplyError
 from ..services import diff_service
 from ..services.errors import ConflictError, NotFoundError
@@ -19,13 +19,15 @@ router = APIRouter(prefix="/api", tags=["sessions"])
 @router.post("/sessions/{session_id}/diffs/accept-all")
 async def endpoint_accept_all_diffs(
     session_id: str,
-    _auth=Depends(require_api_key),
+    job_id: str | None = None,
+    batch_no: int | None = None,
+    _auth=Depends(require_session_owner),
 ):
     logger.info(
         "POST /api/sessions/%s/diffs/accept-all principal=%s", session_id, _auth.kind
     )
     try:
-        return await diff_service.accept_all(session_id)
+        return await diff_service.accept_all(session_id, job_id, batch_no)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -33,13 +35,15 @@ async def endpoint_accept_all_diffs(
 @router.post("/sessions/{session_id}/diffs/reject-all")
 async def endpoint_reject_all_diffs(
     session_id: str,
-    _auth=Depends(require_api_key),
+    job_id: str | None = None,
+    batch_no: int | None = None,
+    _auth=Depends(require_session_owner),
 ):
     logger.info(
         "POST /api/sessions/%s/diffs/reject-all principal=%s", session_id, _auth.kind
     )
     try:
-        return await diff_service.reject_all(session_id)
+        return await diff_service.reject_all(session_id, job_id, batch_no)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -48,7 +52,7 @@ async def endpoint_reject_all_diffs(
 async def endpoint_accept_single_diff(
     session_id: str,
     diff_id: str,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """Accept a single diff by ID: promote it into baseline_json."""
     logger.info(
@@ -73,7 +77,7 @@ async def endpoint_accept_single_diff(
 async def endpoint_reject_single_diff(
     session_id: str,
     diff_id: str,
-    _auth=Depends(require_api_key),
+    _auth=Depends(require_session_owner),
 ):
     """Reject a single diff by ID: revert it from working_json."""
     logger.info(

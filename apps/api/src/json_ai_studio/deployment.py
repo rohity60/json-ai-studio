@@ -105,6 +105,19 @@ class DeploymentRegistry:
         raise RuntimeError("All deployments disabled: cannot pick a default")
 
     @classmethod
+    def peek_default(cls) -> DeploymentProvider | None:
+        """The deployment pick_default() would return next, without
+        advancing the round-robin; None when nothing is enabled. For
+        estimates that make no LLM call (job proposals, ADR-0026)."""
+        names = list(cls._deployments)
+        counter = cls._rr_counters.get(_DEFAULT_RR_KEY, 0)
+        for i in range(len(names)):
+            name = names[(counter + i) % len(names)]
+            if cls._deployments[name].enabled:
+                return cls._deployments[name]
+        return None
+
+    @classmethod
     def reload(cls) -> None:
         """Re-load YAML from disk."""
         cls._deployments = {}
