@@ -12,7 +12,13 @@ import type { ChatTurn, DiffEntry, DiffStatus } from './api';
 /** Client-only turn: shown in the thread but never stored server-side
  *  (stream errored before the backend persisted it). Not mirrored. */
 // progress: client-only turn progress (lib/progress.ts), not stored by the server.
-export type UiChatTurn = ChatTurn & { ephemeral?: boolean; progress?: TurnProgress };
+// resumeGone: the server can no longer continue this failed turn (404/409), so
+// Continue is hidden (WB-07).
+export type UiChatTurn = ChatTurn & { ephemeral?: boolean; progress?: TurnProgress; resumeGone?: boolean };
+
+/** Failed or interrupted assistant turn (ADR-0028). */
+export const isFailedTurn = (t: ChatTurn): boolean =>
+  t.role === 'assistant' && (t.status === 'failed' || t.status === 'interrupted');
 
 // Matches backend chat_history_max_turns (pairs replayed to the model).
 export const MAX_CONTEXT_PAIRS = 10;

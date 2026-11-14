@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     chat_history_value_max_chars: int = 300  # per new_value in replay
     chat_history_max_diffs_per_turn: int = 20
     chat_history_max_stored_turns: int = 200  # pruned from the session
+    # Older user messages longer than this are replayed as head + tail
+    # (PRD B B-46): an 8k-char first prompt was resent every turn.
+    chat_history_user_max_chars: int = 1_500
+    chat_history_user_head_chars: int = 1_000
+    chat_history_user_tail_chars: int = 300
 
     # Lookup tools (ADR-0024): read-only search/read offered to the model when
     # the document is too large to inline and the deployment supports_tools.

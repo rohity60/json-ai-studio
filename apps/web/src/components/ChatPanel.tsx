@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Sparkles, FileJson2, Brain, Eraser, CheckCircle2, XCircle, Clock, AlertTriangle, Hourglass, RotateCw } from 'lucide-react';
+import { Send, Loader2, Sparkles, FileJson2, Brain, Eraser, CheckCircle2, XCircle, Clock, AlertTriangle, Hourglass, RotateCw, Play } from 'lucide-react';
 import { useSession } from '@/context/SessionContext';
-import { contextPairCount, diffStatus } from '@/lib/chatHistory';
+import { contextPairCount, diffStatus, isFailedTurn } from '@/lib/chatHistory';
 import type { DiffEntry, DiffStatus } from '@/lib/api';
 import { peekStarterPrompts, clearStarterPrompts } from '@/lib/openInWorkspace';
 import { trackEvent } from '@/lib/gtagConversion';
@@ -101,7 +101,7 @@ const WAIT_HINT: Record<string, string> = {
 // Turn progress inside the assistant bubble (PRD B §8, WB-08..11): plan,
 // step X/N with a bar, live wait countdown, finished lookups and retries.
 // Collapses to a one-line summary once the answer arrives.
-function TurnProgressPanel({ progress, finished }: { progress: TurnProgress; finished: boolean }) {
+function TurnProgressPanel({ progress, finished, failed = false }: { progress: TurnProgress; finished: boolean; failed?: boolean }) {
   const [open, setOpen] = useState(false);
   const now = useNow(!finished && !!progress.wait);
   const multiStep = (progress.steps ?? 1) > 1 || progress.done.length > 0;
@@ -113,7 +113,7 @@ function TurnProgressPanel({ progress, finished }: { progress: TurnProgress; fin
     return (
       <div className="mt-2 text-[11px] text-gray-500 whitespace-normal">
         <button type="button" className="hover:underline" onClick={() => setOpen((v) => !v)}>
-          Done in {took} · {lookups} lookup{lookups === 1 ? '' : 's'} {open ? '▴' : '▾'}
+          {failed ? 'Stopped after' : 'Done in'} {took} · {lookups} lookup{lookups === 1 ? '' : 's'} {open ? '▴' : '▾'}
         </button>
         {open && <ProgressLines progress={progress} />}
       </div>
@@ -174,7 +174,7 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
   onNewJson?: () => void;
   suggestions?: string[];
 }) {
-  const { state, sendMessage, clearChat, startJob } = useSession();
+  const { state, sendMessage, resumeTurn, clearChat, startJob } = useSession();
   const jobActive = !!state.job && isActivePhase(state.job.phase);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -219,6 +219,18 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
       setIsStreaming(false);
        }
      };
+
+  // Continue the latest failed turn (ADR-0028, WB-02/03).
+  const continueTurn = async (turnId: string) => {
+    if (isStreaming || jobActive) return;
+    setIsStreaming(true);
+    trackEvent('chat_continue');
+    try {
+      await resumeTurn(turnId, thinking);
+    } finally {
+      setIsStreaming(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -314,15 +326,25 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
              </div>
           ) : (
              <div key={msg.id || i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] rounded-lg p-3 text-sm whitespace-pre-wrap break-words ${
+              <div
+                data-testid={isFailedTurn(msg) ? 'failed-turn' : undefined}
+                className={`max-w-[80%] rounded-lg p-3 text-sm whitespace-pre-wrap break-words ${
                  msg.role === 'user'
                   ? 'bg-purple-600 text-white'
-                  : 'bg-gray-100 border'
+                  : isFailedTurn(msg)
+                    ? 'bg-gray-50 border border-dashed text-gray-500'
+                    : 'bg-gray-100 border'
               }`}>
                 {msg.role === 'assistant' && (
                    <div className="flex items-center gap-1 mb-1">
                     <Sparkles className="w-3 h-3" />
                     <span className="text-xs opacity-70">AI</span>
+                    {isFailedTurn(msg) && (
+                      <span className="ml-1 inline-flex items-center gap-1 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
+                        <AlertTriangle className="w-3 h-3" />
+                        {msg.status === 'interrupted' ? 'Attempt interrupted' : 'Attempt failed'}
+                      </span>
+                    )}
                    </div>
                 )}
                 {msg.role === 'assistant' && msg.progress?.structured && !msg.content && (
@@ -330,9 +352,30 @@ export default function ChatPanel({ onGoToUpload, onNewJson, suggestions }: {
                 )}
                 {msg.content}
                 {msg.role === 'assistant' && msg.progress?.structured && !!msg.content && (
-                  <TurnProgressPanel progress={msg.progress} finished />
+                  <TurnProgressPanel progress={msg.progress} finished failed={isFailedTurn(msg)} />
                 )}
                 {msg.role === 'assistant' && !!msg.diffs?.length && <DiffStatusList diffs={msg.diffs} />}
+                {isFailedTurn(msg) && !!msg.read_paths?.length && (
+                  <p className="mt-1.5 text-[11px] text-gray-500 whitespace-normal">
+                    Already read: <span className="font-mono">{msg.read_paths.slice(0, 6).join(', ')}{msg.read_paths.length > 6 ? ` +${msg.read_paths.length - 6} more` : ''}</span>
+                  </p>
+                )}
+                {/* Continue: latest failed turn only, while the server still
+                    holds its trace (WB-02/03/07). */}
+                {isFailedTurn(msg) && i === state.conversationHistory.length - 1 && !msg.ephemeral && !msg.resumeGone && (
+                  <div className="mt-2">
+                    <Button
+                      variant="secondary"
+                      disabled={isStreaming || jobActive}
+                      onClick={() => continueTurn(msg.id)}
+                      title="Pick up where this attempt stopped, without redoing the lookups it already made"
+                      data-testid="continue-turn"
+                    >
+                      <Play className="w-3.5 h-3.5" />
+                      Continue
+                    </Button>
+                  </div>
+                )}
                 {msg.role === 'assistant' && msg.job_proposal && !dismissedProposals.has(msg.id) && (
                   state.job?.job.source_turn_id === msg.id ? (
                     <p className="mt-2 text-[11px] text-purple-700">Review started — follow it in the panel below.</p>

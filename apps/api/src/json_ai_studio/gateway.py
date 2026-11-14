@@ -39,6 +39,7 @@ from .json_tools import JsonToolbox
 from .services import chat_history_service, credit_service
 from .services import deployment_budget as budget
 from .services import progress
+from .services import turn_trace
 from .services.turn_planner import TooLarge, TurnPlan, tool_result_room_chars
 from .settings import get_settings
 
@@ -274,6 +275,17 @@ def _transient_retry_wait(exc: Exception, attempt: int, policy: Any) -> float | 
     return None
 
 
+def _error_code(exc: BaseException) -> str:
+    """Failed-turn error_code (ADR-0028) for a provider/call exception."""
+    if isinstance(exc, Exception) and _is_rate_limit(exc):
+        return "rate_limit"
+    if isinstance(exc, (litellm.Timeout, asyncio.TimeoutError, TimeoutError)) or (
+        "Timeout" in type(exc).__name__
+    ):
+        return "timeout"
+    return "provider_error"
+
+
 def _is_server_error(exc: Exception) -> bool:
     """Provider 5xx (LiteLLM may wrap it in MidStreamFallbackError)."""
     if _is_rate_limit(exc):
@@ -473,8 +485,17 @@ class GatewayService:
         history: list[dict[str, str]] | None = None,
         toolbox: JsonToolbox | None = None,
         planner: Callable[[Any, str], TurnPlan | TooLarge] | None = None,
+        trace: dict[str, Any] | None = None,
+        resume: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Full LLM pipeline: credit check -> stream -> diff -> cost -> deduct -> log.
+
+        `trace` (ADR-0028), when given, is filled as the turn runs: model
+        calls made, plan, finished lookup rounds (conversation snapshot and
+        the paths each lookup read) and, on failure, `error_code`. The
+        caller stores it with a failed turn. `resume` is such a trace from
+        an earlier failed attempt: the tool loop continues after its last
+        finished round instead of starting over (stale lookups dropped).
 
         `planner` (ADR-0025) is called once the deployment is known and
         returns the prompt plan (messages, toolbox, tool rounds) sized to
@@ -575,6 +596,37 @@ class GatewayService:
                 and settings.chat_tools_enabled
                 and deployment.supports_tools
             )
+            if trace is not None:
+                trace["plan"] = {
+                    "mode": "skeleton" if use_tools else "inline",
+                    "max_rounds": max_rounds if use_tools else 0,
+                }
+            start_round = 0
+            if use_tools and resume:
+                kept = turn_trace.resume_messages(resume, toolbox.doc)
+                if kept is not None:
+                    # Fresh system prompt (skeleton of the CURRENT document),
+                    # then the earlier attempt's conversation and lookups.
+                    snapshot, kept_calls = kept
+                    messages = [messages[0], *snapshot]
+                    start_round = min(int(resume.get("round_reached") or 0), max_rounds)
+                    if trace is not None:
+                        trace.update(
+                            round_reached=start_round,
+                            messages_snapshot=snapshot,
+                            tool_calls=kept_calls,
+                        )
+                    logger.info(
+                        "invoke session=%s resume from round=%d kept_lookups=%d",
+                        session_id,
+                        start_round,
+                        len(kept_calls),
+                    )
+                else:
+                    logger.info(
+                        "invoke session=%s resume: nothing reusable, starting over",
+                        session_id,
+                    )
             # Tell the user up front what this turn will do (PRD B B-50).
             plan_est = raw_estimate or (
                 budget.estimate_tokens(litellm_model, messages)
@@ -600,6 +652,8 @@ class GatewayService:
                     deployment.completion_params(resolved_model, reasoning),
                     max_rounds=max_rounds,
                     holder=holder,
+                    start_round=start_round,
+                    trace=trace,
                 ):
                     yield event_text
                 prompt_tokens = usage["prompt"]
@@ -635,6 +689,7 @@ class GatewayService:
                     content_parts: list[str] = []
                     last_chunk = None
                     call_start = time.monotonic()
+                    turn_trace.count_call(trace)
                     try:
                         response = await litellm.acompletion(
                             model=litellm_model,
@@ -830,6 +885,8 @@ class GatewayService:
 
         except BudgetExhausted as e:
             # Not a provider error: nothing was sent, user quota untouched.
+            if trace is not None:
+                trace["error_code"] = "rate_limit"
             logger.warning(
                 "invoke session=%s deployment=%s budget exhausted retry_after=%.1fs",
                 session_id,
@@ -839,6 +896,8 @@ class GatewayService:
             yield _model_rate_limit_event(e.retry_after)
         except Exception as e:
             _settle_failed(holder, e)
+            if trace is not None:
+                trace["error_code"] = _error_code(e)
             latency_ms = int((time.monotonic() - start_time) * 1000)
             logger.error(
                 "invoke session=%s model=%s error=%s latency_ms=%d",
@@ -897,8 +956,14 @@ class GatewayService:
         extra_params: dict[str, Any],
         max_rounds: int | None = None,
         holder: dict[str, Any] | None = None,
+        start_round: int = 0,
+        trace: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Non-streaming rounds: model calls search/read until it answers.
+
+        `start_round` > 0 continues a failed turn (ADR-0028): `messages`
+        already holds the finished rounds, which are not re-run. After each
+        finished round the conversation is snapshot into `trace`.
 
         Tool results go back as `tool` messages; each call is surfaced as a
         `tool` SSE event (progress only — chat_service ignores it). After
@@ -932,7 +997,9 @@ class GatewayService:
         round_no = 0
         turn_retries = 0  # fast-5xx retries, whole turn (_fast_transient)
         pol = policy_of(deployment)
-        for round_no in range(max_rounds + 1):
+        start_round = min(max(0, start_round), max_rounds)
+        round_no = start_round
+        for round_no in range(start_round, max_rounds + 1):
             final = round_no == max_rounds or time.monotonic() > deadline
             if final and round_no > 0:
                 messages.append(
@@ -981,6 +1048,7 @@ class GatewayService:
                 yield progress.calling(step, steps, final)
                 drafted = False
                 call_start = time.monotonic()
+                turn_trace.count_call(trace)
                 try:
                     if getattr(deployment, "tool_streaming", True):
                         # Stream by default: text goes out live as `draft` events
@@ -1105,8 +1173,18 @@ class GatewayService:
                 tool_result_room_chars(deployment, litellm_model, messages),
                 last_round=round_no + 1 >= max_rounds,
             )
+            finished: list[dict[str, Any]] = []
             for c in calls:
                 result = toolbox.call(c.function.name, c.function.arguments)
+                finished.append(
+                    {
+                        "id": c.id,
+                        "name": c.function.name,
+                        "args": c.function.arguments,
+                        "result": toolbox.last_result,
+                        "result_chars": len(result),
+                    }
+                )
                 logger.info(
                     "tool call session=%s round=%d name=%s args=%s result_chars=%d",
                     session_id,
@@ -1142,6 +1220,8 @@ class GatewayService:
                         ),
                     },
                 )
+            # Round finished: a later failure can resume from here.
+            turn_trace.record_round(trace, round_no, messages, finished, toolbox.doc)
         logger.info(
             "tool loop session=%s rounds=%d answer_len=%d",
             session_id,

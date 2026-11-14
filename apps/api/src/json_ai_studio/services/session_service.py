@@ -28,8 +28,9 @@ def cancel_active_job(session: dict[str, Any]) -> None:
 
 
 def public_session(session: dict[str, Any]) -> dict[str, Any]:
-    """Session dict as sent to clients: the owner id stays server-side."""
-    return {k: v for k, v in session.items() if k != "owner"}
+    """Session dict as sent to clients: the owner id and failed-turn traces
+    (ADR-0028) stay server-side."""
+    return {k: v for k, v in session.items() if k not in ("owner", "turn_traces")}
 
 
 async def create_session(
@@ -162,6 +163,7 @@ async def upload_json(
     session["baseline_json"] = data if isinstance(data, dict) else {}
     # New document → old turns' paths and diff ids no longer apply.
     session["conversation_history"] = []
+    session["turn_traces"] = {}  # failed-turn traces go with the thread
     cancel_active_job(session)
     session["updated_at"] = now_iso()
     await store.save_session(session)
