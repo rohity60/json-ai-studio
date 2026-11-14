@@ -230,6 +230,68 @@ paths:
          '429':
            $ref: '#/components/responses/Error429'
 
+   /api/sessions/{sessionId}/turns/{turnId}/resume:
+    post:
+      tags: [chat]
+      summary: Continue a failed chat turn; stream SSE
+      description: |-
+        Continue the session's latest assistant turn whose status is
+        "failed" or "interrupted" (ADR-0028), from the server's in-memory
+        trace: lookup rounds that already finished are not re-run. If the
+        document changed since the turn started, lookups of paths whose
+        values changed are dropped (the model reads them again); when
+        nothing is reusable the original message is simply sent again.
+
+        Same events as /api/chat. On success the SAME assistant turn becomes
+        "complete" in place (no new user turn); complete carries
+        user_turn_id / assistant_turn_id of the original pair. A new failure
+        keeps the turn failed (another "error" event, resumable again).
+        Traces live in server memory only: after a backend restart, or once
+        a later turn completed, the turn answers 404.
+      operationId: resumeChatTurn
+      security:
+         - simpleApiKey: []
+         - bearerAuth: []
+      parameters:
+         - name: sessionId
+           in: path
+           required: true
+           schema:
+             type: string
+         - name: turnId
+           in: path
+           required: true
+           schema:
+             type: string
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                thinking:
+                  type: boolean
+                  default: false
+      responses:
+         '200':
+          description: SSE stream, as /api/chat
+          content:
+            text/event-stream:
+              schema:
+                type: string
+         '401':
+           $ref: '#/components/responses/Error401'
+         '404':
+          description: Unknown turn, or its trace is gone (backend restart / a later turn completed)
+         '409':
+          description: |-
+            detail.error = "not_resumable" (not the latest turn, or its status
+            is not failed/interrupted — e.g. already resumed) or
+            "resume_running" (a resume of this turn is in flight).
+         '429':
+           $ref: '#/components/responses/Error429'
+
    /api/sessions/{sessionId}/versions:
     get:
       tags: [sessions]
@@ -946,6 +1008,21 @@ paths:
             {count,to}.
           - "service_unavailable" — provider outage (not rate limits).
             data: {"scope":"model","message":"...","retry_after":30}
+
+        Failed turns (ADR-0028). When the model was already called and the
+        turn then fails (provider error, call timeout, model capacity, an
+        unexpected server error), the turn is stored with status "failed"
+        and an "error" event is sent BEFORE the terminal event
+        (service_unavailable / rate_limit / complete) the stream ends with:
+          - "error" — data: {"error":"...","code":"provider_error",
+                   "turn_id":"a1","user_turn_id":"u1",
+                   "read_paths":["/entries/4"],"resumable":true}
+            code: provider_error | timeout | rate_limit | internal_error.
+            resumable: the turn can be continued with
+            POST /api/sessions/{id}/turns/{turn_id}/resume.
+        A client that disconnects mid-turn leaves the turn "interrupted"
+        (also resumable). Quota stops (scope "user"), input_too_large and a
+        model-capacity stop before the first call store nothing.
 
         Whole-document review (ADR-0026). A request to review or repair the
         whole document (or a whole collection) that does not fit one planned
@@ -1750,6 +1827,31 @@ components:
           type: integer
           nullable: true
           description: kind=job_batch — 1-based batch number
+        status:
+          type: string
+          enum: [complete, failed, interrupted]
+          default: complete
+          description: |-
+            Assistant turns of kind=message (ADR-0028). failed = the model call or
+            tool loop failed mid-turn (provider error, timeout, model capacity);
+            interrupted = the client disconnected mid-turn. A failed/interrupted
+            turn has no diffs; the latest one can be resumed
+            (POST /api/sessions/{id}/turns/{turnId}/resume) while the server
+            still holds its in-memory trace. Replayed to the model as a short
+            "(previous attempt failed …)" note.
+        error_code:
+          type: string
+          nullable: true
+          enum: [provider_error, timeout, rate_limit, internal_error, interrupted, null]
+          description: Why a failed/interrupted turn stopped.
+        read_paths:
+          type: array
+          nullable: true
+          items:
+            type: string
+          description: |-
+            Failed/interrupted turns: JSON paths the model had already read
+            before it stopped (at most 20).
       required: [role, content]
 
     JobProposal:

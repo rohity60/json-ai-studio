@@ -94,6 +94,27 @@ export type ChatTurn = {
     /** kind=job_batch: the review job and batch this turn records. */
     job_id?: string | null;
     batch_no?: number | null;
+    /** Assistant turns (ADR-0028): failed / interrupted mid-turn. Missing on
+     *  older servers and cached turns = complete. */
+    status?: TurnStatus;
+    error_code?: TurnErrorCode | null;
+    /** Failed turns: paths the model had read before it stopped. */
+    read_paths?: string[] | null;
+};
+
+export type TurnStatus = 'complete' | 'failed' | 'interrupted';
+export type TurnErrorCode = 'provider_error' | 'timeout' | 'rate_limit' | 'internal_error' | 'interrupted';
+
+/** SSE `error` (ADR-0028): the turn was stored as failed and, when
+ *  `resumable`, can be continued with streamResumeTurn(). Sent before the
+ *  terminal service_unavailable / rate_limit / complete event. */
+export type TurnErrorEvent = {
+    error: string;
+    code: TurnErrorCode;
+    turn_id: string;
+    user_turn_id: string;
+    read_paths?: string[];
+    resumable: boolean;
 };
 
 export async function createSession(name: string, apiKey: string) {
@@ -497,6 +518,20 @@ export async function* streamChat(sessionId: string, message: string, workingJso
         `${BASE}/chat`,
         {method: 'POST', headers: await authHeaders(apiKey), body: formData},
         'Chat failed',
+        'LLM request timed out. Server may be slow or unavailable.',
+    );
+}
+
+/** Continue the latest failed chat turn (ADR-0028). Same events as
+ *  streamChat; throws an HTTP error with status 404 (trace gone, e.g. after
+ *  a backend restart) or 409 (not the latest failed turn / already resumed). */
+export async function* streamResumeTurn(sessionId: string, turnId: string, apiKey: string, thinking: boolean = false) {
+    const formData = new FormData();
+    if (thinking) formData.append('thinking', 'true');
+    yield* sseEvents(
+        `${BASE}/sessions/${sessionId}/turns/${turnId}/resume`,
+        {method: 'POST', headers: await authHeaders(apiKey), body: formData},
+        'Continue failed',
         'LLM request timed out. Server may be slow or unavailable.',
     );
 }

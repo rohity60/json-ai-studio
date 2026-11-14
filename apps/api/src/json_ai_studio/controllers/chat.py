@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from ..auth import Principal, get_principal
 from ..services import chat_service, job_service, session_service
 from ..services.intent import QUESTION, classify_intent
-from ..services.errors import NotFoundError
+from ..services.errors import ConflictError, NotFoundError
 
 logger = logging.getLogger("json_ai_studio.controllers.chat")
 
@@ -74,6 +74,57 @@ async def endpoint_chat(
             principal,
             thinking=thinking,
             focus_path=focus_path,
+        ),
+        media_type="text/event-stream",
+    )
+
+
+_RESUME_HINTS = {
+    "not_resumable": "Only the latest failed turn can be continued.",
+    "resume_running": "This turn is already being continued.",
+}
+
+
+@router.post("/sessions/{session_id}/turns/{turn_id}/resume")
+async def endpoint_resume_turn(
+    session_id: str,
+    turn_id: str,
+    thinking: bool = Form(default=False),
+    principal: Principal = Depends(get_principal),
+):
+    """Continue the latest failed chat turn; stream SSE (ADR-0028)."""
+    logger.info(
+        "POST /api/sessions/%s/turns/%s/resume principal=%s thinking=%s",
+        session_id,
+        turn_id,
+        principal.kind,
+        thinking,
+    )
+    try:
+        session = await session_service.get_owned_session(session_id, principal)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if job_service.running_job(session) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "job_running",
+                "hint": "Pause the review to make other edits.",
+            },
+        )
+    try:
+        prepared = chat_service.prepare_resume(session, turn_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ConflictError as exc:
+        code = str(exc)
+        raise HTTPException(
+            status_code=409,
+            detail={"error": code, "hint": _RESUME_HINTS.get(code, code)},
+        )
+    return StreamingResponse(
+        chat_service.resume_event_stream(
+            session, prepared, principal, thinking=thinking
         ),
         media_type="text/event-stream",
     )
