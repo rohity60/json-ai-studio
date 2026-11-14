@@ -8,7 +8,16 @@
 
 import { invoke, invokeJob } from './runtime';
 
-export type { ChatTurn, DiffEntry, DiffStatus } from '../../../../web/src/lib/api';
+export type {
+  BatchComplete, BatchFailed, ChatTurn, DiffEntry, DiffStatus, Job, JobBatch, JobProposal, JobStatus,
+} from '../../../../web/src/lib/api';
+import type { Job } from '../../../../web/src/lib/api';
+
+/** Narrow accept-all / reject-all to one review job, or one of its batches. */
+export type DiffBatchFilter = { jobId: string; batchNo?: number };
+
+const batchArgs = (filter?: DiffBatchFilter) =>
+  filter ? { job_id: filter.jobId, ...(filter.batchNo ? { batch_no: filter.batchNo } : {}) } : {};
 
 export async function createSession(name: string, _apiKey?: string) {
   return invoke('create_session', { name });
@@ -42,12 +51,46 @@ export async function rejectDiff(sessionId: string, diffId: string, _apiKey?: st
   return invoke('reject_diff', { session_id: sessionId, diff_id: diffId });
 }
 
-export async function acceptDiffBatch(sessionId: string, _apiKey?: string) {
-  return invoke('accept_all', { session_id: sessionId });
+export async function acceptDiffBatch(sessionId: string, _apiKey?: string, filter?: DiffBatchFilter) {
+  return invoke('accept_all', { session_id: sessionId, ...batchArgs(filter) });
 }
 
-export async function rejectDiffBatch(sessionId: string, _apiKey?: string) {
-  return invoke('reject_all', { session_id: sessionId });
+export async function rejectDiffBatch(sessionId: string, _apiKey?: string, filter?: DiffBatchFilter) {
+  return invoke('reject_all', { session_id: sessionId, ...batchArgs(filter) });
+}
+
+// --- whole-document review jobs (ADR-0026) ---------------------------------
+
+export async function createJob(
+  sessionId: string,
+  body: { scope_path?: string | null; instruction: string; source_turn_id?: string | null },
+  _apiKey?: string,
+): Promise<Job> {
+  return invoke<Job>('create_job', { session_id: sessionId, ...body });
+}
+
+export async function getJob(sessionId: string, jobId: string, _apiKey?: string): Promise<Job> {
+  return invoke<Job>('get_job', { session_id: sessionId, job_id: jobId });
+}
+
+export async function cancelJob(sessionId: string, jobId: string, _apiKey?: string): Promise<Job> {
+  return invoke<Job>('cancel_job', { session_id: sessionId, job_id: jobId });
+}
+
+/** One review batch as the same `{type, data}` chunks the web SSE stream
+ *  yields (waiting, progress, diff, then batch_complete | batch_failed). */
+export async function* nextBatch(
+  sessionId: string,
+  jobId: string,
+  _apiKey?: string,
+  signal?: AbortSignal,
+) {
+  if (signal?.aborted) {
+    const err: any = new Error('Stopped');
+    err.userAborted = true;
+    throw err;
+  }
+  yield* jobEvents('next_batch', { session_id: sessionId, job_id: jobId }, ['diff', 'batch_complete', 'batch_failed']);
 }
 
 export async function getVersions(sessionId: string, _apiKey?: string) {
@@ -88,8 +131,19 @@ export async function* streamChat(
   const args: Record<string, any> = { session_id: sessionId, message, thinking };
   if (focusPath) args.focus_path = focusPath;
 
+  yield* jobEvents('chat_turn', args, ['diff', 'complete'], sessionId);
+}
+
+/** Run an Executa tool as an async job and yield its events like the web
+ *  SSE stream: progress live, then the outcome events from the result. */
+async function* jobEvents(
+  method: string,
+  args: Record<string, any>,
+  outcomes: string[],
+  sessionId: string = args.session_id,
+) {
   const live = new Set<string>(); // event types already yielded as progress
-  for await (const update of invokeJob('chat_turn', args)) {
+  for await (const update of invokeJob(method, args)) {
     if (update.kind === 'progress') {
       const { event, data } = update.data ?? {};
       if (!event) continue;
@@ -98,9 +152,8 @@ export async function* streamChat(
       continue;
     }
     for (const item of update.data?.events ?? []) {
-      const isOutcome = item.event === 'diff' || item.event === 'complete';
-      if (!isOutcome && live.has(item.event)) continue; // already shown live
-      if (item.event === 'complete' && item.data?.working_json_omitted) {
+      if (!outcomes.includes(item.event) && live.has(item.event)) continue; // already shown live
+      if (item.data?.working_json_omitted) {
         // Too large for a job result: fetch the document separately.
         const session = await getSession(sessionId);
         item.data.working_json = session.working_json;

@@ -137,3 +137,83 @@ async def test_web_client_calls_have_equivalents(anna):
         "restore_versions", {"session_id": fresh["id"], "payload": {"versions": []}}
     )
     assert again["success"] is False and again["error"].startswith("409: ")
+
+
+async def test_review_job_runs_a_batch_and_accepts_it(anna):
+    book = {
+        "name": "book",
+        "entries": [{"id": i, "content": f"teh entry {i}"} for i in range(3)],
+    }
+    sid = (await ok("create_doc", json=book))["session_id"]
+
+    job = await ok("create_job", session_id=sid, instruction="Fix typos")
+    assert job["status"] == "ready"
+    again = await tools.run("create_job", {"session_id": sid, "instruction": "x"})
+    assert again["success"] is False
+    assert json.loads(again["error"][len("409: ") :]) == {
+        "error": "job_active",
+        "job_id": job["id"],
+    }
+
+    anna.replies.append(
+        {
+            "diffs": [
+                {
+                    "path": f"/entries/{i}/content",
+                    "operation": "replace_text",
+                    "find": "teh entry",
+                    "replace": "the entry",
+                }
+                for i in range(3)
+            ],
+            "explanation": "Fixed the typo.",
+        }
+    )
+    batch = await ok("next_batch", session_id=sid, job_id=job["id"])
+    names = [e["event"] for e in batch["events"]]
+    assert "batch_failed" not in names, batch
+    done = next(e["data"] for e in batch["events"] if e["event"] == "batch_complete")
+    assert done["job"]["status"] == "done"
+    assert len(anna.sampling_calls) == 1
+
+    await ok("accept_all", session_id=sid, job_id=job["id"])
+    doc = await ok("get_doc", session_id=sid)
+    assert [e["content"] for e in doc["working_json"]["entries"]] == [
+        f"the entry {i}" for i in range(3)
+    ]
+    assert (await ok("get_job", session_id=sid, job_id=job["id"]))["status"] == "done"
+
+
+async def test_large_batch_result_stays_under_the_job_cap(anna):
+    """A review batch on a large document must fit the host's 256 KB job
+    result: the document is fetched separately, diffs travel once."""
+    words = "the service handles requests and teh cache keeps results warm " * 8
+    book = {
+        "name": "kb",
+        "entries": [
+            {"id": i, "content": f"teh entry {i}: {words}"} for i in range(160)
+        ],
+    }
+    sid = (await ok("create_doc", json=book))["session_id"]
+    job = await ok("create_job", session_id=sid, instruction="Fix typos")
+    first_batch = job["batches"][0] if job.get("batches") else None
+    count = (first_batch["end"] - first_batch["start"] + 1) if first_batch else 60
+    anna.replies.append(
+        {
+            "diffs": [
+                {
+                    "path": f"/entries/{i}/content",
+                    "operation": "modify",
+                    "new_value": f"the entry {i}: {words}",
+                }
+                for i in range(count)
+            ],
+            "explanation": "Fixed.",
+        }
+    )
+    batch = await ok("next_batch", session_id=sid, job_id=job["id"])
+    assert len(json.dumps(batch).encode()) <= tools.MAX_RESULT_BYTES
+    names = [e["event"] for e in batch["events"]]
+    assert "diff" not in names and "batch_complete" in names, names
+    done = next(e["data"] for e in batch["events"] if e["event"] == "batch_complete")
+    assert done["turn"]["diffs"], "the chat turn still carries the diffs"

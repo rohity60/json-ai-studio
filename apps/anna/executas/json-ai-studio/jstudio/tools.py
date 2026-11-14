@@ -18,12 +18,17 @@ from json_ai_studio.models import RestoreVersionsRequest
 from json_ai_studio.services import (
     chat_history_service,
     chat_service,
+    job_service,
     deployment_budget,
     diff_service,
     session_service,
     version_service,
 )
-from json_ai_studio.services.errors import ConflictError, NotFoundError
+from json_ai_studio.services.errors import (
+    ConflictError,
+    InvalidInputError,
+    NotFoundError,
+)
 
 from . import anna_llm
 from .rpc import current_invoke_id, host
@@ -130,20 +135,32 @@ async def chat_turn(args: dict[str, Any]) -> dict[str, Any]:
     # Anna's cap is per invoke, not per minute: start each turn clean.
     deployment_budget.reset()
 
+    return await _collect(
+        chat_service.chat_event_stream(
+            session,
+            session["working_json"],
+            message,
+            wiring.PRINCIPAL,
+            thinking=bool(args.get("thinking")),
+            focus_path=args.get("focus_path") or None,
+        ),
+        outcomes=("complete", "diff"),
+    )
+
+
+async def _collect(
+    stream, outcomes: tuple[str, ...], drop: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    """Run an SSE event stream to the end. Outcome events go in the result;
+    the rest are relayed live as job progress. ``drop`` events are skipped
+    (the client gets the same data elsewhere)."""
     events: list[dict[str, Any]] = []
-    async for event_text in chat_service.chat_event_stream(
-        session,
-        session["working_json"],
-        message,
-        wiring.PRINCIPAL,
-        thinking=bool(args.get("thinking")),
-        focus_path=args.get("focus_path") or None,
-    ):
+    async for event_text in stream:
         event, payload = chat_service.parse_sse(event_text)
-        if event is None or payload is None or event == "thinking":
+        if event is None or payload is None or event == "thinking" or event in drop:
             continue  # the raw model text is not part of the result
         events.append({"event": event, "data": payload})
-        if event not in ("complete", "diff"):
+        if event not in outcomes:
             host.progress({"event": event, "data": payload})
 
     failure = _host_failure()
@@ -152,14 +169,31 @@ async def chat_turn(args: dict[str, Any]) -> dict[str, Any]:
             if item["event"] == "complete":
                 item["data"]["explanation"] = failure
         events.append({"event": "host_error", "data": {"message": failure}})
+    return _fit_result({"events": events})
 
-    result = {"events": events}
-    if len(json.dumps(result, default=str).encode("utf-8")) > MAX_RESULT_BYTES:
-        # Too big for a job result: the UI reloads the document with get_doc.
-        for item in events:
-            if item["event"] == "complete":
-                item["data"].pop("working_json", None)
-                item["data"]["working_json_omitted"] = True
+
+def _size(value: Any) -> int:
+    return len(json.dumps(value, default=str).encode("utf-8"))
+
+
+def _fit_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep a job result under the host's cap, dropping what the client can
+    fetch again: first the document (the UI reloads it with get_doc), then
+    the copy of the diffs a batch also carries in its chat turn."""
+    if _size(result) <= MAX_RESULT_BYTES:
+        return result
+    for item in result["events"]:
+        if item["event"] in ("complete", "batch_complete"):
+            item["data"].pop("working_json", None)
+            item["data"].pop("baseline_json", None)
+            item["data"]["working_json_omitted"] = True
+    if _size(result) <= MAX_RESULT_BYTES:
+        return result
+    for item in result["events"]:
+        if item["event"] == "batch_complete" and item["data"].get("turn"):
+            item["data"].pop("diffs", None)
+    if _size(result) > MAX_RESULT_BYTES:
+        logger.warning("job result still %d bytes after trimming", _size(result))
     return result
 
 
@@ -198,12 +232,81 @@ async def reject_diff(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _batch_filter(args: dict[str, Any]) -> dict[str, Any]:
+    """Optional narrowing to one review job, or one of its batches."""
+    job_id = args.get("job_id")
+    if not job_id:
+        return {}
+    batch_no = args.get("batch_no")
+    return {"job_id": job_id, "batch_no": int(batch_no) if batch_no else None}
+
+
 async def accept_all(args: dict[str, Any]) -> dict[str, Any]:
-    return await diff_service.accept_all(_str(args, "session_id"))
+    return await diff_service.accept_all(
+        _str(args, "session_id"), **_batch_filter(args)
+    )
 
 
 async def reject_all(args: dict[str, Any]) -> dict[str, Any]:
-    return await diff_service.reject_all(_str(args, "session_id"))
+    return await diff_service.reject_all(
+        _str(args, "session_id"), **_batch_filter(args)
+    )
+
+
+# --- whole-document review jobs (ADR-0026) ---------------------------------------
+
+
+class JobConflict(Exception):
+    """409 with the structured detail the web client reads."""
+
+    def __init__(self, detail: dict[str, Any]) -> None:
+        super().__init__(detail.get("error", "conflict"))
+        self.detail = detail
+
+
+async def create_job(args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await job_service.create_job(
+            _str(args, "session_id"),
+            args.get("scope_path") or None,
+            _str(args, "instruction"),
+            args.get("source_turn_id") or None,
+        )
+    except ConflictError as exc:
+        raise JobConflict({"error": "job_active", "job_id": str(exc)}) from exc
+    except InvalidInputError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+async def get_job(args: dict[str, Any]) -> dict[str, Any]:
+    return await job_service.get_job(_str(args, "session_id"), _str(args, "job_id"))
+
+
+async def cancel_job(args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await job_service.cancel_job(
+            _str(args, "session_id"), _str(args, "job_id")
+        )
+    except ConflictError as exc:
+        raise JobConflict({"error": str(exc)}) from exc
+
+
+async def next_batch(args: dict[str, Any]) -> dict[str, Any]:
+    """Process exactly one batch of a review job; one LLM call."""
+    try:
+        session, job = await job_service.begin_next(
+            _str(args, "session_id"), _str(args, "job_id")
+        )
+    except ConflictError as exc:
+        raise JobConflict({"error": str(exc)}) from exc
+    deployment_budget.reset()
+    # The UI reads a batch from batch_complete (its chat turn carries the
+    # diffs); the per-diff events would only double the result size.
+    return await _collect(
+        job_service.run_batch(session, job, wiring.PRINCIPAL),
+        outcomes=("batch_complete", "batch_failed"),
+        drop=("diff",),
+    )
 
 
 # --- versions ------------------------------------------------------------------
@@ -260,6 +363,9 @@ def _p(
 
 
 _SID = _p("session_id", "string", "Document id from create_doc or list_docs.")
+_JOB = _p("job_id", "string", "Review job id.")
+_JOB_OPT = _p("job_id", "string", "Only this review job's changes.", required=False)
+_BATCH_OPT = _p("batch_no", "integer", "Only this batch of the job.", required=False)
 
 TOOLS: dict[str, tuple[Handler, str, list[dict[str, Any]]]] = {
     "list_docs": (list_docs, "List the user's saved JSON documents.", []),
@@ -322,8 +428,39 @@ TOOLS: dict[str, tuple[Handler, str, list[dict[str, Any]]]] = {
         "Undo one proposed change.",
         [_SID, _p("diff_id", "string", "Id of the change.")],
     ),
-    "accept_all": (accept_all, "Keep every pending change.", [_SID]),
-    "reject_all": (reject_all, "Undo every pending change.", [_SID]),
+    "accept_all": (
+        accept_all,
+        "Keep every pending change (optionally one review job / batch).",
+        [_SID, _JOB_OPT, _BATCH_OPT],
+    ),
+    "reject_all": (
+        reject_all,
+        "Undo every pending change (optionally one review job / batch).",
+        [_SID, _JOB_OPT, _BATCH_OPT],
+    ),
+    "create_job": (
+        create_job,
+        "Start a whole-document review job.",
+        [
+            _SID,
+            _p("instruction", "string", "What to check or change across the document."),
+            _p(
+                "scope_path",
+                "string",
+                "JSON Pointer to review; omit for the whole document.",
+                required=False,
+            ),
+            _p(
+                "source_turn_id",
+                "string",
+                "Chat turn that proposed the review.",
+                required=False,
+            ),
+        ],
+    ),
+    "get_job": (get_job, "Get a review job's progress.", [_SID, _JOB]),
+    "cancel_job": (cancel_job, "Cancel a review job.", [_SID, _JOB]),
+    "next_batch": (next_batch, "Run the next batch of a review job.", [_SID, _JOB]),
     "save_version": (
         save_version,
         "Save the current JSON as a named version.",
@@ -370,6 +507,8 @@ async def run(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         # The UI reuses the web app's client logic, which branches on HTTP
         # status: carry the equivalent as a prefix.
         return {"success": False, "error": f"404: {exc}"}
+    except JobConflict as exc:
+        return {"success": False, "error": "409: " + json.dumps(exc.detail)}
     except ConflictError as exc:
         return {"success": False, "error": f"409: {exc}"}
     except ToolError as exc:

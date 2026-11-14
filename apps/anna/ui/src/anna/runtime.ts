@@ -31,7 +31,16 @@ function toolError(raw: any): Error {
   const message = String(raw?.message ?? raw ?? 'Request failed');
   const match = /^(\d{3}): (.*)$/s.exec(message);
   const err: any = new Error(match ? match[2] : message);
-  if (match) err.status = Number(match[1]);
+  if (match) {
+    err.status = Number(match[1]);
+    // Structured 409s (review jobs) carry the same `detail` as the HTTP API.
+    try {
+      const detail = JSON.parse(match[2]);
+      if (detail && typeof detail === 'object') err.detail = detail;
+    } catch {
+      // plain message
+    }
+  }
   err.code = raw?.code;
   return err;
 }
