@@ -83,10 +83,11 @@ def _host_failure() -> str | None:
 
 
 def _session_view(session: dict[str, Any]) -> dict[str, Any]:
-    """Session as JSON for the UI (version snapshots may be pydantic)."""
+    """Session as the web API sends it: no owner, no server-only turn traces
+    (ADR-0028); version snapshots may be pydantic."""
     from .aps_store import _dumps
 
-    return json.loads(_dumps(session))
+    return json.loads(_dumps(session_service.public_session(session)))
 
 
 # --- documents ---------------------------------------------------------------
@@ -144,7 +145,7 @@ async def chat_turn(args: dict[str, Any]) -> dict[str, Any]:
             thinking=bool(args.get("thinking")),
             focus_path=args.get("focus_path") or None,
         ),
-        outcomes=("complete", "diff"),
+        outcomes=("complete", "diff", "error"),
     )
 
 
@@ -195,6 +196,19 @@ def _fit_result(result: dict[str, Any]) -> dict[str, Any]:
     if _size(result) > MAX_RESULT_BYTES:
         logger.warning("job result still %d bytes after trimming", _size(result))
     return result
+
+
+async def resume_turn(args: dict[str, Any]) -> dict[str, Any]:
+    """Continue the latest failed chat turn (ADR-0028); same events as chat_turn."""
+    session = await session_service.get_session(_str(args, "session_id"))
+    prepared = chat_service.prepare_resume(session, _str(args, "turn_id"))
+    deployment_budget.reset()
+    return await _collect(
+        chat_service.resume_event_stream(
+            session, prepared, wiring.PRINCIPAL, thinking=bool(args.get("thinking"))
+        ),
+        outcomes=("complete", "diff", "error"),
+    )
 
 
 async def explain(args: dict[str, Any]) -> dict[str, Any]:
@@ -414,6 +428,15 @@ TOOLS: dict[str, tuple[Handler, str, list[dict[str, Any]]]] = {
                 "JSON Pointer of the section to work on.",
                 required=False,
             ),
+        ],
+    ),
+    "resume_turn": (
+        resume_turn,
+        "Continue the latest failed chat turn.",
+        [
+            _SID,
+            _p("turn_id", "string", "Id of the failed assistant turn."),
+            _p("thinking", "boolean", "Use deeper reasoning.", required=False),
         ],
     ),
     "explain": (explain, "Explain the document in markdown.", [_SID]),

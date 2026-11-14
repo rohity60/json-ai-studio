@@ -145,7 +145,7 @@ def set_store(backend: SessionStore) -> SessionStore:
     """Swap the backend every service uses; returns the previous one.
 
     The web API keeps the in-memory default. The Anna Executa installs a
-    store backed by Anna's per-user storage (ADR-0028).
+    store backed by Anna's per-user storage (ADR-0029).
     """
     previous = get_store()
     store._backend = backend  # type: ignore[attr-defined]

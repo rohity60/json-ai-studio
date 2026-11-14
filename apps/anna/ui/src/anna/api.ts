@@ -10,6 +10,7 @@ import { invoke, invokeJob } from './runtime';
 
 export type {
   BatchComplete, BatchFailed, ChatTurn, DiffEntry, DiffStatus, Job, JobBatch, JobProposal, JobStatus,
+  TurnErrorCode, TurnErrorEvent, TurnStatus,
 } from '../../../../web/src/lib/api';
 import type { Job } from '../../../../web/src/lib/api';
 
@@ -131,7 +132,22 @@ export async function* streamChat(
   const args: Record<string, any> = { session_id: sessionId, message, thinking };
   if (focusPath) args.focus_path = focusPath;
 
-  yield* jobEvents('chat_turn', args, ['diff', 'complete'], sessionId);
+  yield* jobEvents('chat_turn', args, ['diff', 'complete', 'error'], sessionId);
+}
+
+/** Continue the latest failed chat turn (ADR-0028); same chunks as streamChat. */
+export async function* streamResumeTurn(
+  sessionId: string,
+  turnId: string,
+  _apiKey?: string,
+  thinking: boolean = false,
+) {
+  yield* jobEvents(
+    'resume_turn',
+    { session_id: sessionId, turn_id: turnId, thinking },
+    ['diff', 'complete', 'error'],
+    sessionId,
+  );
 }
 
 /** Run an Executa tool as an async job and yield its events like the web

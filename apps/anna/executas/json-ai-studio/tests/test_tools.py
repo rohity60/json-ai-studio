@@ -217,3 +217,21 @@ async def test_large_batch_result_stays_under_the_job_cap(anna):
     assert "diff" not in names and "batch_complete" in names, names
     done = next(e["data"] for e in batch["events"] if e["event"] == "batch_complete")
     assert done["turn"]["diffs"], "the chat turn still carries the diffs"
+
+
+async def test_failed_turn_can_be_resumed(anna):
+    """ADR-0028: a turn whose model call failed is stored and can be
+    continued; traces never reach the UI."""
+    sid = (await ok("create_doc", json=DOC))["session_id"]
+    anna.replies.append(HostError(-32003, "SAMPLING_PROVIDER_ERROR"))
+    turn = await ok("chat_turn", session_id=sid, message="set timeout to 60")
+    failed = next(e["data"] for e in turn["events"] if e["event"] == "error")
+    assert failed["resumable"] is True
+
+    doc = await ok("get_doc", session_id=sid)
+    assert "turn_traces" not in doc and "owner" not in doc
+
+    anna.replies.append(RAISE_TIMEOUT)
+    resumed = await ok("resume_turn", session_id=sid, turn_id=failed["turn_id"])
+    events = {e["event"]: e["data"] for e in resumed["events"]}
+    assert events["diff"]["entry"]["path"] == "/service/timeout", resumed

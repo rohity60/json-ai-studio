@@ -56,7 +56,8 @@ Links to relevant discussions, PRDs, prior ADRs.
 | [0025](0025-deployment-token-budget-and-turn-planner.md) | Deployment token budget and turn planner (inline vs skeleton by budget) | Proposed | 2026-10-30 |
 | [0026](0026-review-intent-and-client-driven-batch-jobs.md) | Whole-document review: intent rules + client-driven batch jobs | Proposed | 2026-11-13 |
 | [0027](0027-session-ownership-and-access-hardening.md) | Session ownership: owner-only access, claim on login, admin key, masked emails | Proposed | 2026-11-13 |
-| [0028](0028-anna-app-executa.md) | Anna App: engine in an Executa, Anna as an LLM provider, sessions in Anna storage | Accepted | 2026-11-12 |
+| [0028](0028-failed-turns-and-resume.md) | Failed chat turns stored with a server-only trace; resume continues the lookup loop | Proposed | 2026-11-14 |
+| [0029](0029-anna-app-executa.md) | Anna App: engine in an Executa, Anna as an LLM provider, sessions in Anna storage | Accepted | 2026-11-12 |
 
 ## Adding a New ADR
 
