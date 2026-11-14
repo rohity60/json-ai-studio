@@ -6,8 +6,10 @@ Event sequence: thinking -> diff(s) -> complete.
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
+from contextlib import aclosing
 from typing import Any, AsyncGenerator
 from uuid import uuid4
 
@@ -25,7 +27,8 @@ from ..diff_utils import (
 from ..settings import get_settings
 from ..gateway import SERVICE_BUSY_MESSAGE, GatewayService
 from . import chat_history_service, intent as intent_rules, progress
-from . import review_proposal
+from . import review_proposal, turn_trace
+from .errors import ConflictError, NotFoundError
 from .turn_planner import plan_turn
 from .session_service import now_iso
 
@@ -123,8 +126,13 @@ async def _stream_llm(
     history: list[dict[str, str]] | None = None,
     outcome: dict[str, Any] | None = None,
     focus_path: str | None = None,
+    trace: dict[str, Any] | None = None,
+    resume: dict[str, Any] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream LLM response as SSE events via GatewayService.
+
+    `trace` / `resume` are passed to the gateway (ADR-0028): the trace is
+    filled as the turn runs; `resume` continues an earlier failed attempt.
 
     The turn planner (ADR-0025) sizes the prompt to the chosen deployment.
     `focus_path` (JSON Pointer) limits what the model sees to one subtree;
@@ -203,6 +211,8 @@ async def _stream_llm(
             "",
             reasoning=reasoning,
             planner=planner,
+            trace=trace,
+            resume=resume,
         ):
             yield event_text
             event, payload = parse_sse(event_text)
@@ -413,6 +423,7 @@ async def _stream_llm(
         logger.exception("chat stream failed")
         if outcome is not None:
             outcome["store"] = False
+            outcome["internal_error"] = True
         yield sse(
             "complete",
             {"working_json": working_json, "explanation": SERVICE_BUSY_MESSAGE},
@@ -482,7 +493,6 @@ async def chat_event_stream(
             return
 
         history = chat_history_service.build_history_messages(session)
-        doc_at_start = session.get("working_json")
 
         # Whole-document review that cannot fit one turn: say what it costs
         # as a batch job instead of starting a lookup loop. No model call.
@@ -501,6 +511,7 @@ async def chat_event_stream(
             )
             assistant_turn["job_proposal"] = proposal
             chat_history_service.append_turns(session, user_turn, assistant_turn)
+            turn_trace.drop_all(session)  # a later turn: no resume (B-47)
             session["updated_at"] = now_iso()
             await store.save_session(session)
             logger.info(
@@ -523,7 +534,142 @@ async def chat_event_stream(
             )
             return
 
-        outcome: dict[str, Any] = {}
+        # aclosing: a client that disconnects while this generator waits at
+        # a yield closes it; the turn must still be recorded (interrupted).
+        async with aclosing(
+            _run_turn(
+                session,
+                working_json,
+                message,
+                principal,
+                reasoning,
+                focus_path or None,
+                history,
+            )
+        ) as turn:
+            async for event_text in turn:
+                yield event_text
+
+    except Exception:
+        # Catch-all for failures in persistence (session store, chat
+        # history) wrapping the inner stream — provider failures are
+        # already handled as friendly events inside it. Never surface the
+        # raw exception; full traceback stays in the logs.
+        logger.exception("chat endpoint stream failed")
+        yield sse(
+            "complete",
+            {"working_json": working_json, "explanation": SERVICE_BUSY_MESSAGE},
+        )
+
+
+# -- Failed turns + resume (PRD B §5, ADR-0028) ------------------------------
+
+# Terminal stop events: held back until the turn is classified, so a stored
+# failure's `error` event (with turn_id) reaches the client before them.
+_STOP_EVENTS = ("rate_limit", "credit_limit", "service_unavailable", "input_too_large")
+
+# Turn ids with a resume in flight (one per turn).
+_resuming: set[str] = set()
+
+
+def _failure_code(
+    event: str, payload: dict[str, Any] | None, trace: dict
+) -> str | None:
+    """error_code when a stop event ends a turn that already called the
+    model (stored as failed); None for quota stops, input_too_large and a
+    capacity stop before the first call — those stay unstored (H-05)."""
+    if trace.get("calls", 0) < 1:
+        return None
+    if event == "service_unavailable":
+        return trace.get("error_code") or "provider_error"
+    if event == "rate_limit" and (payload or {}).get("scope") == "model":
+        return trace.get("error_code") or "rate_limit"
+    return None
+
+
+def _store_failure(
+    session: dict[str, Any],
+    message: str,
+    trace: dict[str, Any],
+    code: str,
+    resume: dict[str, Any] | None,
+    status: str = "failed",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Record a failed/interrupted turn and keep its trace (only the latest
+    turn keeps one). A resumed turn is updated in place."""
+    trace["error_code"] = code
+    content = turn_trace.failure_content(code, int(trace.get("round_reached") or 0))
+    paths = turn_trace.read_paths(trace, trace.get("focus_path")) or None
+    if resume is not None:
+        user_turn, assistant_turn = resume["user_turn"], resume["assistant_turn"]
+        assistant_turn.update(
+            content=content, status=status, error_code=code, read_paths=paths
+        )
+    else:
+        user_turn = chat_history_service.make_turn("user", message)
+        assistant_turn = chat_history_service.make_turn(
+            "assistant", content, status=status, error_code=code
+        )
+        assistant_turn["read_paths"] = paths
+        chat_history_service.append_turns(session, user_turn, assistant_turn)
+    trace.pop("doc_changed", None)
+    turn_trace.keep_only(session, assistant_turn["id"], trace)
+    session["updated_at"] = now_iso()
+    logger.info(
+        "chat turn stored %s session=%s turn=%s code=%s calls=%d rounds=%d resumed=%s",
+        status,
+        session.get("id"),
+        assistant_turn["id"],
+        code,
+        trace.get("calls", 0),
+        trace.get("round_reached", 0),
+        resume is not None,
+    )
+    return user_turn, assistant_turn
+
+
+def _error_event(user_turn: dict[str, Any], assistant_turn: dict[str, Any]) -> str:
+    return sse(
+        "error",
+        {
+            "error": assistant_turn["content"],
+            "code": assistant_turn.get("error_code"),
+            "turn_id": assistant_turn["id"],
+            "user_turn_id": user_turn["id"],
+            "read_paths": assistant_turn.get("read_paths") or [],
+            "resumable": True,
+        },
+    )
+
+
+async def _run_turn(
+    session: dict[str, Any],
+    working_json: dict[str, Any],
+    message: str,
+    principal,
+    reasoning: str | None,
+    focus_path: str | None,
+    history: list[dict[str, str]],
+    resume: dict[str, Any] | None = None,
+) -> AsyncGenerator[str, None]:
+    """Run one model turn and persist it — complete, failed or interrupted.
+
+    `resume` ({user_turn, assistant_turn, trace}) continues a failed turn:
+    the same pair is updated in place instead of appending a new one.
+    """
+    doc_at_start = session.get("working_json")
+    trace = turn_trace.new_trace(working_json, focus_path)
+    resume_trace: dict[str, Any] | None = None
+    if resume is not None:
+        old = resume["trace"]
+        resume_trace = {
+            **old,
+            "doc_changed": old.get("json_hash") != trace["json_hash"],
+        }
+    outcome: dict[str, Any] = {}
+    held: tuple[str, str, dict[str, Any] | None] | None = None
+    persisted = False
+    try:
         async for event_text in _stream_llm(
             session.get("id", "chat-session"),
             working_json,
@@ -532,10 +678,25 @@ async def chat_event_stream(
             reasoning=reasoning,
             history=history,
             outcome=outcome,
-            focus_path=focus_path or None,
+            focus_path=focus_path,
+            trace=trace,
+            resume=resume_trace,
         ):
             event, payload = parse_sse(event_text)
+            if event in _STOP_EVENTS:
+                held = (event_text, event, payload)
+                continue
             if event != "complete" or payload is None:
+                yield event_text
+                continue
+
+            if outcome.get("internal_error"):
+                user_turn, assistant_turn = _store_failure(
+                    session, message, trace, "internal_error", resume
+                )
+                await store.save_session(session)
+                persisted = True
+                yield _error_event(user_turn, assistant_turn)
                 yield event_text
                 continue
 
@@ -570,32 +731,48 @@ async def chat_event_stream(
             if merged_json is not None:
                 session["working_json"] = merged_json
             if outcome.get("store"):
-                user_turn = chat_history_service.make_turn("user", message)
-                assistant_turn = chat_history_service.make_turn(
-                    "assistant",
-                    outcome.get("explanation", ""),
-                    diffs=[
-                        *outcome.get("applied", []),
-                        *outcome.get("failed", []),
-                    ],
-                )
+                diffs = [*outcome.get("applied", []), *outcome.get("failed", [])]
+                if resume is not None:
+                    # Same pair, now complete (B-43): no new user turn.
+                    user_turn = resume["user_turn"]
+                    assistant_turn = resume["assistant_turn"]
+                    for key in ("bulk", "question", "read_paths"):
+                        assistant_turn.pop(key, None)
+                    assistant_turn.update(
+                        content=outcome.get("explanation", ""),
+                        diffs=diffs,
+                        status="complete",
+                        error_code=None,
+                    )
+                else:
+                    user_turn = chat_history_service.make_turn("user", message)
+                    assistant_turn = chat_history_service.make_turn(
+                        "assistant", outcome.get("explanation", ""), diffs=diffs
+                    )
                 if outcome.get("bulk"):
                     # Replayed instead of the (possibly hundreds of) expanded
                     # diffs' detail, so follow-ups see the intent.
                     assistant_turn["bulk"] = outcome["bulk"]
                 if outcome.get("question"):
                     assistant_turn["question"] = outcome["question"]
-                chat_history_service.append_turns(session, user_turn, assistant_turn)
+                if resume is None:
+                    chat_history_service.append_turns(
+                        session, user_turn, assistant_turn
+                    )
+                # A turn completed: earlier failures can't be resumed (B-47).
+                turn_trace.drop_all(session)
                 payload["user_turn_id"] = user_turn["id"]
                 payload["assistant_turn_id"] = assistant_turn["id"]
             session["updated_at"] = now_iso()
             await store.save_session(session)
+            persisted = True
             logger.info(
-                "chat turn persisted session=%s applied=%d failed=%d stored=%s",
+                "chat turn persisted session=%s applied=%d failed=%d stored=%s resumed=%s",
                 session.get("id"),
                 len(outcome.get("applied", [])),
                 len(outcome.get("failed", [])),
                 bool(outcome.get("store")),
+                resume is not None,
             )
             logger.debug(
                 "chat turn merged_json session=%s json=%s",
@@ -604,13 +781,107 @@ async def chat_event_stream(
             )
             yield sse("complete", payload)
 
-    except Exception:
-        # Catch-all for failures in persistence (session store, chat
-        # history) wrapping the inner stream — provider failures are
-        # already handled as friendly events inside it. Never surface the
-        # raw exception; full traceback stays in the logs.
-        logger.exception("chat endpoint stream failed")
+        if held is not None:
+            event_text, event, payload = held
+            code = _failure_code(event, payload, trace)
+            if code is not None:
+                user_turn, assistant_turn = _store_failure(
+                    session, message, trace, code, resume
+                )
+                await store.save_session(session)
+                yield _error_event(user_turn, assistant_turn)
+            persisted = True
+            yield event_text
+    except (asyncio.CancelledError, GeneratorExit):
+        # Client went away mid-turn. Record what was done so far so the
+        # turn can be continued (synchronous only: no awaits while closing;
+        # the in-memory store holds this very dict).
+        if not persisted and trace.get("calls", 0) >= 1:
+            _store_failure(
+                session, message, trace, "interrupted", resume, status="interrupted"
+            )
+        raise
+
+
+def prepare_resume(session: dict[str, Any], turn_id: str) -> dict[str, Any]:
+    """Check a resume request (B-42); raises NotFoundError / ConflictError.
+
+    Only the session's latest turn, if it is a failed/interrupted assistant
+    turn whose trace is still in memory, can be resumed.
+    """
+    history = session.get("conversation_history") or []
+    index = next((i for i, t in enumerate(history) if t.get("id") == turn_id), None)
+    if index is None:
+        raise NotFoundError(f"turn {turn_id} not found")
+    turn = history[index]
+    if (
+        turn.get("role") != "assistant"
+        or turn.get("status") not in turn_trace.FAILED_STATUSES
+        or index != len(history) - 1
+    ):
+        raise ConflictError("not_resumable")
+    trace = turn_trace.traces(session).get(turn_id)
+    user_turn = history[index - 1] if index > 0 else None
+    if trace is None or user_turn is None or user_turn.get("role") != "user":
+        raise NotFoundError(f"turn {turn_id} can no longer be resumed")
+    if turn_id in _resuming:
+        raise ConflictError("resume_running")
+    return {"user_turn": user_turn, "assistant_turn": turn, "trace": trace}
+
+
+async def resume_event_stream(
+    session: dict[str, Any],
+    prepared: dict[str, Any],
+    principal,
+    thinking: bool = False,
+) -> AsyncGenerator[str, None]:
+    """Continue a failed turn (B-42/B-43); same events as /api/chat."""
+    turn_id = prepared["assistant_turn"]["id"]
+    if turn_id in _resuming:
         yield sse(
             "complete",
-            {"working_json": working_json, "explanation": SERVICE_BUSY_MESSAGE},
+            {
+                "working_json": session.get("working_json") or {},
+                "explanation": "This request is already being continued.",
+            },
         )
+        return
+    _resuming.add(turn_id)
+    try:
+        user_turn = prepared["user_turn"]
+        history = chat_history_service.build_history_messages(
+            session, exclude={user_turn["id"], turn_id}
+        )
+        logger.info(
+            "chat resume session=%s turn=%s rounds_done=%d",
+            session.get("id"),
+            turn_id,
+            prepared["trace"].get("round_reached", 0),
+        )
+        async with aclosing(
+            _run_turn(
+                session,
+                session.get("working_json") or {},
+                user_turn.get("content", ""),
+                principal,
+                "high" if thinking else None,
+                prepared["trace"].get("focus_path"),
+                history,
+                resume=prepared,
+            )
+        ) as turn:
+            async for event_text in turn:
+                yield event_text
+    except (asyncio.CancelledError, GeneratorExit):
+        raise
+    except Exception:
+        logger.exception("chat resume stream failed")
+        yield sse(
+            "complete",
+            {
+                "working_json": session.get("working_json") or {},
+                "explanation": SERVICE_BUSY_MESSAGE,
+            },
+        )
+    finally:
+        _resuming.discard(turn_id)

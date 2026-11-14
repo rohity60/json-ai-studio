@@ -92,6 +92,8 @@ type SessionContextValue = {
   uploadJson: (jsonData: Record<string, any>) => Promise<boolean>;
   /** false when the message was not sent (e.g. refused while a review batch runs). */
   sendMessage: (message: string, thinking?: boolean, focusPath?: string) => Promise<boolean>;
+  /** Continue the latest failed turn (ADR-0028). */
+  resumeTurn: (turnId: string, thinking?: boolean) => Promise<void>;
   acceptDiff: (diffId: string) => Promise<void>;
   createVersion: (label: string) => void;
   selectVersion: (versionId: string) => Promise<void>;
@@ -406,38 +408,79 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           content: focusPath ? `${message}\n\n(Section: ${focusPath})` : message,
           ephemeral: true,
         },
+        // Assistant message container, filled as the stream arrives
+        { id: tempAssistantId, role: 'assistant', content: '', diffs: [], ephemeral: true },
       ]
       }));
 
     try {
-        // Track streaming variables locally
-      let activeJson: Record<string, any> | null = null; // set by `complete`
-      let baselineJson: Record<string, any> | null = null;
-      const diffs: any[] = [];
-      let textAccumulator = '';
-      let stored: { userId: string; assistantId: string } | null = null;
-      let quotaStopped = false;
-      let question: { text: string; options: string[] } | null = null;
-      // Whole-document review too large for one turn (ADR-0026): the server
-      // proposes a batch job instead of calling the model.
-      let jobProposal: api.JobProposal | null = null;
-      // Turn progress (PRD B §8): plan, step X/N, finished lookups, waits
-      // and retries, folded from plan/progress/tool/waiting/retrying events
-      // and rendered by ChatPanel's progress panel. Older backends send only
-      // tool/waiting → legacyProgressText() as the bubble text.
-      let progress = newProgress();
-
-        // Initialize the assistant message container in UI history
-      setState((prev) => ({
+      await consumeTurnStream(
+        api.streamChat(state.sessionId, message, currentWorkingJson, apiKey, thinking, focusPath),
+        { userId: tempUserId, assistantId: tempAssistantId, message, thinking },
+      );
+      } catch (err: any) {
+      if (err?.status === 409 && err?.detail?.error === 'job_running') {
+        // A review batch is in flight: edits wait, questions are fine (WC-07).
+        toast.warning('Pause the review to make other edits.');
+        setState((prev) => ({
           ...prev,
-        conversationHistory: [
-            ...prev.conversationHistory,
-            { id: tempAssistantId, role: 'assistant', content: '', diffs: [], ephemeral: true }
-          ]
-        }));
+          conversationHistory: prev.conversationHistory.filter((t) => t.id !== tempUserId && t.id !== tempAssistantId),
+          }));
+        return false; // not sent: the caller keeps the text
+        }
+      if (handleQuotaError(err)) {
+        // popup shown
+        } else if (err.message?.includes('401') || err.message?.includes('API key')) {
+        toast.error('API key rejected. Refresh page.');
+        } else {
+        toast.error(String(err));
+        }
+      setState((prev) => ({ ...prev, error: String(err), loading: false }));
+      }
+    return true;
+    };
 
+  /** Consume one chat-turn SSE stream (POST /api/chat or a resume) into the
+   *  assistant turn `ids.assistantId`. `resumeOf` = the failed turn being
+   *  continued (ADR-0028): it is restored as it was if the stream stops
+   *  without storing anything. */
+  const consumeTurnStream = async (
+    stream: AsyncGenerator<{ type: string; data: any }>,
+    ids: { userId: string; assistantId: string; message: string; thinking: boolean },
+    resumeOf?: UiChatTurn,
+  ) => {
+    const { userId: tempUserId, assistantId: tempAssistantId, message, thinking } = ids;
+    // Track streaming variables locally
+    let activeJson: Record<string, any> | null = null; // set by `complete`
+    let baselineJson: Record<string, any> | null = null;
+    const diffs: any[] = [];
+    let textAccumulator = '';
+    let stored: { userId: string; assistantId: string } | null = null;
+    let quotaStopped = false;
+    let question: { text: string; options: string[] } | null = null;
+    // Whole-document review too large for one turn (ADR-0026): the server
+    // proposes a batch job instead of calling the model.
+    let jobProposal: api.JobProposal | null = null;
+    // Turn stored as failed (ADR-0028): rendered inline with Continue
+    // instead of the provider-error popup.
+    let failure: api.TurnErrorEvent | null = null;
+    // Turn progress (PRD B §8): plan, step X/N, finished lookups, waits
+    // and retries, folded from plan/progress/tool/waiting/retrying events
+    // and rendered by ChatPanel's progress panel. Older backends send only
+    // tool/waiting → legacyProgressText() as the bubble text.
+    let progress = newProgress();
+
+    try {
         // 2. Stream loop
-      for await (const chunk of api.streamChat(state.sessionId, message, currentWorkingJson, apiKey, thinking, focusPath)) {
+      for await (const chunk of stream) {
+
+        // Failed turn stored server-side: the terminal popup event that
+        // follows is replaced by the inline failed bubble + Continue.
+        if (chunk.type === 'error' && chunk.data?.resumable && chunk.data?.turn_id) {
+          failure = chunk.data as api.TurnErrorEvent;
+          stored = { userId: failure.user_turn_id, assistantId: failure.turn_id };
+          break;
+          }
 
         // Model-level quota/availability events: backend streams a
         // `rate_limit`, `credit_limit` or `service_unavailable` event
@@ -543,47 +586,104 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
              });
          }
          }
+      } catch (err) {
+      // Stream broke: a resumed turn goes back to how it was.
+      if (resumeOf) {
+        setState((prev) => ({
+          ...prev,
+          conversationHistory: prev.conversationHistory.map((t) => (t.id === resumeOf.id ? resumeOf : t)),
+          }));
+        }
+      throw err;
+      }
 
         // 4. Stream finalized: adopt server ids, or drop/keep-local the
         // optimistic pair when the backend did not store the turn.
-      const storedIds = stored as { userId: string; assistantId: string } | null;
-      ReactDOM.flushSync(() => {
-        setState((prev) => {
-          let history = prev.conversationHistory;
-          if (quotaStopped) {
-            history = history.filter((t) => t.id !== tempUserId && t.id !== tempAssistantId);
-            } else if (storedIds) {
-            history = history.map((t) =>
-              t.id === tempUserId ? { ...t, id: storedIds.userId, ephemeral: false }
-                : t.id === tempAssistantId ? { ...t, id: storedIds.assistantId, ephemeral: false }
-                : t);
-            }
-          return { ...prev, conversationHistory: history, loading: false, error: null };
-          });
+    const storedIds = stored as { userId: string; assistantId: string } | null;
+    const failed = failure as api.TurnErrorEvent | null;
+    ReactDOM.flushSync(() => {
+      setState((prev) => {
+        let history = prev.conversationHistory;
+        if (failed && storedIds) {
+          history = history.map((t) =>
+            t.id === tempUserId ? { ...t, id: storedIds.userId, ephemeral: false }
+              : t.id === tempAssistantId ? {
+                ...t,
+                id: storedIds.assistantId,
+                ephemeral: false,
+                content: failed.error,
+                status: failed.code === 'interrupted' ? 'interrupted' as const : 'failed' as const,
+                error_code: failed.code,
+                read_paths: failed.read_paths?.length ? failed.read_paths : (t.read_paths ?? null),
+                diffs: [],
+                progress: { ...progress, finishedAt: progress.finishedAt ?? Date.now() },
+                resumeGone: false,
+                }
+              : t);
+          } else if (quotaStopped || (resumeOf && !storedIds)) {
+          history = resumeOf
+            ? history.map((t) => (t.id === resumeOf.id ? resumeOf : t))
+            : history.filter((t) => t.id !== tempUserId && t.id !== tempAssistantId);
+          } else if (storedIds) {
+          history = history.map((t) =>
+            t.id === tempUserId ? { ...t, id: storedIds.userId, ephemeral: false }
+              : t.id === tempAssistantId ? {
+                ...t,
+                id: storedIds.assistantId,
+                ephemeral: false,
+                // A resumed turn is now complete in place (ADR-0028).
+                ...(resumeOf ? { status: 'complete' as const, error_code: null, read_paths: null } : {}),
+                }
+              : t);
+          }
+        return { ...prev, conversationHistory: history, loading: false, error: null };
         });
+      });
+    };
 
+  /** Continue the latest failed assistant turn from where it stopped
+   *  (ADR-0028). The server answers 404 once its in-memory trace is gone
+   *  (backend restart) and 409 when the turn is no longer resumable; either
+   *  way Continue disappears from that turn (WB-07). */
+  const resumeTurn = useCallback(async (turnId: string, thinking: boolean = false): Promise<void> => {
+    if (!state.sessionId) return;
+    const index = state.conversationHistory.findIndex((t) => t.id === turnId);
+    const original = state.conversationHistory[index];
+    const userTurn = state.conversationHistory[index - 1];
+    if (!original || !userTurn) return;
+    // The failed bubble becomes the live one: progress panel, no text yet.
+    setState((prev) => ({
+      ...prev,
+      conversationHistory: prev.conversationHistory.map((t) =>
+        t.id === turnId ? { ...t, content: '', status: 'complete', progress: undefined, read_paths: null } : t),
+      }));
+    chatInFlightRef.current += 1;
+    try {
+      await consumeTurnStream(
+        api.streamResumeTurn(state.sessionId, turnId, apiKey, thinking),
+        { userId: userTurn.id, assistantId: turnId, message: userTurn.content, thinking },
+        original,
+      );
       } catch (err: any) {
-      if (err?.status === 409 && err?.detail?.error === 'job_running') {
-        // A review batch is in flight: edits wait, questions are fine (WC-07).
-        toast.warning('Pause the review to make other edits.');
+      if (err?.status === 404 || (err?.status === 409 && err?.detail?.error === 'not_resumable')) {
         setState((prev) => ({
           ...prev,
-          conversationHistory: prev.conversationHistory.filter((t) => t.id !== tempUserId && t.id !== tempAssistantId),
+          conversationHistory: prev.conversationHistory.map((t) => (t.id === turnId ? { ...original, resumeGone: true } : t)),
           }));
-        return false; // not sent: the caller keeps the text
-        }
-      if (handleQuotaError(err)) {
+        toast.error('This attempt can no longer be continued — send your message again.');
+        } else if (err?.status === 409 && err?.detail?.error === 'job_running') {
+        toast.warning('Pause the review to make other edits.');
+        } else if (err?.status === 409) {
+        toast.info('This request is already being continued.');
+        } else if (handleQuotaError(err)) {
         // popup shown
-        } else if (err.message?.includes('401') || err.message?.includes('API key')) {
-        toast.error('API key rejected. Refresh page.');
         } else {
         toast.error(String(err));
         }
-      setState((prev) => ({ ...prev, error: String(err), loading: false }));
+      } finally {
+      chatInFlightRef.current -= 1;
       }
-    return true;
-    };
-
+    }, [state.sessionId, state.conversationHistory, apiKey]);
 
   const acceptDiff = useCallback(async (diffId: string) => {
     if (!state.sessionId) return;
@@ -1152,7 +1252,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   if (state.loading) return null;
 
   return (
-      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson, clearCache, loadSnapshot, clearSession, clearChat, startJob, pauseJob, resumeJob, cancelJob, dismissJob, acceptJobBatch, rejectJobBatch }}>
+      <SessionContext.Provider value={{ state, createSession, uploadJson, sendMessage, resumeTurn, acceptDiff, createVersion, selectVersion, exportJson, removeDiff, acceptAllDiffs, rejectAllDiffs, refreshSession, explainJson, clearCache, loadSnapshot, clearSession, clearChat, startJob, pauseJob, resumeJob, cancelJob, dismissJob, acceptJobBatch, rejectJobBatch }}>
         {children}
       </SessionContext.Provider>
     );

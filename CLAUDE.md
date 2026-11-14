@@ -25,7 +25,7 @@ Python files: always format with `black .` after editing (install via `uv add --
 
 ```
 json-ai-studio/
-├── openapi/spec.yaml            ← Single source of truth. 27 endpoints, 33 schemas. OpenAPI 3.1 YAML.
+├── openapi/spec.yaml            ← Single source of truth. 28 endpoints, 33 schemas. OpenAPI 3.1 YAML.
 ├── apps/api/                    ← FastAPI backend, layered per ADR-0013
 │     └── src/json_ai_studio/
 │           ├── main.py              ← Thin app factory: FastAPI init, lifespan (DB engine), CORS, include_router per controller.
@@ -58,17 +58,18 @@ json-ai-studio/
 │     │         ├── api.ts            ← Minimal fetch-based API client (no retry, no interceptor).
 │     │         └── versionCache.ts   ← IndexedDB workspace mirror (idb pkg). Versions + working JSON survive backend restarts; restored via POST .../versions/restore.
 │     └── tailwind.config.ts   ← Tailwind config.
-├── docs/adr/                  ← Architecture Decision Records (0001–0026). All tech decisions numbered & dated.
+├── docs/adr/                  ← Architecture Decision Records (0001–0028). All tech decisions numbered & dated.
 ├── docker-compose.yml         ← api + web + db (postgres:16, host port 5433).
 └── openapi/README.md           ← OpenAPI spec conventions.
 ```
 
 ## Key facts
 
-- **OpenAPI-first contract**: `openapi/spec.yaml` (27 endpoints, 33 schemas) is the contract source. Pydantic models in `models.py` implement it verbatim (ADR-0011). Frontend TS types are hand-written mirrors — not auto-generated.
+- **OpenAPI-first contract**: `openapi/spec.yaml` (28 endpoints, 33 schemas) is the contract source. Pydantic models in `models.py` implement it verbatim (ADR-0011). Frontend TS types are hand-written mirrors — not auto-generated.
 - **Session model**: In-memory store behind async `SessionStore` ABC (`db/session_store.py`, ADR-0013). Each session = working_json + version snapshots + conversation history. No TTL. Browser mirrors versions + working JSON to IndexedDB and bulk-restores into a fresh session after backend restart (ADR-0014).
 - **Chat flow**: User NL message → LiteLLM call → field-level diffs → SSE stream: thinking → diff(s) → complete (ADR-0002, ADR-0004). The system prompt in `main.py` embeds the current working JSON as few-shot examples (ADR-0005).
-- **Chat history (ADR-0021)**: server-authoritative. Each turn stores user + assistant turns; diffs carry `status` (pending/accepted/rejected/failed) updated by accept/reject. `services/chat_history_service.py` replays recent turns (with statuses) to the LLM under a turn/token budget (`CHAT_HISTORY_*` settings). Client never sends history to `/api/chat`; only via versions/restore.
+- **Chat history (ADR-0021)**: server-authoritative. Each turn stores user + assistant turns; diffs carry `status` (pending/accepted/rejected/failed) updated by accept/reject. `services/chat_history_service.py` replays recent turns (with statuses) to the LLM under a turn/token budget (`CHAT_HISTORY_*` settings). Client never sends history to `/api/chat`; only via versions/restore. Older user messages > `CHAT_HISTORY_USER_MAX_CHARS` replay as head + tail.
+- **Failed turns + resume (ADR-0028)**: a turn that called the model and then failed (provider error, timeout, model capacity, internal error) or lost its client is stored with assistant `status` failed/interrupted + `error_code` + `read_paths`; SSE `error {code, turn_id, resumable}` precedes the terminal event. `services/turn_trace.py` keeps a server-only trace (snapshot after each finished lookup round, per-path value hashes) in `session["turn_traces"]` — latest turn only, dropped when a later turn completes, never on the wire. `POST .../turns/{turnId}/resume` continues the tool loop after the last finished round (stale lookups replaced by a note; nothing reusable → re-send) and flips the same turn to complete; 404 trace gone, 409 not latest / already resumed. Replay shows failed turns as `(previous attempt failed: <code>; read: …)`. Web: muted turn + Continue (`resumeTurn` in SessionContext).
 - **Bulk edits (ADR-0022)**: model may return `bulk` ops (`/records/*/field` + `where`) alongside `diffs`; `bulk_edits.py` expands them against the full JSON into normal diffs. Skeleton prompt (large docs) adds ARRAY FIELD STATS. Live evals: `LIVE_LLM=1 PYTHONPATH=. uv run pytest tests/test_chat_history_live.py` — pinned to local Ollama (`LIVE_DEPLOYMENT` / `LIVE_MODEL` to override).
 - **Format hints (ADR-0023)**: templates with `formatSignature` are exported (`node --no-warnings apps/web/scripts/export-format-notes.mjs` → `api/.../config/format_notes.json`, committed); matching docs get FORMAT NOTES in the prompt. Prompt rule 11: proactively fix format errors (explained in `explanation`), except explicit user requests (applied + warned).
 - **Lookup tools (ADR-0024)**: docs too large to inline get a key-union skeleton and, on deployments with `supports_tools`, a read-only tool loop (`json_tools.py`: `search`, `query`, `read`, `outline`; `read` takes `paths` / index ranges `/entries/4..13` and returns as many values as fit — room computed per round by `turn_planner.tool_result_room_chars` from the deployment's token budget and context window; max 4 rounds, streamed by default, per-round retry on 429/5xx). Answers may carry `question: {text, options}` (UI buttons). Live evals: `tests/test_json_tools_live.py` (`LIVE_CALL_SPACING_S` paces calls for Google's 16k tokens/min free tier).
@@ -100,6 +101,7 @@ From `openapi/spec.yaml`, implemented in `controllers/`:
 | POST   | `/api/sessions/{id}/diffs/accept-all` | Accept all diffs |
 | POST   | `/api/sessions/{id}/diffs/reject-all` | Reject all diffs |
 | DELETE | `/api/sessions/{id}/chat` | Clear chat history (409 while diffs pending, ADR-0021) |
+| POST   | `/api/sessions/{id}/turns/{turnId}/resume` (SSE) | Continue the latest failed chat turn from its trace (ADR-0028) |
 | POST   | `/api/explain` | LLM markdown explanation of working JSON |
 | POST   | `/api/sessions/{id}/jobs` | Create whole-document review job (ADR-0026) |
 | POST   | `/api/sessions/{id}/jobs/{jobId}/next` (SSE) | Process exactly one review batch |

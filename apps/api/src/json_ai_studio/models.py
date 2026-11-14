@@ -43,6 +43,10 @@ class VersionSnapshot(BaseModel):
 
 
 DiffStatus = Literal["pending", "accepted", "rejected", "failed"]
+TurnStatus = Literal["complete", "failed", "interrupted"]
+TurnErrorCode = Literal[
+    "provider_error", "timeout", "rate_limit", "internal_error", "interrupted"
+]
 
 
 class ChatTurn(BaseModel):
@@ -66,6 +70,12 @@ class ChatTurn(BaseModel):
     # kind="job_batch": the review job and 1-based batch this turn records.
     job_id: str | None = None
     batch_no: int | None = None
+    # Assistant turns (ADR-0028): failed / interrupted mid-turn; the latest
+    # one can be resumed while the server holds its trace (server-only, never
+    # a field here, so it never reaches the wire).
+    status: TurnStatus = "complete"
+    error_code: TurnErrorCode | None = None
+    read_paths: list[str] | None = None
     created_at: datetime | None = None
 
 

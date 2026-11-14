@@ -23,6 +23,7 @@ import litellm
 
 from ..db.session_store import store
 from ..settings import get_settings
+from . import turn_trace
 from .errors import ConflictError
 from .session_service import get_session, now_iso
 
@@ -44,8 +45,10 @@ def make_turn(
     *,
     diffs: list[dict[str, Any]] | None = None,
     kind: str = "message",
+    status: str | None = None,
+    error_code: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    turn: dict[str, Any] = {
         "id": uuid4().hex,
         "role": role,
         "kind": kind,
@@ -53,6 +56,11 @@ def make_turn(
         "diffs": diffs,
         "created_at": now_iso(),
     }
+    if status is not None:
+        # failed / interrupted assistant turns (ADR-0028)
+        turn["status"] = status
+        turn["error_code"] = error_code
+    return turn
 
 
 def append_turns(session: dict[str, Any], *turns: dict[str, Any]) -> None:
@@ -110,6 +118,7 @@ async def clear_chat(session_id: str) -> None:
             f"{len(pending)} pending change(s); accept or reject them first"
         )
     session["conversation_history"] = []
+    turn_trace.drop_all(session)
     session["updated_at"] = now_iso()
     await store.save_session(session)
     logger.info("chat cleared session=%s", session_id)
@@ -173,9 +182,40 @@ def _assistant_payload(turn: dict[str, Any]) -> str:
     )
 
 
-def _replayable_pairs(session: dict[str, Any]) -> list[list[dict[str, str]]]:
-    """User/assistant message pairs after the last boundary, oldest first."""
-    history = _history(session)
+def _failed_payload(turn: dict[str, Any]) -> str:
+    """A failed/interrupted turn replays as a short note in the output
+    contract (B-45): what was attempted and read, never the results."""
+    return json.dumps(
+        {"diffs": [], "explanation": turn_trace.replay_summary(turn)},
+        ensure_ascii=False,
+    )
+
+
+def _compact_user(content: str) -> str:
+    """Head + tail of an older long user message (B-46)."""
+    s = get_settings()
+    if len(content) <= s.chat_history_user_max_chars:
+        return content
+    head = content[: s.chat_history_user_head_chars]
+    tail = (
+        content[-s.chat_history_user_tail_chars :]
+        if s.chat_history_user_tail_chars
+        else ""
+    )
+    omitted = len(content) - len(head) - len(tail)
+    return f"{head}…({omitted} chars omitted){tail}"
+
+
+def _replayable_pairs(
+    session: dict[str, Any], exclude: set[str] | None = None
+) -> list[list[dict[str, str]]]:
+    """User/assistant message pairs after the last boundary, oldest first.
+
+    `exclude` drops turns by id (a resumed turn re-sends its own message).
+    Older user messages are compacted to head + tail; the latest replayed
+    one stays whole.
+    """
+    history = [t for t in _history(session) if t.get("id") not in (exclude or ())]
     start = 0
     for i, turn in enumerate(history):
         if turn.get("kind") == "boundary":
@@ -216,14 +256,24 @@ def _replayable_pairs(session: dict[str, Any]) -> list[list[dict[str, str]]]:
             flush_job()
             pending_user = turn
         elif turn.get("role") == "assistant" and pending_user is not None:
+            failed = turn.get("status") in turn_trace.FAILED_STATUSES
             pairs.append(
                 [
                     {"role": "user", "content": pending_user.get("content", "")},
-                    {"role": "assistant", "content": _assistant_payload(turn)},
+                    {
+                        "role": "assistant",
+                        "content": (
+                            _failed_payload(turn)
+                            if failed
+                            else _assistant_payload(turn)
+                        ),
+                    },
                 ]
             )
             pending_user = None
     flush_job()
+    for pair in pairs[:-1]:
+        pair[0]["content"] = _compact_user(pair[0]["content"])
     return pairs
 
 
@@ -237,13 +287,13 @@ def _count_tokens(model: str, messages: list[dict[str, str]]) -> int:
 
 
 def build_history_messages(
-    session: dict[str, Any], model: str = ""
+    session: dict[str, Any], model: str = "", exclude: set[str] | None = None
 ) -> list[dict[str, str]]:
     """Recent turns as LLM messages, bounded by pair count and tokens."""
     settings = get_settings()
     if not settings.chat_history_enabled:
         return []
-    pairs = _replayable_pairs(session)
+    pairs = _replayable_pairs(session, exclude)
     total = len(pairs)
     pairs = pairs[-settings.chat_history_max_turns :] if pairs else []
     flat = [m for pair in pairs for m in pair]
