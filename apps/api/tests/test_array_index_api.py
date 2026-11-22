@@ -177,3 +177,142 @@ def test_history_replays_concrete_append_path(client, llm):
     chat(client, sid, "rename it")
     replay = llm.calls[-1]["history"][-1]["content"]
     assert '"/steps/3"' in replay and "/steps/-" not in replay
+
+
+def _mod(path, old, new):
+    return {"path": path, "operation": "modify", "old_value": old, "new_value": new}
+
+
+# ---------------------------------------------------------------------------
+# Add, then modify the new element in the NEXT turn (pending and accepted)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("accept_first", [False, True], ids=["pending", "accepted"])
+@pytest.mark.parametrize(
+    "first,at,want",
+    [(_add("/steps/-", "N"), 3, "ABCR"), (_add("/steps/1", "N"), 1, "ARBC")],
+    ids=["appended", "inserted"],
+)
+def test_add_then_modify_next_turn(client, llm, accept_first, first, at, want):
+    sid = _session(client, "ABC")
+    llm.replies = [
+        {"diffs": [first], "explanation": "added"},
+        {"diffs": [_mod(f"/steps/{at}/n", "N", "R")], "explanation": "renamed"},
+    ]
+    chat(client, sid, "add N")
+    if accept_first:
+        client.post(f"/api/sessions/{sid}/diffs/accept-all")
+    done = complete_of(chat(client, sid, "rename the one you added to R"))
+    assert _names(done["working_json"]) == want
+    client.post(f"/api/sessions/{sid}/diffs/accept-all")
+    assert _state(client, sid) == (want, want)
+
+
+# ---------------------------------------------------------------------------
+# The document changed while the model worked (e.g. a review batch landed):
+# appends re-land at the end of the NEW document, and still reject cleanly.
+# ---------------------------------------------------------------------------
+
+
+def test_append_relands_when_doc_changed_during_turn(client, monkeypatch):
+    from src.json_ai_studio.db.session_store import store
+
+    sid = _session(client, "ABC")
+
+    async def invoke(session_id, message, principal, system_prompt, **_kw):
+        session = await store.get_session(session_id)
+        session["working_json"] = {
+            "steps": [*session["working_json"]["steps"], {"n": "Q"}]
+        }
+        reply = {"diffs": [_add("/steps/-", "X")], "explanation": "x"}
+        yield "event: thinking\ndata: " + json.dumps(
+            {"text": json.dumps(reply)}
+        ) + "\n\n"
+
+    monkeypatch.setattr(GatewayService, "invoke", staticmethod(invoke))
+    events = chat(client, sid, "add X")
+    assert _names(complete_of(events)["working_json"]) == "ABCQX"
+    x = _ids(events)["X"]
+    resp = client.post(f"/api/sessions/{sid}/diffs/{x}/reject")
+    assert resp.status_code == 200, resp.text
+    assert _names(resp.json()["working_json"]) == "ABCQ"
+
+
+# ---------------------------------------------------------------------------
+# Review-job filtered accept-all / reject-all (ADR-0026) with appends
+# ---------------------------------------------------------------------------
+
+
+def _tag_last_turn(client, sid, job_id):
+    from src.json_ai_studio.db.session_store import store
+
+    session = client.portal.call(store.get_session, sid)
+    for d in session["conversation_history"][-1]["diffs"]:
+        d["job_id"], d["batch_no"] = job_id, 1
+
+
+@pytest.mark.parametrize(
+    "verb,want_saved,want_preview",
+    [("accept-all", "ABCXYZ", "ABCXYZ"), ("reject-all", "ABC", "ABC")],
+)
+def test_job_filtered_decisions_on_appends(client, llm, verb, want_saved, want_preview):
+    sid = _session(client, "ABC")
+    llm.replies = [{"diffs": APPENDS, "explanation": "added"}]
+    chat(client, sid, "add X Y Z")
+    _tag_last_turn(client, sid, "job-1")
+    out = client.post(
+        f"/api/sessions/{sid}/diffs/{verb}", params={"job_id": "job-1"}
+    ).json()
+    assert _names(out["baseline_json"]) == want_saved
+    assert _names(out["working_json"]) == want_preview
+
+
+# ---------------------------------------------------------------------------
+# Known gaps — per-diff accept rebasing (apps/api/ai/feature/diff-rebase/).
+# strict xfail: these start passing (and fail the suite) once fixed, so the
+# marker gets removed together with the fix.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="diff-rebase: accept order = save order")
+def test_gap_appends_accepted_out_of_order(client, llm):
+    sid = _session(client, "ABC")
+    llm.replies = [{"diffs": APPENDS, "explanation": "added"}]
+    ids = _ids(chat(client, sid, "add X Y Z"))
+    for name in "ZYX":
+        client.post(f"/api/sessions/{sid}/diffs/{ids[name]}/accept")
+    assert _state(client, sid) == ("ABCXYZ", "ABCXYZ")
+
+
+@pytest.mark.xfail(strict=True, reason="diff-rebase: stale index on 2nd accept")
+def test_gap_two_deletes_accepted_top_down(client, llm):
+    sid = _session(client, "ABCD")
+    llm.replies = [
+        {"diffs": [_del("/steps/0", "A"), _del("/steps/2", "C")], "explanation": "x"}
+    ]
+    events = chat(client, sid, "delete A and C")
+    for d in [p["entry"] for e, p in events if e == "diff"]:
+        resp = client.post(f"/api/sessions/{sid}/diffs/{d['id']}/accept")
+        assert resp.status_code == 200, resp.text
+    assert _state(client, sid) == ("BD", "BD")
+
+
+@pytest.mark.xfail(strict=True, reason="list-valued add is inserted as one item")
+def test_gap_single_add_with_list_value(client, llm):
+    sid = _session(client, "ABC")
+    llm.replies = [
+        {
+            "diffs": [
+                {
+                    "path": "/steps/-",
+                    "operation": "add",
+                    "old_value": None,
+                    "new_value": [{"n": "X"}, {"n": "Y"}],
+                }
+            ],
+            "explanation": "x",
+        }
+    ]
+    done = complete_of(chat(client, sid, "add X and Y"))
+    assert done["working_json"]["steps"][-2:] == [{"n": "X"}, {"n": "Y"}]

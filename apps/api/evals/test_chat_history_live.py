@@ -6,7 +6,7 @@ local Ollama (`ollama_local`, needs OLLAMA_BASE_URL) so local runs never burn
 cloud quota; see the `pinned_deployment` fixture in conftest.py. Skipped
 unless ``LIVE_LLM=1``:
 
-    cd apps/api && LIVE_LLM=1 PYTHONPATH=. uv run pytest tests/test_chat_history_live.py -v -s
+    cd apps/api && LIVE_LLM=1 PYTHONPATH=. uv run pytest evals/test_chat_history_live.py -v -s
     # other backend: LIVE_DEPLOYMENT=google_ai_studio  /  LIVE_MODEL=qwen3.6:35b-mlx
 
 Model output varies run to run, so assertions are on SAFETY (never touch

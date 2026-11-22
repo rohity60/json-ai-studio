@@ -975,3 +975,39 @@ class TestPreviewPathAndCheckedRevert:
     def test_accept_form_keeps_dash(self):
         _, applied, _ = DiffUtils.apply_all_verbose([_add("/steps/-", "X")], self.DOC)
         assert DiffUtils.accept_form(applied[0])["path"] == "/steps/-"
+
+
+class TestMergedEntries:
+    """nvidia nemotron 2026-11-23: several entries run together in ONE
+    object with repeated keys; plain json keeps only the last."""
+
+    ROLE = '"path": "/roles/-", "operation": "add", "old_value": null, "new_value": {"name": "%s"}'
+
+    def test_merged_entries_split(self):
+        names = ["Senior Staff", "Recruitment Staff", "Event Staff"]
+        text = (
+            '{"diffs": [{' + ", ".join(self.ROLE % n for n in names) + "}], "
+            '"explanation": "Added three roles."}'
+        )
+        diffs, explanation = parse_llm_response(text)
+        assert [d["new_value"]["name"] for d in diffs] == names
+        assert explanation == "Added three roles."
+
+    def test_merged_entries_split_in_salvage(self):
+        text = '{"diffs": [{' + self.ROLE % "A" + ", " + self.ROLE % "B" + "}, oops]}"
+        diffs, _ = parse_llm_response(text)
+        assert [d["new_value"]["name"] for d in diffs] == ["A", "B"]
+
+    def test_ordinary_objects_untouched(self):
+        diffs, _ = parse_llm_response(
+            '{"diffs": [{"path": "/a", "operation": "modify", "old_value": 1, '
+            '"new_value": {"path": "x", "k": 1}}], "explanation": "e"}'
+        )
+        assert diffs == [
+            {
+                "path": "/a",
+                "operation": "modify",
+                "old_value": 1,
+                "new_value": {"path": "x", "k": 1},
+            }
+        ]

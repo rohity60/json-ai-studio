@@ -9,7 +9,7 @@ Prod case 2026-10-19: a Zoom Rooms Controls profile with an invalid adapter
 model ("GenericNetworkDevice"); asked to "make this code work with qsys", the
 model changed it to "Q-SYS Core110f" — still invalid.
 
-    cd apps/api && LIVE_LLM=1 PYTHONPATH=. uv run pytest tests/test_suggested_fixes_live.py -v -s
+    cd apps/api && LIVE_LLM=1 PYTHONPATH=. uv run pytest evals/test_suggested_fixes_live.py -v -s
 """
 
 from __future__ import annotations

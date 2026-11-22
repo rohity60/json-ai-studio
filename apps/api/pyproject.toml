@@ -30,3 +30,6 @@ dev-dependencies = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Live model/prompt evals live in evals/ and run only when asked for:
+# uv run python evals/run_evals.py (see evals/README.md)
+testpaths = ["tests"]

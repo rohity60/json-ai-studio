@@ -782,9 +782,44 @@ def normalize_entry(d: Any) -> dict[str, Any] | None:
     }
 
 
+_MERGED = "__merged_entries__"
+_ENTRY_KEYS = {"path", "operation", "op"}
+
+
+def _split_merged_entries(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """object_pairs_hook: an object whose diff keys repeat is several diff
+    entries the model ran together without "}, {" (nvidia nemotron
+    2026-11-23: {"path": a, "operation": "add", "new_value": x, "path": b,
+    ...} for 4 roles; plain json keeps only the LAST, so 3 were lost).
+    Split at each repeat of the object's first key."""
+    keys = [k for k, _ in pairs]
+    first = keys[0] if keys else None
+    if first not in _ENTRY_KEYS or keys.count(first) < 2:
+        return dict(pairs)
+    chunks: list[dict[str, Any]] = []
+    for key, value in pairs:
+        if key == first or not chunks:
+            chunks.append({})
+        chunks[-1][key] = value
+    return {_MERGED: chunks}
+
+
+def _flatten_entries(items: list[Any]) -> list[Any]:
+    out: list[Any] = []
+    for item in items:
+        if isinstance(item, dict) and _MERGED in item:
+            out.extend(item[_MERGED])
+        else:
+            out.append(item)
+    return out
+
+
 def _coerce_diffs(value: Any) -> tuple[list[dict[str, Any]], str] | None:
     """Interpret a parsed JSON value as diff output. None = not diff-shaped."""
+    if isinstance(value, dict) and _MERGED in value:
+        value = value[_MERGED]
     if isinstance(value, list):
+        value = _flatten_entries(value)
         entries = [e for e in (normalize_entry(d) for d in value) if e is not None]
         if entries or all(isinstance(d, dict) for d in value):
             return entries, ""
@@ -792,7 +827,9 @@ def _coerce_diffs(value: Any) -> tuple[list[dict[str, Any]], str] | None:
     if isinstance(value, dict):
         if isinstance(value.get("diffs"), list):
             entries = [
-                e for e in (normalize_entry(d) for d in value["diffs"]) if e is not None
+                e
+                for e in (normalize_entry(d) for d in _flatten_entries(value["diffs"]))
+                if e is not None
             ]
             explanation = value.get("explanation")
             return entries, str(explanation) if explanation else ""
@@ -860,6 +897,12 @@ def _salvage_entries(text: str, decoder: "json.JSONDecoder") -> list[dict[str, A
         except ValueError:
             i += 1
             continue
+        if isinstance(value, dict) and _MERGED in value:
+            merged = [e for e in map(normalize_entry, value[_MERGED]) if e]
+            if merged:
+                entries.extend(merged)
+                i += end
+                continue
         entry = normalize_entry(value) if isinstance(value, dict) else None
         if entry is not None:
             entries.append(entry)
@@ -884,7 +927,7 @@ def parse_llm_response(text: str | None) -> tuple[list[dict[str, Any]], str]:
     fence = _FENCE_RE.match(raw)
     body = fence.group(1).strip() if fence else raw
 
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(object_pairs_hook=_split_merged_entries)
     candidates = [body]
     # Also try a copy with common small-model JSON defects repaired (trailing
     # commas, leading/empty/doubled array elements).

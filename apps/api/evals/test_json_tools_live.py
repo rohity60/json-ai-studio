@@ -2,7 +2,7 @@
 
 Pinned to the local Ollama deployment (see conftest `pinned_deployment`).
 
-    cd apps/api && LIVE_LLM=1 PYTHONPATH=. uv run pytest tests/test_json_tools_live.py -v -s
+    cd apps/api && LIVE_LLM=1 PYTHONPATH=. uv run pytest evals/test_json_tools_live.py -v -s
 """
 
 from __future__ import annotations
