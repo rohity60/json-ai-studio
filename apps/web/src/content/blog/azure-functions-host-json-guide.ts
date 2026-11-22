@@ -6,14 +6,14 @@ export const post: BlogPost = {
     title: 'The Azure Functions host.json Guide',
     description:
       'What host.json controls across a whole Functions app — Application Insights sampling, HTTP routing and concurrency, function timeout and retry — and the settings that matter most in production.',
-    updatedAt: '2026-07-18',
+    updatedAt: '2026-11-21',
     author: 'JSON AI Studio',
     tags: ['azure', 'azure-functions', 'serverless', 'host-json'],
     readingTime: '5 min',
     aiSummary:
       'host.json configures the Functions runtime host-wide. The highest-impact settings are Application Insights sampling (controls telemetry cost), functionTimeout (capped at 10 min on Consumption), the app-wide retry policy, and HTTP concurrency limits. It never holds secrets — those go in application settings.',
     relatedTemplates: ['azure-functions-host-json'],
-    relatedBlogs: [],
+    relatedBlogs: ['azure-app-service-settings-guide', 'staticwebapp-config-json-guide'],
     faq: [
       {
         q: 'Where does host.json live?',
@@ -45,7 +45,7 @@ Application Insights bills per ingested item. Sampling caps the rate so a traffi
 
 ## Cap execution time
 
-\`"functionTimeout": "00:05:00"\` stops runaway executions. On the Consumption plan the hard ceiling is 10 minutes — set it explicitly rather than relying on the default.
+\`"functionTimeout": "00:05:00"\` stops runaway executions. On the classic Consumption plan the hard ceiling is 10 minutes — set it explicitly rather than relying on the default. Premium, Dedicated and the newer **Flex Consumption** plan allow much longer runs (\`"-1"\` means unbounded where the plan permits it), but an explicit cap still protects you from a stuck execution.
 
 ## Retry transient failures
 

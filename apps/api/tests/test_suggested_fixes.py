@@ -85,7 +85,14 @@ class TestFormatHints:
         assert "GenericNetworkAdapter" in prompt.split(MATCH_MARKER, 1)[1]
 
     def test_unrelated_document_gets_none(self):
-        assert MATCH_MARKER not in build_system_prompt(PKG)
+        assert MATCH_MARKER not in build_system_prompt(
+            {"title": "notes", "items": [1, 2]}
+        )
+
+    def test_package_json_matches_its_template(self):
+        from src.json_ai_studio.format_hints import match_formats
+
+        assert [f["id"] for f in match_formats(PKG)] == ["package-json"]
 
     def test_partial_signature_does_not_match(self):
         from src.json_ai_studio.format_hints import match_formats

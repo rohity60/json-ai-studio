@@ -39,6 +39,20 @@ import { template as vscodeLaunch } from './vscode-launch-json';
 import { template as vscodeTasks } from './vscode-tasks-json';
 // Phase 6 (AV / Room Systems)
 import { template as zoomRoomsQsys } from './zoom-rooms-qsys-controls';
+// Phase 7 (High-demand formats, 2026-11)
+import { template as packageJson } from './package-json';
+import { template as tsconfigJson } from './tsconfig-json';
+import { template as jsonSchema } from './json-schema';
+import { template as llmStructuredOutput } from './llm-structured-output';
+import { template as jsonLd } from './json-ld-structured-data';
+import { template as chromeManifest } from './chrome-extension-manifest';
+import { template as geojson } from './geojson-feature-collection';
+import { template as dotnetAppsettings } from './dotnet-appsettings-json';
+// Phase 8 (Search-demand gaps, 2026-11)
+import { template as sampleJsonData } from './sample-json-data';
+import { template as sampleApiResponse } from './sample-api-response';
+import { template as powerBiTheme } from './power-bi-theme';
+import { template as gstEInvoice } from './gst-e-invoice';
 
 export const templates: Template[] = [
   // Phase 1
@@ -78,4 +92,18 @@ export const templates: Template[] = [
   vscodeTasks,
   // Phase 6 (AV / Room Systems)
   zoomRoomsQsys,
+  // Phase 7 (High-demand formats, 2026-11)
+  packageJson,
+  tsconfigJson,
+  jsonSchema,
+  llmStructuredOutput,
+  jsonLd,
+  chromeManifest,
+  geojson,
+  dotnetAppsettings,
+  // Phase 8 (Search-demand gaps, 2026-11)
+  sampleJsonData,
+  sampleApiResponse,
+  powerBiTheme,
+  gstEInvoice,
 ];

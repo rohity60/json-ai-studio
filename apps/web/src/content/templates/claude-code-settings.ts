@@ -14,7 +14,7 @@ export const template: Template = {
     tags: ['claude-code', 'ai', 'agent', 'permissions', 'hooks'],
     schemaVersion: 'claude-code-settings-v1',
     featured: true,
-    updatedAt: '2026-07-18',
+    updatedAt: '2026-11-21',
     author: 'JSON AI Studio',
     starterPrompts: [
       'Allow all npm test commands without prompting',
@@ -35,7 +35,8 @@ export const template: Template = {
       'permissions — allow / deny / ask arrays of tool-pattern rules',
       'hooks — commands run on events like PostToolUse or Stop',
       'env — environment variables injected into the session',
-      'model — override the model used in this project',
+      'model — override the model used in this project (an alias like "opus"/"sonnet" or a full id)',
+      'hooks — commands run on events; each hook receives the event as JSON on stdin (e.g. .tool_input.file_path)',
     ],
     bestPractices: [
       'Allow only narrow, safe command patterns (e.g. Bash(npm run test:*)), not broad wildcards.',
@@ -58,7 +59,7 @@ export const template: Template = {
     env: {
       NODE_ENV: 'development',
     },
-    model: 'claude-sonnet-4-5',
+    model: 'opus',
     hooks: {
       PostToolUse: [
         {
@@ -66,7 +67,7 @@ export const template: Template = {
           hooks: [
             {
               type: 'command',
-              command: 'npx prettier --write "$CLAUDE_FILE_PATHS"',
+              command: "jq -r '.tool_input.file_path' | xargs npx prettier --write",
             },
           ],
         },

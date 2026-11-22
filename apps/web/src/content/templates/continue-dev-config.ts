@@ -14,7 +14,7 @@ export const template: Template = {
     tags: ['continue', 'ai', 'code-assistant', 'autocomplete', 'vscode'],
     schemaVersion: 'continue-config-v1',
     featured: false,
-    updatedAt: '2026-07-18',
+    updatedAt: '2026-11-21',
     author: 'JSON AI Studio',
     starterPrompts: [
       'Add an Ollama model for local inference',
@@ -38,6 +38,7 @@ export const template: Template = {
       'slashCommands — custom /commands surfaced in chat',
     ],
     bestPractices: [
+      'config.json is deprecated — Continue loads config.yaml instead when both exist; use this to maintain legacy setups or as the source for a YAML migration.',
       'Use a small, fast model for tabAutocompleteModel and a strong one for chat.',
       'Reference API keys with ${{ secrets.NAME }} instead of pasting them inline.',
       'Add only the context providers you use to keep prompts focused.',
@@ -53,7 +54,7 @@ export const template: Template = {
       {
         title: 'Claude Sonnet',
         provider: 'anthropic',
-        model: 'claude-sonnet-4-5',
+        model: 'claude-sonnet-5-5',
         apiKey: '${{ secrets.ANTHROPIC_API_KEY }}',
       },
     ],

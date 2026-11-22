@@ -31,6 +31,23 @@ import { post as vscodeLaunchGuide } from './vscode-launch-json-guide';
 import { post as vscodeTasksGuide } from './vscode-tasks-json-guide';
 // Phase 6 (AV / Room Systems)
 import { post as zoomRoomsQsysGuide } from './zoom-rooms-qsys-json-profile';
+// Phase 7 (High-demand formats, 2026-11)
+import { post as packageJsonGuide } from './package-json-guide';
+import { post as tsconfigJsonGuide } from './tsconfig-json-guide';
+import { post as jsonSchemaGuide } from './json-schema-guide';
+import { post as llmStructuredOutputs } from './llm-structured-outputs-json';
+import { post as jsonLdGuide } from './json-ld-structured-data-guide';
+import { post as chromeManifestGuide } from './chrome-extension-manifest-v3-guide';
+import { post as geojsonGuide } from './geojson-guide';
+import { post as dotnetAppsettingsGuide } from './dotnet-appsettings-json-guide';
+// Phase 8 (Search-demand gaps, 2026-11)
+import { post as sampleJsonDataGuide } from './sample-json-data-guide';
+import { post as jsonVsJsonl } from './json-vs-jsonl';
+import { post as jsonVsYaml } from './json-vs-yaml';
+import { post as jsonVsToon } from './json-vs-toon';
+import { post as jsonVsJsonb } from './json-vs-jsonb';
+import { post as powerBiThemeGuide } from './power-bi-theme-json-guide';
+import { post as gstEInvoiceGuide } from './gst-e-invoice-json-guide';
 
 export const posts: BlogPost[] = [
   whatIsIamPolicy,
@@ -62,4 +79,21 @@ export const posts: BlogPost[] = [
   vscodeTasksGuide,
   // Phase 6 (AV / Room Systems)
   zoomRoomsQsysGuide,
+  // Phase 7 (High-demand formats, 2026-11)
+  packageJsonGuide,
+  tsconfigJsonGuide,
+  jsonSchemaGuide,
+  llmStructuredOutputs,
+  jsonLdGuide,
+  chromeManifestGuide,
+  geojsonGuide,
+  dotnetAppsettingsGuide,
+  // Phase 8 (Search-demand gaps, 2026-11)
+  sampleJsonDataGuide,
+  jsonVsJsonl,
+  jsonVsYaml,
+  jsonVsToon,
+  jsonVsJsonb,
+  powerBiThemeGuide,
+  gstEInvoiceGuide,
 ];

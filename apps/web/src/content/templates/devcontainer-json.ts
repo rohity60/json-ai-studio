@@ -51,7 +51,7 @@ export const template: Template = {
   },
   json: {
     name: 'Node.js Dev Container',
-    image: 'mcr.microsoft.com/devcontainers/javascript-node:20-bookworm',
+    image: 'mcr.microsoft.com/devcontainers/javascript-node:22-bookworm',
     features: {
       'ghcr.io/devcontainers/features/github-cli:1': {},
       'ghcr.io/devcontainers/features/docker-in-docker:2': {

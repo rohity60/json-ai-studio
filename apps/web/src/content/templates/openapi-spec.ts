@@ -23,7 +23,7 @@ export const template: Template = {
       'Generate an example response for GET /items',
     ],
     relatedTemplates: ['postman-collection'],
-    relatedBlogs: ['openapi-json-explained'],
+    relatedBlogs: ['openapi-json-explained', 'json-schema-guide'],
     purpose:
       'Define the contract for a small REST API — paths, request/response schemas, and security — in a single OpenAPI 3.1 document.',
     whenToUse:

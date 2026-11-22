@@ -3,17 +3,17 @@ import type { BlogPost } from '@/content/types';
 export const post: BlogPost = {
   meta: {
     slug: 'continue-dev-config-guide',
-    title: 'The Continue.dev config.json Guide',
+    title: 'The Continue.dev config.json Guide (and Migrating to config.yaml)',
     description:
       'How config.json sets up the Continue.dev assistant — chat models vs the tab-autocomplete model, the embeddings provider behind @codebase, context providers and custom slash commands.',
-    updatedAt: '2026-07-18',
+    updatedAt: '2026-11-21',
     author: 'JSON AI Studio',
     tags: ['continue', 'ai', 'code-assistant', 'autocomplete'],
     readingTime: '5 min',
     aiSummary:
       'Continue.dev config.json wires up its assistant. models is the list of chat models; tabAutocompleteModel is a separate fast model for inline completions; embeddingsProvider powers @codebase retrieval; contextProviders add sources like code, diff and docs; slashCommands add custom /commands. Use a small model for autocomplete, reference API keys as secrets, and prefer local providers for sensitive code.',
     relatedTemplates: ['continue-dev-config'],
-    relatedBlogs: [],
+    relatedBlogs: ['mcp-json-guide', 'llm-thinking-reasoning-config'],
     faq: [
       {
         q: 'Why separate chat and autocomplete models?',
@@ -21,11 +21,13 @@ export const post: BlogPost = {
       },
       {
         q: 'JSON or YAML?',
-        a: 'Newer Continue versions favor config.yaml, but config.json remains supported and is what many existing setups use. The field names map directly between the two.',
+        a: 'config.json is deprecated. Continue now uses config.yaml, and when both files exist it loads config.yaml and ignores config.json. Most fields map across (contextProviders becomes context, systemMessage becomes rules), but slashCommands and the top-level requestOptions/completionOptions have no YAML equivalent.',
       },
     ],
   },
   body: `Continue.dev is an open-source AI assistant for VS Code and JetBrains, and \`config.json\` is where you tell it which models to use and where to pull context from.
+
+> **Heads up:** \`config.json\` is **deprecated**. Continue's current format is \`config.yaml\`, and if both files exist, \`config.yaml\` wins and \`config.json\` is ignored. Use this guide to read or maintain a legacy setup, and see the migration section at the end.
 
 ## Chat models vs autocomplete
 
@@ -33,7 +35,7 @@ export const post: BlogPost = {
 
 \`\`\`json
 "models": [
-  { "title": "Claude Sonnet", "provider": "anthropic", "model": "claude-sonnet-4-5", "apiKey": "\${{ secrets.ANTHROPIC_API_KEY }}" }
+  { "title": "Claude Sonnet", "provider": "anthropic", "model": "claude-sonnet-5-5", "apiKey": "\${{ secrets.ANTHROPIC_API_KEY }}" }
 ]
 \`\`\`
 
@@ -58,6 +60,38 @@ Add only the ones you use — each extra provider is more noise in the prompt.
 ## Custom slash commands
 
 \`slashCommands\` adds \`/\` actions in chat, like \`/edit\` or a project-specific \`/test\`.
+
+## Migrating to config.yaml
+
+The same setup in YAML. \`models\` becomes a single list, and each entry declares its \`roles\`:
+
+\`\`\`yaml
+name: my-assistant
+version: 1.0.0
+schema: v1
+models:
+  - name: Claude Sonnet
+    provider: anthropic
+    model: claude-sonnet-5-5
+    apiKey: \${{ secrets.ANTHROPIC_API_KEY }}
+    roles: [chat, edit, apply]
+  - name: Codestral
+    provider: mistral
+    model: codestral-latest
+    apiKey: \${{ secrets.MISTRAL_API_KEY }}
+    roles: [autocomplete]
+context:
+  - provider: code
+  - provider: diff
+  - provider: terminal
+\`\`\`
+
+| config.json | config.yaml |
+|---|---|
+| \`models\` + \`tabAutocompleteModel\` + \`embeddingsProvider\` | one \`models\` list with \`roles\` (\`chat\`, \`autocomplete\`, \`embed\` …) |
+| \`contextProviders\` | \`context\` |
+| \`systemMessage\` | \`rules\` |
+| \`slashCommands\` | no equivalent (use prompts) |
 
 ## Security notes
 

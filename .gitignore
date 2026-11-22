@@ -25,3 +25,20 @@ apps/api/logs/
 .env
 .env.*
 !.env.example
+
+# Python build / test artifacts (any package)
+*.egg-info/
+.pytest_cache/
+
+# Anna App — build output and local state; sources, .anna/app.json and the
+# CI workflow stay tracked
+apps/anna/bundle/
+apps/anna/ui/node_modules/
+apps/anna/executas/*/build/
+apps/anna/executas/*/dist/
+apps/anna/.anna/dev-app.json
+# Downloaded Anna docs corpus (re-fetchable llms.txt / llms-full.txt)
+.anna-docs/
+
+# Stray local file, unrelated to the project
+/card.json

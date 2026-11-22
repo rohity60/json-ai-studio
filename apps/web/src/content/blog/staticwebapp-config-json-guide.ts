@@ -13,7 +13,7 @@ export const post: BlogPost = {
     aiSummary:
       'staticwebapp.config.json is the edge config for an Azure Static Web App. routes gate paths by role and do redirects/rewrites; navigationFallback rewrites unmatched navigation to the SPA shell (with static assets excluded); responseOverrides customize 401/403/404. Return 404 for protected routes and set security headers in globalHeaders.',
     relatedTemplates: ['azure-static-web-app-config'],
-    relatedBlogs: [],
+    relatedBlogs: ['azure-app-service-settings-guide'],
     faq: [
       {
         q: 'Why does my SPA 404 on refresh?',

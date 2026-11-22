@@ -6,14 +6,14 @@ export const post: BlogPost = {
     title: 'The devcontainer.json Guide',
     description:
       'What each block of a devcontainer.json does — image vs build, features, forwardPorts, customizations and postCreateCommand — and how the same file powers both GitHub Codespaces and local VS Code Dev Containers.',
-    updatedAt: '2026-07-18',
+    updatedAt: '2026-11-21',
     author: 'JSON AI Studio',
     tags: ['devcontainer', 'codespaces', 'vscode', 'docker'],
     readingTime: '5 min',
     aiSummary:
       'devcontainer.json describes a reproducible dev environment. image (or build) picks the base; features add reusable toolchains like docker-in-docker or a language runtime; forwardPorts surfaces container ports; customizations.vscode pre-installs extensions and settings; postCreateCommand runs once after creation. The same file works in Codespaces and local VS Code. Pin versions and run as a non-root remoteUser.',
     relatedTemplates: ['devcontainer-json'],
-    relatedBlogs: [],
+    relatedBlogs: ['docker-daemon-json-guide', 'package-json-guide'],
     faq: [
       {
         q: 'image or build — which do I use?',
@@ -32,10 +32,12 @@ export const post: BlogPost = {
 The base can be a prebuilt image (fastest, most common):
 
 \`\`\`json
-{ "image": "mcr.microsoft.com/devcontainers/javascript-node:20-bookworm" }
+{ "image": "mcr.microsoft.com/devcontainers/javascript-node:22-bookworm" }
 \`\`\`
 
 or a \`build\` pointing at a Dockerfile when you need custom bake-in steps. Set one, not both.
+
+Pick an image on a supported runtime line. Node 20 reached end-of-life in April 2026, so start new configs on Node 22 or 24.
 
 ## features: reusable toolchains
 

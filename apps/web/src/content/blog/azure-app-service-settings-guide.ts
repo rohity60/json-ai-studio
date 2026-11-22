@@ -13,7 +13,7 @@ export const post: BlogPost = {
     aiSummary:
       'App Service settings can be edited in bulk as a JSON array of { name, value, slotSetting }. slotSetting:true pins a value to its deployment slot so a swap keeps it in place. Use @Microsoft.KeyVault(...) references for secrets, and keep the array in source control as the config source of truth.',
     relatedTemplates: ['azure-app-service-settings'],
-    relatedBlogs: [],
+    relatedBlogs: ['dotnet-appsettings-json-guide', 'azure-functions-host-json-guide'],
     faq: [
       {
         q: 'What does slotSetting do?',

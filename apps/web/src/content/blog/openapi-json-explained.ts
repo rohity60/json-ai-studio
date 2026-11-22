@@ -6,14 +6,14 @@ export const post: BlogPost = {
     title: 'OpenAPI JSON Explained',
     description:
       'Understand the shape of an OpenAPI 3.1 document — info, servers, paths, operations and reusable components — and how it drives docs and codegen.',
-    updatedAt: '2026-07-15',
+    updatedAt: '2026-11-21',
     author: 'JSON AI Studio',
     tags: ['openapi', 'swagger', 'api', 'json'],
     readingTime: '5 min',
     aiSummary:
       'An OpenAPI document describes a REST API: info and servers at the top, paths with operations in the middle, and reusable schemas and security schemes under components. Tools turn it into docs, mocks and SDKs.',
     relatedTemplates: ['openapi-spec', 'postman-collection'],
-    relatedBlogs: [],
+    relatedBlogs: ['json-schema-guide', 'llm-structured-outputs-json'],
     faq: [
       {
         q: 'What is the difference between OpenAPI and Swagger?',
@@ -33,7 +33,7 @@ export const post: BlogPost = {
 { "openapi": "3.1.0", "info": { "title": "Items API", "version": "1.0.0" } }
 \`\`\`
 
-- **openapi** — the spec version.
+- **openapi** — the spec version: \`3.0.x\`, \`3.1.x\` or \`3.2.0\`. It is not your API's version; that goes in \`info.version\`.
 - **info** — human metadata: title, version, description.
 
 ## 2. Servers
@@ -61,6 +61,16 @@ Give every operation an \`operationId\` — code generators use it to name funct
 \`\`\`
 
 Define a model once, reuse it everywhere.
+
+## 3.0 vs 3.1 vs 3.2
+
+| Version | What changed |
+|---|---|
+| 3.0 | Schemas are a JSON Schema *subset*; \`nullable: true\` marks nullable fields |
+| 3.1 | Schemas are full **JSON Schema 2020-12**: write \`"type": ["string", "null"]\` instead of \`nullable\`; top-level \`webhooks\` added |
+| 3.2 | Additive on 3.1: hierarchical \`tags\`, streaming media types (SSE, JSON Lines), a \`query\` HTTP method, \`additionalOperations\` |
+
+Starting fresh? Use 3.1 or 3.2. Check that your codegen and docs tools support the version before you upgrade an existing spec.
 
 ## Why it matters
 
