@@ -395,6 +395,176 @@ class TestApplyAll:
 
 
 # ---------------------------------------------------------------------------
+# Snapshot index ordering (several ops on one list, mixed add/delete)
+# Every index refers to the document BEFORE the answer (prompt rule 4).
+# ---------------------------------------------------------------------------
+
+
+def _add(path, v):
+    return {"path": path, "operation": "add", "old_value": None, "new_value": v}
+
+
+def _del(path, v):
+    return {"path": path, "operation": "delete", "old_value": v, "new_value": None}
+
+
+def _mod(path, old, new):
+    return {"path": path, "operation": "modify", "old_value": old, "new_value": new}
+
+
+ABCD = {"items": ["A", "B", "C", "D"]}
+
+SNAPSHOT_CASES = [
+    # (id, diffs, expected items)
+    (
+        "prod_off_by_one_append_run",
+        [_add(f"/items/{i}", v) for i, v in zip(range(3, 7), "WXYZ")],
+        list("ABCDWXYZ"),
+    ),
+    (
+        "sequential_append_run_from_len",
+        [_add("/items/4", "X"), _add("/items/5", "Y")],
+        list("ABCDXY"),
+    ),
+    (
+        "two_appends_dash",
+        [_add("/items/-", "X"), _add("/items/-", "Y")],
+        list("ABCDXY"),
+    ),
+    (
+        "two_inserts_same_gap",
+        [_add("/items/1", "X"), _add("/items/1", "Y")],
+        list("AXYBCD"),
+    ),
+    (
+        "three_inserts_same_gap",
+        [_add("/items/1", "X"), _add("/items/1", "Y"), _add("/items/1", "Z")],
+        list("AXYZBCD"),
+    ),
+    (
+        "inserts_in_two_gaps",
+        [_add("/items/1", "X"), _add("/items/3", "Y")],
+        list("AXBCYD"),
+    ),
+    ("delete_two", [_del("/items/0", "A"), _del("/items/2", "C")], list("BD")),
+    (
+        "insert_then_delete_later",
+        [_add("/items/1", "X"), _del("/items/2", "C")],
+        list("AXBD"),
+    ),
+    (
+        "delete_then_insert_later",
+        [_del("/items/1", "B"), _add("/items/3", "X")],
+        list("ACXD"),
+    ),
+    (
+        "replace_delete_add_same_index",
+        [_del("/items/2", "C"), _add("/items/2", "X")],
+        list("ABXD"),
+    ),
+    (
+        "replace_add_before_delete_same_index",
+        [_add("/items/2", "X"), _del("/items/2", "C")],
+        list("ABXD"),
+    ),
+    (
+        "delete_then_modify_later",
+        [_del("/items/1", "B"), _mod("/items/2", "C", "C2")],
+        list(["A", "C2", "D"]),
+    ),
+    (
+        "modify_and_insert_same_index",
+        [_add("/items/2", "X"), _mod("/items/2", "C", "C2")],
+        list(["A", "B", "X", "C2", "D"]),
+    ),
+    (
+        "delete_then_append_dash",
+        [_del("/items/1", "B"), _add("/items/-", "X")],
+        list("ACDX"),
+    ),
+    (
+        "sequential_mid_run_past_end",
+        [
+            _add("/items/2", "X"),
+            _add("/items/3", "Y"),
+            _add("/items/4", "Z"),
+            _add("/items/5", "W"),
+        ],
+        list("ABXYZWCD"),
+    ),
+]
+
+
+class TestSnapshotOrdering:
+    @pytest.mark.parametrize(
+        "diffs,expected",
+        [c[1:] for c in SNAPSHOT_CASES],
+        ids=[c[0] for c in SNAPSHOT_CASES],
+    )
+    def test_case(self, diffs, expected):
+        result, applied, failed = DiffUtils.apply_all_verbose(diffs, ABCD)
+        assert failed == []
+        assert len(applied) == len(diffs)
+        assert result["items"] == expected
+
+    def test_applied_returned_in_model_order(self):
+        diffs = [_add("/items/1", "X"), _add("/items/3", "Y"), _del("/items/0", "A")]
+        _, applied, _ = DiffUtils.apply_all_verbose(diffs, ABCD)
+        assert [d["path"] for d in applied] == ["/items/1", "/items/3", "/items/0"]
+
+    def test_append_run_paths_rewritten_to_dash(self):
+        diffs = [_add(f"/items/{i}", v) for i, v in zip(range(3, 7), "WXYZ")]
+        _, applied, _ = DiffUtils.apply_all_verbose(diffs, ABCD)
+        assert [d["model_path"] for d in applied] == ["/items/-"] * 4
+        assert [d["path"] for d in applied] == [f"/items/{i}" for i in range(4, 8)]
+
+    def test_two_adds_len_minus_one_and_len_stay_snapshot(self):
+        """{len-1, len} is valid snapshot input: X before D, Y at the end."""
+        diffs = [_add("/items/3", "X"), _add("/items/4", "Y")]
+        result, _, failed = DiffUtils.apply_all_verbose(diffs, ABCD)
+        assert failed == []
+        assert result["items"] == list("ABCXDY")
+
+    def test_single_add_past_end_still_fails(self):
+        """A lone out-of-range index is a hallucination, not an append."""
+        result, applied, failed = DiffUtils.apply_all_verbose(
+            [_add("/items/9", "X")], ABCD
+        )
+        assert applied == []
+        assert "out of range" in failed[0][1]
+        assert result == ABCD
+
+    def test_nested_modify_sorted_with_its_element(self):
+        doc = {"cards": [{"t": "a"}, {"t": "b"}, {"t": "c"}]}
+        diffs = [
+            _del("/cards/0", {"t": "a"}),
+            _mod("/cards/2/t", "c", "C"),
+            _add("/cards/1", {"t": "x"}),
+        ]
+        result, _, failed = DiffUtils.apply_all_verbose(diffs, doc)
+        assert failed == []
+        assert result["cards"] == [{"t": "x"}, {"t": "b"}, {"t": "C"}]
+
+    def test_nested_list_inside_element(self):
+        doc = {"cards": [{"tags": ["a", "b"]}, {"tags": ["c"]}]}
+        diffs = [
+            _del("/cards/0", {"tags": ["a", "b"]}),
+            _add("/cards/1/tags/-", "d"),
+            _add("/cards/1/tags/0", "z"),
+        ]
+        result, _, failed = DiffUtils.apply_all_verbose(diffs, doc)
+        assert failed == []
+        assert result["cards"] == [{"tags": ["z", "c", "d"]}]
+
+    def test_dict_ops_keep_model_order(self):
+        doc = {"a": {}}
+        diffs = [_add("/a/b", {}), _add("/a/b/c", 1)]
+        result, _, failed = DiffUtils.apply_all_verbose(diffs, doc)
+        assert failed == []
+        assert result == {"a": {"b": {"c": 1}}}
+
+
+# ---------------------------------------------------------------------------
 # parse_llm_response
 # ---------------------------------------------------------------------------
 
@@ -673,3 +843,135 @@ class TestTruncationGuard:
         assert ends_with_preview_marker("x…(truncated)")
         assert ends_with_preview_marker("…+700 more items")
         assert not ends_with_preview_marker("abc.")
+
+
+class TestIndexRepair:
+    """normalise_diffs: server-side repair of model indices (live evals
+    2026-11-23)."""
+
+    CARDS = {"cards": [{"name": n} for n in "ABCD"]}
+
+    def _run(self, diffs, doc=None):
+        return DiffUtils.apply_all_verbose(diffs, doc or self.CARDS)
+
+    def test_sequential_deletes_retargeted_by_old_value(self):
+        """nvidia: delete A at 0, then C at 1 (numbered after deleting A)."""
+        result, applied, failed = self._run(
+            [_del("/cards/0", {"name": "A"}), _del("/cards/1", {"name": "C"})]
+        )
+        assert failed == []
+        assert [c["name"] for c in result["cards"]] == ["B", "D"]
+        assert [d["path"] for d in applied] == ["/cards/0", "/cards/2"]
+
+    def test_nested_modify_retargeted_by_old_value(self):
+        """nvidia: delete B at 1, rename C via /cards/1/name (old 'C')."""
+        result, _, failed = self._run(
+            [_del("/cards/1", {"name": "B"}), _mod("/cards/1/name", "C", "C2")]
+        )
+        assert failed == []
+        assert [c["name"] for c in result["cards"]] == ["A", "C2", "D"]
+
+    def test_ambiguous_old_value_not_retargeted(self):
+        doc = {"items": ["x", "y", "x"]}
+        result, _, _ = self._run([_mod("/items/1", "x", "z")], doc)
+        assert result["items"] == ["x", "z", "x"]
+
+    def test_matching_old_value_kept(self):
+        result, applied, _ = self._run([_mod("/cards/2/name", "C", "C2")])
+        assert applied[0]["path"] == "/cards/2/name"
+        assert result["cards"][2]["name"] == "C2"
+
+    def test_restated_shifted_elements_dropped(self):
+        """nvidia: insert N at 2 plus 'modify' C/D at 3/4 with new == old."""
+        result, applied, failed = self._run(
+            [
+                _add("/cards/2", {"name": "N"}),
+                _mod("/cards/3", {"name": "C"}, {"name": "C"}),
+                _mod("/cards/4", {"name": "D"}, {"name": "D"}),
+            ]
+        )
+        assert failed == []
+        assert len(applied) == 1
+        assert [c["name"] for c in result["cards"]] == list("ABNCD")
+
+    def test_star_add_becomes_append(self):
+        """gemma4: 'add /roles/*' for new roles."""
+        result, applied, failed = self._run([_add("/cards/*", {"name": "X"})])
+        assert failed == []
+        assert applied[0]["model_path"] == "/cards/-"
+        assert applied[0]["path"] == "/cards/4"
+        assert result["cards"][-1] == {"name": "X"}
+
+    def test_append_stored_with_concrete_path(self):
+        _, applied, _ = self._run(
+            [_add("/cards/-", {"name": "X"}), _add("/cards/-", {"name": "Y"})]
+        )
+        assert [d["path"] for d in applied] == ["/cards/4", "/cards/5"]
+        assert [d["model_path"] for d in applied] == ["/cards/-", "/cards/-"]
+        assert [d["preview_path"] for d in applied] == ["/cards/4", "/cards/5"]
+
+    def test_modify_path_one_level_too_high_is_deepened(self):
+        """gemma4: modify /cards/2 old 'C' new 'C2' meant /cards/2/name."""
+        doc = {"cards": [{"name": n, "text": "t"} for n in "ABCD"]}
+        result, applied, failed = DiffUtils.apply_all_verbose(
+            [_del("/cards/1", {"name": "B", "text": "t"}), _mod("/cards/2", "C", "C2")],
+            doc,
+        )
+        assert failed == []
+        assert applied[1]["path"] == "/cards/2/name"
+        assert [c["name"] for c in result["cards"]] == ["A", "C2", "D"]
+
+    def test_scalar_replacing_object_without_matching_key_untouched(self):
+        doc = {"cards": [{"name": "A"}]}
+        result, applied, _ = DiffUtils.apply_all_verbose(
+            [_mod("/cards/0", "zzz", "x")], doc
+        )
+        assert applied[0]["path"] == "/cards/0"
+        assert result["cards"] == ["x"]
+
+
+class TestPreviewPathAndCheckedRevert:
+    """Reject removes the element the diff produced, never just the last
+    one (2026-11-23: rejecting an append popped a different item)."""
+
+    DOC = {"steps": list("ABCD")}
+
+    def test_preview_path_accounts_for_later_ops(self):
+        diffs = [_add("/steps/1", "X"), _add("/steps/3", "Y"), _del("/steps/0", "A")]
+        result, applied, _ = DiffUtils.apply_all_verbose(diffs, self.DOC)
+        assert result["steps"] == list("XBCYD")
+        for d in applied[:2]:
+            at = int(d["preview_path"].rsplit("/", 1)[1])
+            assert result["steps"][at] == d["new_value"]
+
+    @pytest.mark.parametrize("reject", ["X", "Y", "Z"])
+    def test_reject_one_of_three_appends(self, reject):
+        diffs = [_add("/steps/-", v) for v in "XYZ"]
+        doc, applied, _ = DiffUtils.apply_all_verbose(diffs, self.DOC)
+        target = next(d for d in applied if d["new_value"] == reject)
+        out = DiffUtils.revert_checked(target, doc)
+        assert out["steps"] == [*"ABCD", *[v for v in "XYZ" if v != reject]]
+
+    def test_reject_after_earlier_reject_relocates(self):
+        diffs = [_add("/steps/-", v) for v in "XYZ"]
+        doc, applied, _ = DiffUtils.apply_all_verbose(diffs, self.DOC)
+        doc = DiffUtils.revert_checked(applied[0], doc)  # X gone, Z shifted
+        doc = DiffUtils.revert_checked(applied[2], doc)
+        assert doc["steps"] == [*"ABCD", "Y"]
+
+    def test_reject_refuses_when_element_gone(self):
+        doc = {"steps": list("ABCD")}
+        with pytest.raises(DiffApplyError):
+            DiffUtils.revert_checked(
+                {
+                    "path": "/steps/4",
+                    "operation": "add",
+                    "new_value": "Q",
+                    "preview_path": "/steps/4",
+                },
+                doc,
+            )
+
+    def test_accept_form_keeps_dash(self):
+        _, applied, _ = DiffUtils.apply_all_verbose([_add("/steps/-", "X")], self.DOC)
+        assert DiffUtils.accept_form(applied[0])["path"] == "/steps/-"
