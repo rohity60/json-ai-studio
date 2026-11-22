@@ -713,8 +713,11 @@ async def _run_turn(
                 merged_json, _, stale = DiffUtils.apply_all_verbose(
                     [
                         {
-                            k: d[k]
-                            for k in ("path", "operation", "old_value", "new_value")
+                            **{
+                                k: d[k] for k in ("operation", "old_value", "new_value")
+                            },
+                            # an append re-lands at the end of the NEW doc
+                            "path": d.get("model_path") or d["path"],
                         }
                         for d in outcome.get("applied", [])
                     ],
@@ -722,7 +725,7 @@ async def _run_turn(
                 )
                 stale_paths = {d["path"] for d, _ in stale}
                 for d in outcome.get("applied", []):
-                    if d["path"] in stale_paths:
+                    if (d.get("model_path") or d["path"]) in stale_paths:
                         d.update(
                             status="failed",
                             failure_reason="the document changed while the AI worked",

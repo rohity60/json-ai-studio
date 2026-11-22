@@ -43,8 +43,13 @@ To change words inside a long string, a diff may instead be a text edit (see TEX
 RULES:
 1. "path" is a JSON Pointer: segments joined by "/". Escape "/" inside a key as "~1" and "~" as "~0".
 2. "old_value" must be copied EXACTLY from the CURRENT WORKING JSON above. Use null for "add".
-3. For "delete", set "old_value" to the exact value being removed and "new_value" to null.
-4. Array indices are zero-based and must match the CURRENT WORKING JSON above. To append, use an index equal to the array's current length.
+3. For "delete", set "old_value" to the exact value being removed and "new_value" to null. To remove something always use "delete" — never a "modify" with "new_value" null.
+4. ARRAY INDICES are zero-based and ALWAYS refer to the CURRENT WORKING JSON exactly as shown above — as it is BEFORE any diff in your answer. Never shift an index to account for another insert or delete in the same answer; the server applies your diffs so every original index stays correct.
+4a. Append to the end of an array: path "/<array>/-" (one diff per new item, in the order they should appear). Never count elements to build an append index. When the user does not say WHERE new items go, append them — do not ask.
+4b. Insert before an existing element: use that element's CURRENT index — the index of the element the new item goes IN FRONT OF. Several new items in the SAME gap all get the SAME index, listed in the order they should appear: 3 new items after element 14 (before element 15) → "/<array>/15", "/<array>/15", "/<array>/15" — NOT 15, 16, 17 (that would scatter them between 15, 16 and 17). Items in DIFFERENT gaps each use the index of their own next element: for [A, B, C, D], X between A and B and Y between C and D → X at 1, Y at 3.
+4c. Delete or modify an element: its CURRENT index, with "old_value" copied from that element — even when you also insert or delete other elements before it in the same answer.
+4d. "-" is only for "add". To change or remove an element — including one added in an earlier turn — find its numeric index in the CURRENT WORKING JSON.
+4e. Only emit diffs for elements you actually change. Never re-emit untouched elements to "move" them — inserts and deletes shift the others automatically. Never put "*" in a plain diff path ("*" is only for "bulk").
 5. To change or remove an array element identified by a field value (e.g. where mode is "c"), find that element's index in the CURRENT WORKING JSON above and use it in the path.
 6. For "add", the new key NOT existing in the CURRENT WORKING JSON is expected — never refuse an add because the key is missing. If the user does not say where to put the new key, add it at the TOP LEVEL of the document (path "/<key>"). Strip units or currency words from values ("10 rs" -> 10). Only return empty diffs for an add when the user names a container that does not exist.
 7. If a modify or delete request cannot be applied (target not found, ambiguous, or unrelated to this JSON), return {"diffs": [], "explanation": "..."} — say why, list what actually exists, and suggest the closest match.
@@ -52,7 +57,7 @@ RULES:
 9. Multiple requested changes = multiple entries in the "diffs" array of the SAME single object.
 10. If the user's message is ITSELF a whole new JSON document (a full configuration pasted as the message, not an instruction) that they seem to want to work on, do NOT adopt, replace, or merge it into the CURRENT WORKING JSON — return {"diffs": [], "explanation": "It looks like you pasted a full JSON document. To work on it, load it with the Upload feature; then describe the changes you want here."}. This does NOT apply when JSON appears as an EXAMPLE inside an instruction (e.g. "add an entry like {...}", "make it match this shape: {...}") — there, use the provided JSON to build the correct diffs against the CURRENT WORKING JSON.
 11. FORMAT CORRECTNESS — on EVERY request, besides what the user asked, also propose fixes for values or structure in the CURRENT WORKING JSON that are wrong for the document's format: anything that breaks the FORMAT NOTES (when given), or a well-known rule of the format the document evidently follows (a value the target system rejects, a key in the wrong place, placeholder syntax the system does not support, a wrong port or protocol). Make each fix its own diff, and in "explanation" list EACH fix and why — the rule it breaks — in a sentence or two per fix ("explanation" may be longer than one sentence for this). EXCEPTION: when the user explicitly asks for a specific key or value, apply exactly that even if it breaks the format, and warn in "explanation" why it is likely wrong — never silently override the user. Only fix what you are confident about; never invent model names, ports, commands or IDs that neither FORMAT NOTES nor the user gave — if the correct value is unknown, leave it and say what is wrong. If nothing is wrong, propose no extra fixes.
-12. QUESTIONS — ask only when the request has more than one reasonable reading you cannot resolve from the JSON (or with tools, when you have them), or a value you need is missing. Return "question" with "text" and 2-4 short "options" covering the readings (e.g. {"text": "Apply 'abc' to which records?", "options": ["Only chapter 1 (47 records)", "All 701 records"]}), no diffs for the ambiguous part, and say in "explanation" why you are asking. Never ask instead of looking something up, never ask about something the user already said, and never ask when one reading is clearly intended.
+12. QUESTIONS — ask only when the request has more than one reasonable reading you cannot resolve from the JSON (or with tools, when you have them), or a value you need is missing. Return "question" with "text" and 2-4 short "options" covering the readings (e.g. {"text": "Apply 'abc' to which records?", "options": ["Only chapter 1 (47 records)", "All 701 records"]}), no diffs for the ambiguous part, and say in "explanation" why you are asking. Never ask instead of looking something up, never ask about something the user already said, and never ask when one reading is clearly intended. When the user says they will supply values later (IDs, URLs, keys), use null or an obvious placeholder and proceed.
 13. ANALYSIS — when the user asks you to analyze, explain, trace, find or check something before (or instead of) editing, you may return no diffs and a longer "explanation" (up to ~8 sentences) that cites the exact JSON paths you relied on. If they asked for a proposal "before editing", describe the change and its paths in "explanation" and do not emit diffs yet.
 
 BULK EDITS — use "bulk" instead of listing diffs one by one whenever a change applies to more than 5 elements, or to elements you cannot see (structural skeleton). The server expands each bulk op against the FULL document, so you do NOT need to see or copy the matching values.
@@ -81,9 +86,17 @@ User: "add price 10 rs" (no location given — new keys go to the top level; the
 JSON: {"services": {"api": {"timeout": 30}}}
 Response: {"diffs": [{"path": "/price", "operation": "add", "old_value": null, "new_value": 10}], "explanation": "Added price 10 at the top level."}
 
-User: "Add a step with mode 'd' titled 'Step 3'." (the array currently has 2 elements, indices 0 and 1)
+User: "Add a step with mode 'd' titled 'Step 3'."
 JSON: {"howToRedeem": [{"mode": "a", "title": "Step 1"}, {"mode": "c", "title": "Step 2"}]}
-Response: {"diffs": [{"path": "/howToRedeem/2", "operation": "add", "old_value": null, "new_value": {"mode": "d", "title": "Step 3"}}], "explanation": "Appended a new step at the end of howToRedeem."}
+Response: {"diffs": [{"path": "/howToRedeem/-", "operation": "add", "old_value": null, "new_value": {"mode": "d", "title": "Step 3"}}], "explanation": "Appended a new step at the end of howToRedeem."}
+
+User: "Insert steps X and Y between Step 1 and Step 2, and remove Step 3." (rule 4: every index is the ORIGINAL one; both inserts share index 1; Step 3 keeps index 2)
+JSON: {"howToRedeem": [{"title": "Step 1"}, {"title": "Step 2"}, {"title": "Step 3"}]}
+Response: {"diffs": [{"path": "/howToRedeem/1", "operation": "add", "old_value": null, "new_value": {"title": "X"}}, {"path": "/howToRedeem/1", "operation": "add", "old_value": null, "new_value": {"title": "Y"}}, {"path": "/howToRedeem/2", "operation": "delete", "old_value": {"title": "Step 3"}, "new_value": null}], "explanation": "Inserted X and Y after Step 1 and removed Step 3."}
+
+User: "Delete Step 1, rename Step 3 to Final, and add a step Bonus at the end." (original indices: Step 3 is still index 2)
+JSON: {"howToRedeem": [{"title": "Step 1"}, {"title": "Step 2"}, {"title": "Step 3"}]}
+Response: {"diffs": [{"path": "/howToRedeem/0", "operation": "delete", "old_value": {"title": "Step 1"}, "new_value": null}, {"path": "/howToRedeem/2/title", "operation": "modify", "old_value": "Step 3", "new_value": "Final"}, {"path": "/howToRedeem/-", "operation": "add", "old_value": null, "new_value": {"title": "Bonus"}}], "explanation": "Removed Step 1, renamed Step 3 to Final, and appended Bonus."}
 
 User: "Remove the step with mode 'c'."
 JSON: {"howToRedeem": [{"mode": "a", "title": "Step 1"}, {"mode": "c", "title": "Step 2"}]}
@@ -131,7 +144,7 @@ turns. Your earlier responses are shown in the output format above, with a \
 - "pending": shown to the user, not yet accepted or rejected. It is ALREADY in the CURRENT WORKING JSON.
 - "rejected": the user declined it. It was reverted and is NOT in the CURRENT WORKING JSON.
 - "failed": it did not match the JSON and was never applied.
-H1. History tells you INTENT only. Every path, index, and old_value MUST come from the CURRENT WORKING JSON — paths and indices in history may be stale.
+H1. History tells you INTENT only. Every path, index, and old_value MUST come from the CURRENT WORKING JSON — paths and indices in history may be stale. To change an element added in an earlier turn, find it in the CURRENT WORKING JSON (by its content) and use its numeric index there.
 H2. Never re-propose an "accepted" or "pending" change; it is already applied.
 H3. Do not repeat a "rejected" change unless the user explicitly asks for it again.
 H4. If the user repeats a "failed" request, re-derive the paths from the CURRENT WORKING JSON.
@@ -404,16 +417,56 @@ def is_skeleton_mode(working_json: Any) -> bool:
     return len(compact) > max_inline
 
 
+_LENGTHS_MIN_ITEMS = 10
+_LENGTHS_MAX_LINES = 40
+
+
+def build_array_lengths(data: Any) -> list[str]:
+    """'/roles: 51 items (indices 0..50)' for every array longer than
+    _LENGTHS_MIN_ITEMS, in document order, capped. Models miscount long
+    arrays in inline JSON (prod 2026-11-21: 50 for a 51-item list)."""
+    lines: list[str] = []
+
+    def esc(key: str) -> str:
+        return key.replace("~", "~0").replace("/", "~1")
+
+    def walk(node: Any, path: str) -> None:
+        if len(lines) >= _LENGTHS_MAX_LINES:
+            return
+        if isinstance(node, list):
+            if len(node) > _LENGTHS_MIN_ITEMS:
+                lines.append(
+                    f"{path or '/'}: {len(node)} items (indices 0..{len(node) - 1})"
+                )
+            for i, item in enumerate(node):
+                walk(item, f"{path}/{i}")
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, f"{path}/{esc(str(key))}")
+
+    walk(data, "")
+    return lines
+
+
 def _inline_context(working_json: Any) -> str:
-    """Whole document, pretty-printed when that fits the inline cap."""
+    """Whole document, pretty-printed when that fits the inline cap, plus
+    the lengths of long arrays (rule 4)."""
     max_inline = get_settings().llm_max_inline_chars
     pretty = json.dumps(working_json, indent=2, ensure_ascii=False, default=str)
     if len(pretty) <= max_inline:
-        return f"CURRENT WORKING JSON:\n{pretty}"
-    compact = json.dumps(
-        working_json, separators=(",", ":"), ensure_ascii=False, default=str
-    )
-    return f"CURRENT WORKING JSON:\n{compact}"
+        body = pretty
+    else:
+        body = json.dumps(
+            working_json, separators=(",", ":"), ensure_ascii=False, default=str
+        )
+    context = f"CURRENT WORKING JSON:\n{body}"
+    lengths = build_array_lengths(working_json)
+    if lengths:
+        context += (
+            "\nARRAY LENGTHS (counted by the server — use them, never count "
+            'yourself; append with "-"):\n' + "\n".join(lengths)
+        )
+    return context
 
 
 def _skeleton_context(working_json: Any) -> str:

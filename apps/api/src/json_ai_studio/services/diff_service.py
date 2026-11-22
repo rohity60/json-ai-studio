@@ -71,7 +71,7 @@ async def accept_all(
         changed = 0
         for diff in _batch_diffs(session, job_id, batch_no):
             try:
-                baseline = DiffUtils.apply(diff, baseline)
+                baseline = DiffUtils.apply(DiffUtils.accept_form(diff), baseline)
             except DiffApplyError as exc:
                 logger.info(
                     "accept_all batch skip session_id=%s diff_id=%s reason=%s",
@@ -124,7 +124,7 @@ async def reject_all(
         changed = 0
         for diff in reversed(_batch_diffs(session, job_id, batch_no)):
             try:
-                working = DiffUtils.revert(diff, working)
+                working = DiffUtils.revert_checked(diff, working)
             except DiffApplyError as exc:
                 logger.info(
                     "reject_all batch skip session_id=%s diff_id=%s reason=%s",
@@ -185,7 +185,9 @@ async def accept_one(session_id: str, diff_id: str) -> dict[str, Any]:
     logger.debug(
         "accept_one session_id=%s diff_id=%s diff=%s", session_id, diff_id, target
     )
-    baseline_json = DiffUtils.apply(target, session.get("baseline_json", {}))
+    baseline_json = DiffUtils.apply(
+        DiffUtils.accept_form(target), session.get("baseline_json", {})
+    )
 
     session["baseline_json"] = baseline_json
     target["status"] = "accepted"
@@ -217,7 +219,7 @@ async def reject_one(session_id: str, diff_id: str) -> dict[str, Any]:
     logger.debug(
         "reject_one session_id=%s diff_id=%s diff=%s", session_id, diff_id, target
     )
-    working_json = DiffUtils.revert(target, session.get("working_json", {}))
+    working_json = DiffUtils.revert_checked(target, session.get("working_json", {}))
 
     session["working_json"] = working_json
     target["status"] = "rejected"
