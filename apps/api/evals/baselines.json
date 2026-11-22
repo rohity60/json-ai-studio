@@ -1,0 +1,23 @@
+{
+  "_comment": "Minimum pass rate per suite and deployment (passed / (passed + failed), skips excluded). run_evals.py fails below it. Measured 2026-11-23 on the array-index prompt (PR #32); null = report only, no gate yet.",
+  "array_index": {
+    "ollama_local": {"min_pass_rate": 0.93, "model": "gemma4:12b", "measured": "45/45 over 3 runs (+14/15 once)"},
+    "nvidia_nim": {"min_pass_rate": 0.9, "model": "nvidia/nemotron-3.5-super-vl-120b-a12b", "measured": "58/60"},
+    "google_ai_studio": {"min_pass_rate": 0.85, "model": "gemma-4-26b-a4b-it", "measured": "12/13 (2 provider skips)"}
+  },
+  "chat_history": {
+    "ollama_local": {"min_pass_rate": null},
+    "nvidia_nim": {"min_pass_rate": null},
+    "google_ai_studio": {"min_pass_rate": null}
+  },
+  "json_tools": {
+    "ollama_local": {"min_pass_rate": null},
+    "nvidia_nim": {"min_pass_rate": null},
+    "google_ai_studio": {"min_pass_rate": null}
+  },
+  "suggested_fixes": {
+    "ollama_local": {"min_pass_rate": null},
+    "nvidia_nim": {"min_pass_rate": null},
+    "google_ai_studio": {"min_pass_rate": null}
+  }
+}

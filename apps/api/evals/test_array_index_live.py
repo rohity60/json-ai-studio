@@ -5,7 +5,7 @@ Covers every multi-op array shape from the 2026-11-21 investigation
 delete + modify) on a small named list, the prod case (4 new roles on a
 51-role Discord server JSON), and add-then-modify across two turns.
 
-    cd apps/api && LIVE_LLM=1 PYTHONPATH=. uv run pytest tests/test_array_index_live.py -s
+    cd apps/api && LIVE_LLM=1 PYTHONPATH=. uv run pytest evals/test_array_index_live.py -s
     # LIVE_DEPLOYMENT=nvidia_nim | google_ai_studio (+ LIVE_CALL_SPACING_S=60)
 
 Each case prints one ``RESULT`` line: ok/FAIL, the model's raw diffs
