@@ -12,7 +12,9 @@ apps/web/.next/
 
 # IDE / tooling
 .idea/
-.claude/
+.claude/*
+# project skills are shared; worktrees/local settings stay ignored
+!.claude/skills/
 .mdc
 
 # Logs (ADR-0017) — rotating log files, never committed

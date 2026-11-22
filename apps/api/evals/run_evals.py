@@ -71,6 +71,7 @@ def run_once(suite: str, deployment: str, args) -> tuple[dict[str, str], list[st
             cmd += ["-k", args.k]
         proc = subprocess.run(cmd, cwd=API, env=env, capture_output=True, text=True)
         results: dict[str, str] = {}
+        skips: list[str] = []
         if junit.exists():
             for case in ET.parse(junit).iter("testcase"):
                 name = case.get("name", "?")
@@ -78,6 +79,9 @@ def run_once(suite: str, deployment: str, args) -> tuple[dict[str, str], list[st
                     results[name] = "failed"
                 elif case.find("skipped") is not None:
                     results[name] = "skipped"
+                    reason = case.find("skipped").get("message", "")
+                    if reason and f"skip reason: {reason}" not in skips:
+                        skips.append(f"skip reason: {reason}")
                 else:
                     results[name] = "passed"
         lines = [
@@ -87,6 +91,8 @@ def run_once(suite: str, deployment: str, args) -> tuple[dict[str, str], list[st
         ]
         if not results:
             lines.append("pytest produced no results:\n" + proc.stdout[-2000:])
+        if results and all(o == "skipped" for o in results.values()):
+            lines += skips  # e.g. no OLLAMA_BASE_URL / API key in .env
         return results, lines
 
 
@@ -148,8 +154,12 @@ def main() -> int:
             for case, outs in sorted(outcomes.items()):
                 report.append(f"| {case} | " + " | ".join(icon[o] for o in outs) + " |")
             bad = [
-                ln for ln in result_lines if " FAIL " in f" {ln} " or "no results" in ln
+                ln
+                for ln in result_lines
+                if " FAIL " in f" {ln} " or "no results" in ln or "skip reason" in ln
             ]
+            if rate is None:
+                print("\n".join(dict.fromkeys(bad)) or "no cases ran", flush=True)
             if bad:
                 report += ["", "Failures (model diffs as sent):", "```", *bad, "```"]
             report.append("")
