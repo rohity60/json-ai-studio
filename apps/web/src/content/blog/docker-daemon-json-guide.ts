@@ -13,7 +13,7 @@ export const post: BlogPost = {
     aiSummary:
       'daemon.json configures the Docker Engine host-wide. The highest-impact settings are log rotation (prevents full disks), the overlay2 storage driver, and live-restore. Validate with dockerd --validate before restarting.',
     relatedTemplates: ['docker-daemon'],
-    relatedBlogs: [],
+    relatedBlogs: ['devcontainer-json-guide'],
     faq: [
       {
         q: 'Where does daemon.json live?',

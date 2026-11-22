@@ -13,7 +13,7 @@ export const post: BlogPost = {
     aiSummary:
       'launch.json (version 0.2.0) holds a configurations array that populates the Run and Debug dropdown. request:"launch" starts a program; request:"attach" connects to a running process. Use ${workspaceFolder} variables, wire preLaunchTask to a tasks.json task to build first, and use compounds to start frontend and backend together.',
     relatedTemplates: ['vscode-launch-json'],
-    relatedBlogs: [],
+    relatedBlogs: ['vscode-tasks-json-guide', 'package-json-guide'],
     faq: [
       {
         q: 'launch vs attach?',

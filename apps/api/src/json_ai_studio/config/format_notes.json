@@ -2,6 +2,265 @@
   "generatedFrom": "apps/web/src/content/templates",
   "formats": [
     {
+      "id": "chrome-extension-manifest",
+      "title": "Chrome Extension manifest.json (Manifest V3)",
+      "signature": [
+        "/manifest_version",
+        "/name",
+        "/version"
+      ],
+      "notes": [
+        "manifest_version: 3",
+        "name: the display name",
+        "version: one to four dot-separated integers, e.g. \"1.2.0\"",
+        "background.service_worker: the event-driven background script (replaces MV2 background pages)",
+        "action: the toolbar button and its popup (replaces browser_action/page_action)",
+        "content_scripts: scripts injected into matching pages",
+        "permissions / host_permissions / optional_host_permissions: API and site access",
+        "icons / description / options_page / commands",
+        "Prefer activeTab over broad host_permissions; it grants access only when the user clicks.",
+        "Move site access the extension does not always need into optional_host_permissions and request it at runtime.",
+        "Keep service-worker state in chrome.storage; the worker is stopped when idle.",
+        "Use declarativeNetRequest instead of blocking webRequest."
+      ]
+    },
+    {
+      "id": "dotnet-appsettings-json",
+      "title": ".NET appsettings.json",
+      "signature": [
+        "/Logging/LogLevel"
+      ],
+      "notes": [
+        "None: the file is optional, but Logging and AllowedHosts are in every template",
+        "Logging.LogLevel: minimum levels per category (\"Default\", \"Microsoft.AspNetCore\")",
+        "ConnectionStrings: read with GetConnectionString(\"Name\")",
+        "AllowedHosts: host filtering, e.g. \"example.com;*.example.com\"",
+        "Kestrel.Endpoints: listen URLs and certificates",
+        "Custom sections: bound to a class with services.Configure<T>(...) or AddOptions<T>().Bind(...)",
+        "Later sources win: appsettings.json < appsettings.{Environment}.json < user secrets (Development) < environment variables < command line.",
+        "Override nested keys from environment variables with a double underscore: Smtp__Port=2525.",
+        "Bind sections to options classes with ValidateOnStart() so bad config fails at boot."
+      ]
+    },
+    {
+      "id": "geojson-feature-collection",
+      "title": "GeoJSON FeatureCollection",
+      "signature": [
+        "/type",
+        "/features/*/geometry"
+      ],
+      "notes": [
+        "type: \"FeatureCollection\" at the root, \"Feature\" for each feature",
+        "features: the array of Feature objects",
+        "geometry: per feature, with its own type and coordinates",
+        "properties: per feature, an object or null",
+        "id: a per-feature identifier",
+        "bbox: [minLon, minLat, maxLon, maxLat] bounding box",
+        "Coordinates are [longitude, latitude], in that order. Swapping them is the most common GeoJSON bug.",
+        "Close polygon rings: the first and last positions must be identical.",
+        "Outer rings go counter-clockwise and holes clockwise (the right-hand rule).",
+        "Round coordinates to about 6 decimals (roughly 10 cm); more only adds file size."
+      ]
+    },
+    {
+      "id": "gst-e-invoice",
+      "title": "GST e-Invoice JSON (India, IRP schema 1.1)",
+      "signature": [
+        "/TranDtls",
+        "/DocDtls",
+        "/ItemList"
+      ],
+      "notes": [
+        "Version: \"1.1\"",
+        "TranDtls: TaxSch \"GST\" and SupTyp (B2B, SEZWP, SEZWOP, EXPWP, EXPWOP, DEXP)",
+        "DocDtls: Typ (INV, CRN, DBN), No (max 16 chars) and Dt (dd/mm/yyyy)",
+        "SellerDtls: Gstin, LglNm, Addr1, Loc, Pin (number), Stcd (state code string)",
+        "BuyerDtls: Gstin (or \"URP\" for exports), LglNm, Pos (place of supply state code), Addr1, Loc, Pin, Stcd",
+        "ItemList[]: SlNo, IsServc (Y/N), HsnCd, UnitPrice, TotAmt, AssAmt, GstRt, TotItemVal",
+        "ValDtls: AssVal and TotInvVal",
+        "TranDtls.RegRev: \"Y\" for reverse charge; IgstOnIntra: \"Y\" for IGST on an intra-state supply",
+        "ItemList[].Qty / Unit: quantity and UQC unit code (NOS, KGS, OTH...)",
+        "ItemList[].IgstAmt or CgstAmt + SgstAmt, CesRt / CesAmt",
+        "DispDtls / ShipDtls: dispatch-from and ship-to addresses when they differ",
+        "PayDtls, RefDtls, AddlDocDtls, ExpDtls: payment, references, attachments, export details",
+        "EwbDtls: transporter and vehicle details to generate the e-way bill with the IRN",
+        "Inter-state supply (seller Stcd ≠ buyer Pos) uses IgstAmt; intra-state uses CgstAmt + SgstAmt split equally.",
+        "AssAmt = TotAmt − Discount; TotItemVal = AssAmt + taxes + cess + OthChrg. Totals in ValDtls must equal the sum of items (within the IRP rounding tolerance).",
+        "Dates are strings in dd/mm/yyyy. Pin codes are numbers; state codes are two-digit strings.",
+        "HSN must have at least 4 or 6 digits depending on aggregate turnover; services use SAC codes starting with 99 with IsServc \"Y\".",
+        "Test against the NIC e-invoice sandbox before production; the IRP schema is versioned, so check the current version on the portal."
+      ]
+    },
+    {
+      "id": "json-ld-structured-data",
+      "title": "JSON-LD Structured Data (Schema.org Article)",
+      "signature": [
+        "/@context",
+        "/@graph"
+      ],
+      "notes": [
+        "@context: \"https://schema.org\"",
+        "@type: the entity type, e.g. Article, Product, Organization",
+        "@graph: several linked entities in one block",
+        "@id: a stable URI so entities can reference each other",
+        "headline / datePublished / dateModified / author / image: the usual Article properties",
+        "publisher: the Organization behind the page",
+        "Markup must match what is visible on the page; hidden or invented claims can cost you rich results.",
+        "Use ISO 8601 dates with a timezone (2026-11-21T09:00:00+00:00).",
+        "Give entities an @id and reference them instead of repeating them.",
+        "Test with a rich results testing tool before shipping."
+      ]
+    },
+    {
+      "id": "json-schema",
+      "title": "JSON Schema (Draft 2020-12)",
+      "signature": [
+        "/$schema",
+        "/properties"
+      ],
+      "notes": [
+        "$schema: the dialect URI, \"https://json-schema.org/draft/2020-12/schema\"",
+        "type: the root type, usually \"object\"",
+        "$id: a unique URI for this schema",
+        "properties / required: the fields and which must be present",
+        "additionalProperties: false rejects unknown keys",
+        "$defs + $ref: reusable sub-schemas ($defs replaced \"definitions\" in 2019-09)",
+        "enum / const / format / pattern / minimum / maxLength: value constraints",
+        "oneOf / anyOf / allOf / if-then-else: composition",
+        "Always declare $schema so tools pick the right dialect.",
+        "Set additionalProperties: false on objects you control; it catches typos.",
+        "Use $defs and $ref instead of copy-pasting sub-schemas.",
+        "Remember \"format\" is an annotation by default; turn on format assertion in your validator if you rely on it."
+      ]
+    },
+    {
+      "id": "llm-structured-output",
+      "title": "LLM Structured Output Request (Claude)",
+      "signature": [
+        "/model",
+        "/output_config/format/schema"
+      ],
+      "notes": [
+        "model / max_tokens / messages: the normal Messages API fields",
+        "output_config.format.type: \"json_schema\"",
+        "output_config.format.schema: the JSON Schema the reply must match",
+        "output_config.effort: low / medium / high / xhigh / max",
+        "system: instructions on how to fill each field",
+        "tools[].strict: true: the same guarantee for tool-call arguments",
+        "Mark every object additionalProperties: false and list required fields.",
+        "Describe each field (description) — the model reads them as instructions.",
+        "Use nullable types ([\"string\",\"null\"]) for facts that may be missing, rather than letting the model invent them.",
+        "Still check stop_reason: a refusal or max_tokens stop can mean there is no complete JSON."
+      ]
+    },
+    {
+      "id": "package-json",
+      "title": "package.json (Node.js / npm)",
+      "signature": [
+        "/name",
+        "/version",
+        "/scripts"
+      ],
+      "notes": [
+        "name: lowercase, URL-safe, optionally scoped (@org/name); required to publish",
+        "version: a semver string such as \"1.2.0\"; required to publish",
+        "type: \"module\" makes .js files ESM; omit it (or use \"commonjs\") for CommonJS",
+        "exports: the public entry points; anything not listed cannot be imported",
+        "scripts: commands run with npm run <name>",
+        "engines: the supported Node.js range",
+        "dependencies / devDependencies / peerDependencies: runtime, build-time and host-provided packages",
+        "files: allow-list of what gets published",
+        "private: true blocks accidental npm publish",
+        "Use an \"exports\" map instead of \"main\" alone; it also hides internal files.",
+        "Put the \"types\" condition first inside each exports entry.",
+        "Keep build tools (typescript, vitest, eslint) in devDependencies.",
+        "Commit the lockfile, and set \"private\": true on apps that are never published."
+      ]
+    },
+    {
+      "id": "power-bi-theme",
+      "title": "Power BI Report Theme JSON",
+      "signature": [
+        "/name",
+        "/dataColors"
+      ],
+      "notes": [
+        "name: the theme name shown in Power BI",
+        "dataColors: array of hex colors used for series, in order",
+        "firstLevelElements / secondLevelElements / thirdLevelElements / fourthLevelElements: text and line colors from primary to subtle",
+        "background / secondaryBackground: canvas and visual backgrounds",
+        "tableAccent: grid and header accent in tables and matrices",
+        "good / neutral / bad: KPI and sentiment colors",
+        "maximum / center / minimum / null: diverging and conditional-formatting colors",
+        "textClasses: callout, title, header and label font size, family and color",
+        "visualStyles: default formatting per visual type (\"*\" = all visuals) and per style (\"*\" = all)",
+        "Give dataColors at least 8 colors; Power BI cycles through them for extra series.",
+        "Use textClasses for fonts instead of setting fonts in visualStyles one by one.",
+        "Start visualStyles with \"*\" / \"*\" for global defaults, then override specific visuals like \"card\".",
+        "Check contrast: first-level text on background should meet WCAG AA (4.5:1).",
+        "Use a JSON Schema-aware editor with Microsoft's published report theme schema to catch misspelled properties, which Power BI silently ignores."
+      ]
+    },
+    {
+      "id": "sample-api-response",
+      "title": "Sample REST API JSON Response (Paginated)",
+      "signature": [
+        "/data",
+        "/meta/pagination"
+      ],
+      "notes": [
+        "data: the array of records (an empty array, not null, when there are no results)",
+        "meta.pagination: page, perPage, total, totalPages (offset style) or nextCursor (cursor style)",
+        "links: self / next / prev URLs so clients do not build them by hand",
+        "errors: array of { code, message, field } objects; empty on success",
+        "meta.requestId: correlates the response with server logs",
+        "Return [] for no results, never null; clients can always iterate.",
+        "Prefer cursor pagination for large or fast-changing tables; page numbers skip or repeat rows when data shifts.",
+        "Use the same envelope on every endpoint so clients can share one parser.",
+        "Use ISO 8601 UTC timestamps and string ids (64-bit numeric ids lose precision in JavaScript).",
+        "Put the HTTP status in the status line; do not repeat it as a \"success\": true field."
+      ]
+    },
+    {
+      "id": "sample-json-data",
+      "title": "Sample JSON Data (Employees, Students, Products)",
+      "signature": [
+        "/employees/*/id",
+        "/departments"
+      ],
+      "notes": [
+        "A top-level object or array: valid JSON must have exactly one root value",
+        "Double-quoted keys and strings: single quotes are not valid JSON",
+        "employees: array of objects with id, name, email, department, salary, isActive, manager (null for top-level), skills (array), address (nested object)",
+        "departments: lookup array referenced by employees[].department",
+        "students: array with grades (object of subject → score) and enrolledAt (ISO 8601 date)",
+        "products: array with price (number), tags (array) and variants (array of objects)",
+        "Keep ids unique and stable so related records (manager, department) can reference them.",
+        "Store dates as ISO 8601 strings (\"2024-03-15\" or \"2024-03-15T09:30:00Z\"); JSON has no date type.",
+        "Store money as a number of the smallest unit or as a number plus a currency field; never mix formats.",
+        "Use null for \"known to be empty\" and omit the key for \"not applicable\".",
+        "Use example.com / example.org email domains so test data can never reach a real inbox."
+      ]
+    },
+    {
+      "id": "tsconfig-json",
+      "title": "tsconfig.json (TypeScript)",
+      "signature": [
+        "/compilerOptions"
+      ],
+      "notes": [
+        "compilerOptions: the compiler settings (an empty tsconfig still works on defaults, but you rarely want them)",
+        "include / exclude / files: which sources are in the project",
+        "extends: inherit from a shared base such as @tsconfig/node22",
+        "references: project references for monorepos (with composite: true)",
+        "compilerOptions.paths: import aliases",
+        "Turn on \"strict\": true from day one; retrofitting it later is painful.",
+        "For Node, pair \"module\": \"nodenext\" with \"moduleResolution\": \"nodenext\"; for Vite/webpack apps use \"module\": \"esnext\" with \"moduleResolution\": \"bundler\".",
+        "Add \"noUncheckedIndexedAccess\" to catch undefined array and record lookups.",
+        "Use \"verbatimModuleSyntax\" so type-only imports are explicit and erased predictably."
+      ]
+    },
+    {
       "id": "zoom-rooms-qsys-controls",
       "title": "Zoom Rooms Controls profile for Q-SYS",
       "signature": [

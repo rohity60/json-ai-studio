@@ -13,7 +13,7 @@ export const post: BlogPost = {
     aiSummary:
       'tasks.json (version 2.0.0) defines a tasks array VS Code can run from the Command Palette. group marks the default build/test task; problemMatcher parses output into the Problems panel; isBackground keeps watch tasks running; dependsOn chains tasks. Give exactly one default build task, attach a matcher to watches, and compose with dependsOn instead of shell &&.',
     relatedTemplates: ['vscode-tasks-json'],
-    relatedBlogs: [],
+    relatedBlogs: ['vscode-launch-json-guide', 'tsconfig-json-guide'],
     faq: [
       {
         q: 'What does problemMatcher do?',

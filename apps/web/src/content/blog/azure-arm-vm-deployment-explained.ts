@@ -13,7 +13,7 @@ export const post: BlogPost = {
     aiSummary:
       'An ARM VM deployment is five resources: a virtual network with a subnet, a public IP, a network interface that binds the two, and the VM that consumes the NIC. dependsOn enforces creation order. Use SSH keys, parameterize vmSize and location, and pin apiVersion per resource.',
     relatedTemplates: ['azure-arm-vm-deployment'],
-    relatedBlogs: [],
+    relatedBlogs: ['azure-app-service-settings-guide'],
     faq: [
       {
         q: 'Why do I need a NIC as a separate resource?',

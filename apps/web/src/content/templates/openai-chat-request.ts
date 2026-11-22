@@ -14,7 +14,7 @@ export const template: Template = {
     tags: ['openai', 'gpt', 'llm', 'ai', 'chat-completions', 'tools'],
     schemaVersion: 'v1',
     featured: false,
-    updatedAt: '2026-07-15',
+    updatedAt: '2026-11-21',
     author: 'JSON AI Studio',
     starterPrompts: [
       'Add a system message',
@@ -23,7 +23,7 @@ export const template: Template = {
       'Force a JSON response format',
     ],
     relatedTemplates: ['anthropic-messages-request'],
-    relatedBlogs: ['llm-thinking-reasoning-config'],
+    relatedBlogs: ['llm-thinking-reasoning-config', 'llm-structured-outputs-json'],
     purpose:
       'Call an OpenAI chat model — the request shape for POST /v1/chat/completions.',
     whenToUse:
@@ -41,7 +41,8 @@ export const template: Template = {
     bestPractices: [
       'Start the conversation with a system message to set behavior.',
       'Keep tool schemas strict with required fields.',
-      'Set a response_format when you need machine-parseable output.',
+      'Set response_format {type:"json_schema", json_schema:{strict:true,…}} when you need machine-parseable output.',
+      'reasoning_effort level sets vary per model (e.g. none…xhigh); reasoning models reject temperature, so leave it out.',
     ],
     security: [
       'Send the key in the Authorization: Bearer header, not this body.',
@@ -50,7 +51,8 @@ export const template: Template = {
     ],
   },
   json: {
-    model: 'gpt-4o',
+    model: 'gpt-5.6',
+    reasoning_effort: 'medium',
     messages: [
       { role: 'system', content: 'You are a helpful assistant.' },
       { role: 'user', content: 'What is the capital of France?' },
@@ -69,10 +71,11 @@ export const template: Template = {
               city: { type: 'string', description: 'City name' },
             },
             required: ['city'],
+            additionalProperties: false,
           },
+          strict: true,
         },
       },
     ],
-    temperature: 0.7,
   },
 };

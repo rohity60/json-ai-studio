@@ -14,7 +14,7 @@ export const template: Template = {
     tags: ['mcp', 'model-context-protocol', 'ai', 'claude-code', 'tools'],
     schemaVersion: 'mcp-v1',
     featured: true,
-    updatedAt: '2026-07-18',
+    updatedAt: '2026-11-21',
     author: 'JSON AI Studio',
     starterPrompts: [
       'Add a Postgres MCP server over stdio',
@@ -35,8 +35,8 @@ export const template: Template = {
     optionalFields: [
       'args — command-line arguments passed to a stdio server',
       'env — environment variables (often secret references) for the server',
-      'type — "stdio" (default), "http" or "sse" for remote servers',
-      'headers — auth headers for an http/sse server',
+      'type — "stdio" (default) or "http" (Streamable HTTP) for remote servers; "sse" is the legacy remote transport',
+      'headers — auth headers for a remote server',
     ],
     bestPractices: [
       'Reference secrets via ${ENV_VAR} rather than hardcoding tokens in the file.',
