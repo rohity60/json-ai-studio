@@ -697,3 +697,39 @@ async def test_progress_plan_for_inline_turn(gateway):
         "progress",
         {"stage": "calling", "message": "Asking the AI model…", "step": 1, "steps": 1},
     ) in events
+
+
+async def test_final_tool_markup_text_is_re_asked_once(gateway, monkeypatch):
+    # Live 2026-11-24 (nvidia): tool_choice "none", yet the final reply was
+    # "<tool_call><function=read>…" as text. One re-ask gets the answer.
+    monkeypatch.setenv("CHAT_TOOL_MAX_ROUNDS", "1")
+    from src.json_ai_studio.settings import get_settings
+
+    get_settings.cache_clear()
+    answer = '{"diffs": [], "explanation": "ok"}'
+    gateway.script.extend(
+        [
+            _response(calls=[("read", {"path": "/records/0"})]),
+            _response(content='<tool_call>\n<function=read>{"path": "/x"}'),
+            _response(content=answer),
+        ]
+    )
+    events = await _run(gateway.gw, JsonToolbox(RECORDS))
+
+    assert len(gateway.calls) == 3
+    assert [c.get("tool_choice") for c in gateway.calls] == [None, "none", "none"]
+    assert "Tools are NOT available" in gateway.calls[2]["messages"][-1]["content"]
+    assert [p["text"] for e, p in events if e == "thinking"] == [answer]
+
+
+async def test_final_tool_markup_re_asked_only_once(gateway, monkeypatch):
+    monkeypatch.setenv("CHAT_TOOL_MAX_ROUNDS", "1")
+    from src.json_ai_studio.settings import get_settings
+
+    get_settings.cache_clear()
+    markup = _response(content="<tool_call>\n<function=read>")
+    gateway.script.extend(
+        [_response(calls=[("read", {"path": "/records/0"})]), markup, markup]
+    )
+    await _run(gateway.gw, JsonToolbox(RECORDS))
+    assert len(gateway.calls) == 3  # no third attempt
