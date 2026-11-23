@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from .access import require_session_owner
 from ..auth import Principal
-from ..models import CreateJobRequest
+from ..models import CreateJobRequest, NextBatchRequest
 from ..services import job_service
 from ..services.errors import ConflictError, InvalidInputError, NotFoundError
 
@@ -91,17 +91,20 @@ async def endpoint_cancel_job(
 async def endpoint_next_batch(
     session_id: str,
     job_id: str,
+    req: NextBatchRequest | None = None,
     principal: Principal = Depends(require_session_owner),
 ):
     """Process exactly one batch; stream SSE (same budget/quota as chat)."""
+    guidance = req.guidance if req else None
     logger.info(
-        "POST /api/sessions/%s/jobs/%s/next principal=%s",
+        "POST /api/sessions/%s/jobs/%s/next principal=%s guidance=%s",
         session_id,
         job_id,
         principal.kind,
+        bool(guidance),
     )
     try:
-        session, job = await job_service.begin_next(session_id, job_id)
+        session, job = await job_service.begin_next(session_id, job_id, guidance)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ConflictError as exc:

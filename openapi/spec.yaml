@@ -815,13 +815,24 @@ paths:
           - "batch_complete" — terminal, the batch is stored.
             data: {"batch_no":3,"range":[24,35],"diffs":[DiffEntry],
                    "cursor":36,"total":876,"eta_s":1920,"explanation":"...",
-                   "working_json":{...},"turn":ChatTurn,"job":Job}
+                   "working_json":{...},"turn":ChatTurn,"job":Job,
+                   "held":null,"question":null}
             range = first and last item index (0-based, inclusive). diffs
             holds applied (pending) and failed entries. job.status is
-            "done" after the last batch.
+            "done" after the last batch. held is a note (string) when the
+            stamp / example-value guard refused this batch's changes to an
+            array (they are in diffs as failed, failure_reason = the note);
+            question {text, options} is what to ask. The cursor does NOT
+            move: the client pauses, shows the question and calls /next
+            with {"guidance": <chosen option or free text>}, which adds the
+            answer to the job's instruction and reviews the same items
+            again.
           - "batch_failed" — terminal, the cursor did not move.
             data: {"batch_no":3,"error":"...","retryable":true,"job":Job}
             job.status is "failed"; calling /next again retries the batch.
+            Also sent when every change the model returned lies outside
+            the batch's records (e.g. it replaced the whole document): the
+            records were not reviewed, and the retry tells the model so.
           - rate_limit / credit_limit — terminal quota stop as in
             /api/chat; the cursor did not move and the job stays "ready".
       operationId: nextJobBatch
@@ -839,6 +850,12 @@ paths:
            required: true
            schema:
              type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NextBatchRequest'
       responses:
          '200':
           description: SSE stream ending in batch_complete, batch_failed or a quota event
@@ -1924,6 +1941,17 @@ components:
           description: 1-based batch of that job
       required: [path, operation]
 
+    NextBatchRequest:
+      type: object
+      description: Optional body of POST .../jobs/{jobId}/next.
+      properties:
+        guidance:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: |-
+            Answer to a held batch's question (one of its options or free
+            text). Added to the job's instruction for this and later batches.
     CreateJobRequest:
       type: object
       properties:
@@ -2005,6 +2033,21 @@ components:
           type: string
           nullable: true
           description: Why the last batch failed (status failed)
+        held:
+          type: string
+          nullable: true
+          description: Guard note while a held batch waits for the user's answer
+        question:
+          type: object
+          nullable: true
+          description: What to ask while held; answer via /next guidance
+          properties:
+            text:
+              type: string
+            options:
+              type: array
+              items:
+                type: string
         batches:
           type: array
           items:

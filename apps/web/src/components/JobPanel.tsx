@@ -29,11 +29,13 @@ export default function JobPanel() {
   const batches = job.batch_count ? `${job.batches_done} of ~${job.batch_count}` : `${job.batches_done}`;
   const secs = ui.wait ? Math.max(0, Math.ceil((ui.wait.until - now) / 1000)) : 0;
   const finished = phase === 'done' || phase === 'cancelled';
+  const held = phase === 'paused' && !!job.held;
 
   const title =
     phase === 'done' ? 'Review complete'
       : phase === 'cancelled' ? 'Review cancelled'
         : phase === 'failed' ? 'Review stopped — a batch failed'
+          : held ? 'Review paused — your answer is needed'
           : phase === 'paused' ? 'Review paused'
             : ui.pausing ? 'Pausing after this batch…'
               : 'Reviewing in batches';
@@ -77,7 +79,23 @@ export default function JobPanel() {
       {ui.error && phase !== 'running' && (
         <p className="mt-1.5 text-red-700 break-words" data-testid="job-error">{ui.error}</p>
       )}
-      {phase === 'paused' && !ui.error && (
+      {held && !ui.error && (
+        <p className="mt-1.5 text-amber-800 break-words" data-testid="job-held">{job.held}</p>
+      )}
+      {held && job.question && (
+        <div className="mt-2" data-testid="job-question">
+          <p className="font-medium text-gray-800">{job.question.text}</p>
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {job.question.options.map((option, i) => (
+              <Button key={option} variant={i === 0 ? 'primary' : 'secondary'} onClick={() => resumeJob(option)}>
+                {option}
+              </Button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-gray-600">Your answer is added to the review instruction and items {job.cursor + 1} onward are reviewed again.</p>
+        </div>
+      )}
+      {phase === 'paused' && !ui.error && !held && (
         <p className="mt-1.5 text-gray-600">Nothing runs while paused. Resume to continue from item {job.cursor + 1}.</p>
       )}
       {phase === 'failed' && !ui.retryable && (
@@ -90,13 +108,13 @@ export default function JobPanel() {
             <Pause className="w-3.5 h-3.5" /> Pause
           </Button>
         )}
-        {phase === 'paused' && (
-          <Button variant="primary" onClick={resumeJob}>
+        {phase === 'paused' && !(held && job.question) && (
+          <Button variant="primary" onClick={() => resumeJob()}>
             <Play className="w-3.5 h-3.5" /> Resume
           </Button>
         )}
         {phase === 'failed' && ui.retryable && (
-          <Button variant="primary" onClick={resumeJob}>
+          <Button variant="primary" onClick={() => resumeJob()}>
             <RotateCw className="w-3.5 h-3.5" /> Retry batch
           </Button>
         )}
