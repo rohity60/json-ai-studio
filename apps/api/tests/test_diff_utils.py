@@ -1201,3 +1201,13 @@ def test_numeric_string_over_number_keeps_type():
     assert not failed
     assert merged == {"f": 0.0, "n": 7, "b": False, "s": "9", "big": "5 seconds"}
     assert isinstance(merged["f"], float) and isinstance(merged["n"], int)
+
+
+def test_decimal_string_over_int_becomes_float():
+    # Deliberate: "7.5" over an int keeps it numeric (a float), not a string.
+    from src.json_ai_studio.diff_utils import DiffUtils
+
+    merged, _, failed = DiffUtils.apply_all_verbose(
+        [{"path": "/n", "operation": "modify", "new_value": "7.5"}], {"n": 3}
+    )
+    assert not failed and merged == {"n": 7.5} and isinstance(merged["n"], float)

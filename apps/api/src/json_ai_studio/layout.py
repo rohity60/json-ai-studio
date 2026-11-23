@@ -197,11 +197,13 @@ def shape_breaks(
     indices: list[int],
     layout: Layout,
     scope_path: str,
+    allow_identical: bool = False,
 ) -> list[str]:
     """Problems with one batch's result for records `indices` of the array.
 
     Every record must end with exactly the example record's keys (prompt
-    rule L1). Live 2026-11-23: checking against the FIRST batch's shape
+    rule B). `allow_identical` (the user asked for identical records) turns
+    off the dropped-own-values check. Live 2026-11-23: checking against the FIRST batch's shape
     instead locked in its mistake (it dropped "model") and then refused a
     later batch that had it right.
     """
@@ -244,7 +246,9 @@ def shape_breaks(
             f'records got key "{k}", which is not in the example record '
             f"(e.g. {scope_path}/{where[0]})"
         )
-    for k, values in sorted(lost.items()):
+    # The user chose identical records: dropping each record's own values is
+    # what they asked for, not a break.
+    for k, values in [] if allow_identical else sorted(lost.items()):
         # Own data (values differ record to record) must survive; a field
         # with one shared value ("type": "free") may simply be dropped.
         if len(values) > 1 and len({_short(v) for v in values}) == len(values):

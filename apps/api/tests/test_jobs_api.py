@@ -992,3 +992,30 @@ def test_outside_changes_next_to_real_ones_still_advance(client, sid, job, llm):
     done = event(next_batch(client, sid, job["id"]), "batch_complete")
     assert done["cursor"] == len(llm.batches[0])
     assert any(d["path"] == "/name" and d["status"] == "failed" for d in done["diffs"])
+
+
+def test_identical_answer_lets_stamp_through(client, llm):
+    sid = new_session(client, SKINS)
+    llm.reply = _stamp_all
+    job = create_job(client, sid, scope_path="/skins", instruction=LAYOUT).json()
+    held = event(next_batch(client, sid, job["id"]), "batch_complete")
+    assert held["held"] and guards.SAME_OPTION in held["question"]["options"]
+    done = event(
+        next_with(client, sid, job["id"], guards.SAME_OPTION), "batch_complete"
+    )
+    assert done and not done["held"], done
+    skins = session_of(client, sid)["working_json"]["skins"]
+    assert all(s == {"id": "Steve", "geometry": "models/steve.obj"} for s in skins)
+
+
+@pytest.mark.parametrize("guidance", ["", "x" * 1001])
+def test_next_rejects_bad_guidance_and_leaves_job(client, llm, sid, job, guidance):
+    before = client.get(f"/api/sessions/{sid}/jobs/{job['id']}").json()
+    resp = client.post(
+        f"/api/sessions/{sid}/jobs/{job['id']}/next", json={"guidance": guidance}
+    )
+    assert resp.status_code == 422
+    after = client.get(f"/api/sessions/{sid}/jobs/{job['id']}").json()
+    assert after["instruction"] == before["instruction"]
+    assert after["status"] == "ready" and after["cursor"] == 0
+    assert llm.batches == []

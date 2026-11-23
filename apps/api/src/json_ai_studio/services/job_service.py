@@ -401,6 +401,7 @@ def _layout_problems(
         _scope_indices(scope, shown),
         target,
         scope or "/",
+        allow_identical=guards.wants_identical(job["instruction"]),
     )
 
 

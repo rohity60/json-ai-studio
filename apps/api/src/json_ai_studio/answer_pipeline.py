@@ -159,7 +159,14 @@ def apply_guarded(
     # Example-value guard: one field of every element overwritten with the
     # value from the user's JSON example (each element's own geometry → the
     # example's "models/steve.obj"). Ask instead of guessing.
-    if note is None and not guards.wants_example_values(message):
+    # "Make every element identical" (or the user's own wording for it) also
+    # means taking the example's values: without this, the answer to the
+    # stamp question was held again by this guard, asking forever.
+    if (
+        note is None
+        and not guards.wants_example_values(message)
+        and not guards.wants_identical(message)
+    ):
         hits = guards.find_example_stamps(
             doc, merged, message, min_elements=min_elements
         )

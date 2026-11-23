@@ -235,3 +235,17 @@ def test_example_stamp_skips_field_missing_in_some_elements():
     before = {"s": [{"g": f"g{i}"} for i in range(6)]}
     after = {"s": [{"g": "x.obj"} for _ in range(5)] + [{"other": 1}]}
     assert find_example_stamps(before, after, 'like {"g": "x.obj"}') == []
+
+
+def test_guidance_text_maps_each_option():
+    from src.json_ai_studio import guards as g
+
+    keep = g.guidance_text(g.KEEP_OPTION)
+    assert keep == g.guidance_text(g.EXAMPLE_KEEP_OPTION)
+    assert "keeps its value" in keep and not g.wants_identical(keep)
+    assert not g.wants_example_values(keep)
+    assert g.wants_example_values(g.guidance_text(g.EXAMPLE_USE_OPTION))
+    assert g.wants_identical(g.guidance_text(g.SAME_OPTION))
+    # Free text passes through, trimmed and capped.
+    assert g.guidance_text("  only rename the ids  ") == "only rename the ids"
+    assert len(g.guidance_text("x" * 5000)) == g.GUIDANCE_MAX_CHARS

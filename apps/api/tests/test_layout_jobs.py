@@ -292,3 +292,52 @@ def test_whole_record_modify_answer_applies_and_rejects_cleanly(client, llm, job
     r = client.post(f"/api/sessions/{sid}/diffs/{rec['id']}/reject")
     assert r.status_code == 200, r.text
     assert session_of(client, sid)["working_json"]["skins"][0] == doc()["skins"][0]
+
+
+# -- layout_for input shapes ---------------------------------------------------
+
+REC = {"id": "Steve", "geometry": "g.obj"}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Make each skin look like this: " + json.dumps([REC]),  # bare list
+        "Make each skin look like this: " + json.dumps(REC),  # one record
+        "Use {id} names. Layout: " + json.dumps({"skins": [REC]}),  # prose braces
+    ],
+    ids=["list", "record", "prose_braces"],
+)
+def test_layout_for_example_shapes(message):
+    lay = L.layout_for(message, doc(), "/skins")
+    assert lay is not None and lay.element == REC and lay.top_level == {}
+
+
+def test_layout_for_nested_scope_adds_no_top_level_keys():
+    nested = {"packs": [doc()]}
+    msg = "Match: " + json.dumps(EXAMPLE)
+    lay = L.layout_for(msg, nested, "/packs/0/skins")
+    assert lay.keys == ["id", "geometry", "textures"]
+    assert lay.top_level == {}  # "pack" is not added at the document root
+
+
+def test_layout_for_ignores_example_with_only_lists_of_records_elsewhere():
+    # A dict whose values hold record arrays under another key is not a record.
+    assert L.layout_for('x {"other": [{"a": 1}]}', doc(), "/skins") is None
+
+
+def test_shape_breaks_allow_identical_skips_lost_values_only():
+    lay = L.layout_for(INSTRUCTION, doc(), "/skins")
+    before = doc()["skins"][:3]
+    after = [{"id": "Steve", "geometry": "g", "textures": {"body": "b"}}] * 3
+    strict = L.shape_breaks(before, after, [0, 1, 2], lay, "/skins")
+    loose = L.shape_breaks(
+        before, after, [0, 1, 2], lay, "/skins", allow_identical=True
+    )
+    assert any("own" in p for p in strict)
+    assert loose == []
+    # Structure is still checked when identical records are allowed.
+    wrapped = [{"skins": [a]} for a in after]
+    assert L.shape_breaks(
+        before, wrapped, [0, 1, 2], lay, "/skins", allow_identical=True
+    )
