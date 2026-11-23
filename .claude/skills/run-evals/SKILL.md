@@ -24,7 +24,7 @@ uv run python evals/run_evals.py -d nvidia_nim -r 3              # prod model, ~
 uv run python evals/run_evals.py -d google_ai_studio --spacing 30   # free tier 16k tok/min: ~30 min, run in background
 ```
 
-- Default suite is `array_index`. Add `-s chat_history -s json_tools -s suggested_fixes` when the change touches history replay, lookup tools or format fixes.
+- Default suite is `array_index`. Add `-s chat_history -s json_tools -s suggested_fixes` when the change touches history replay, lookup tools or format fixes. Add `-s restructure` for layout/move/guard changes in chat, and `-s review` for review-job changes (`job_service`, `job_packing`, `layout.py`).
 - Models are noisy: use `-r 3` on the prod model (`nvidia_nim`) before trusting a result. Judge the rate over runs, never a single run.
 - The Google run is long: start it with `run_in_background`, and don't poll it.
 - Exit code 1 = a suite fell below its minimum in `evals/baselines.json`. The report is at `evals/reports/<timestamp>.md` (gitignored).

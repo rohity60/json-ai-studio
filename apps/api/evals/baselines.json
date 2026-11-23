@@ -19,5 +19,15 @@
     "ollama_local": {"min_pass_rate": null},
     "nvidia_nim": {"min_pass_rate": null},
     "google_ai_studio": {"min_pass_rate": null}
+  },
+  "restructure": {
+    "ollama_local": {"min_pass_rate": null},
+    "nvidia_nim": {"min_pass_rate": null, "measured": "4/4 on 2026-11-24 (mapped or guarded, no data loss)"},
+    "google_ai_studio": {"min_pass_rate": null}
+  },
+  "review": {
+    "ollama_local": {"min_pass_rate": null, "measured": "3/3 on 2026-11-24 (REVIEW_SKINS=120)"},
+    "nvidia_nim": {"min_pass_rate": null, "measured": "3/3 on 2026-11-24 (449 skins exact in 5 batches)"},
+    "google_ai_studio": {"min_pass_rate": null}
   }
 }
