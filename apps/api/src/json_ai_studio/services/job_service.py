@@ -24,11 +24,13 @@ import time
 from typing import Any, AsyncGenerator
 from uuid import uuid4
 
+from .. import answer_pipeline, guards, layout as layout_rules
+from ..answer_pipeline import expand_answer
 from ..db.session_store import store
-from ..diff_utils import DiffUtils, parse_llm_response
+from ..diff_utils import parse_llm_response
 from ..gateway import SERVICE_BUSY_MESSAGE, GatewayService
 from ..settings import get_settings
-from ..text_edits import REPLACE_TEXT, expand_text_edits
+from ..text_edits import REPLACE_TEXT
 from . import chat_history_service, job_packing, review_proposal
 from . import deployment_budget as budget
 from .errors import ConflictError, InvalidInputError, NotFoundError
@@ -42,6 +44,22 @@ ACTIVE = frozenset({"ready", "running", "failed"})
 # batch in flight (the longest batch waits one budget window + retries).
 _RUNNING_STALE_S = 900.0
 _OUT_OF_BATCH = "outside this batch — only records shown to the AI may change"
+# Floor for the batch room factor: 1/16 of the computed room (packing still
+# sends at least one record, paging oversized ones).
+_MIN_SHRINK = 1 / 16
+_ALL_OUTSIDE = (
+    "The AI changed only things outside this batch (for example the whole "
+    "document), so none of these items were reviewed. Retrying tells it to "
+    "change only the items it is shown."
+)
+# Added to the instruction for the retry of such a batch (live 2026-11-23,
+# nvidia: one "modify /" with the user's example as the whole document;
+# the 401 records of that batch were then skipped as "reviewed").
+_OUTSIDE_RETRY_NOTE = (
+    "Your previous answer for these records changed paths outside them "
+    "({paths}). Change only the records listed below, each at its own path; "
+    "never replace the whole document or a parent of these records."
+)
 _CUT_OFF = (
     "The AI's answer for this batch was cut off or unreadable. Retrying uses "
     "a smaller batch."
@@ -115,6 +133,8 @@ def public(job: dict[str, Any], session: dict[str, Any]) -> dict[str, Any]:
         "diffs_pending": pending,
         "eta_s": job.get("eta_s"),
         "error": job.get("error"),
+        "held": job.get("held"),
+        "question": job.get("held_question"),
         "batches": [
             {k: b[k] for k in ("batch_no", "start", "end", "diffs", "failed")}
             | {"explanation": b.get("explanation", "")}
@@ -162,6 +182,7 @@ async def create_job(
     except Exception:
         logger.exception("job estimate failed session=%s", session_id)
 
+    target = layout_rules.layout_for(instruction, doc, scope_path)
     now = now_iso()
     job: dict[str, Any] = {
         "id": uuid4().hex,
@@ -178,6 +199,8 @@ async def create_job(
         "error": None,
         "batches": [],
         "shrink": 1.0,  # room factor for the next attempt (output cut off)
+        # Target layout when the instruction carries a JSON example (layout.py).
+        "layout": target.to_dict() if target else None,
         "elapsed_s": 0.0,
         "created_at": now,
         "updated_at": now,
@@ -229,15 +252,26 @@ async def cancel_job(session_id: str, job_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def begin_next(session_id: str, job_id: str) -> tuple[dict, dict]:
+async def begin_next(
+    session_id: str, job_id: str, guidance: str | None = None
+) -> tuple[dict, dict]:
     """Check the job may run a batch and mark it running. Raises before
-    any stream starts, so the controller can answer with an HTTP code."""
+    any stream starts, so the controller can answer with an HTTP code.
+
+    `guidance` answers a held batch's question: it is added to the job's
+    instruction (so this and every later batch follow it) and clears the
+    hold."""
     session = await get_session(session_id)
     job = _require(session, job_id)
     if job["status"] in ("done", "cancelled"):
         raise ConflictError("job_finished")
     if running_job(session) is job:
         raise ConflictError("job_running")
+    if guidance and guidance.strip():
+        text = guards.guidance_text(guidance)
+        job["instruction"] = f"{job['instruction']}\n\nThe user answered: {text}"
+        job["held"] = job["held_question"] = None
+        logger.info("job guidance session=%s job=%s text=%r", session_id, job_id, text)
     job["status"] = "running"
     job["running_since"] = time.monotonic()
     return session, job
@@ -319,6 +353,58 @@ def _retarget_text_edits(
 _NOTE_PATH = re.compile(r"^Text edit on (\S+) ")
 
 
+# Batches can be small; three distinct records collapsing onto one value is
+# still a clear signal, fewer is not.
+_GUARD_MIN_ELEMENTS = 3
+
+
+def _max_records(job: dict[str, Any], setting: int) -> int:
+    """Record cap for the next batch: the setting, lowered by what a cut-off
+    answer showed fits (`job["max_records"]`, sticky). 0 = no cap."""
+    learned = job.get("max_records") or 0
+    if not learned:
+        return setting
+    return min(setting, learned) if setting else learned
+
+
+def _records_answered(text: str, scope_path: str) -> int:
+    """Distinct records of `scope_path` that a (cut-off) answer addressed,
+    minus the last one, which was likely cut mid-way."""
+    prefix = re.escape(scope_path.rstrip("/") + "/")
+    seen = dict.fromkeys(re.findall(rf'"{prefix}(\d+)', text))
+    return max(0, len(seen) - 1)
+
+
+def _scope_indices(scope_path: str, shown: list[str]) -> list[int]:
+    """Array indices of the batch's records (paths directly under scope)."""
+    prefix = scope_path.rstrip("/") + "/"
+    out: list[int] = []
+    for path in shown:
+        rest = path[len(prefix) :] if path.startswith(prefix) else ""
+        head = rest.split("/", 1)[0]
+        if head.isdigit() and int(head) not in out:
+            out.append(int(head))
+    return out
+
+
+def _layout_problems(
+    job: dict[str, Any],
+    target: "layout_rules.Layout",
+    before_doc: Any,
+    after_doc: Any,
+    shown: list[str],
+) -> list[str]:
+    scope = job["scope_path"]
+    return layout_rules.shape_breaks(
+        job_packing.resolve(before_doc, scope),
+        job_packing.resolve(after_doc, scope),
+        _scope_indices(scope, shown),
+        target,
+        scope or "/",
+        allow_identical=guards.wants_identical(job["instruction"]),
+    )
+
+
 def _hash(value: Any) -> str:
     text = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
@@ -369,11 +455,20 @@ async def run_batch(
         # Units are re-read from the current document (C-33): records not
         # yet processed are reviewed with whatever value they have now.
         units = job_packing.build_units(session["working_json"], job["scope_path"])
+        instruction = job["instruction"]
+        if job.get("retry_note"):
+            instruction = f"{instruction}\n\n{job['retry_note']}"
+        target = layout_rules.Layout.from_dict(job.get("layout"))
+        extra = layout_rules.prompt_rules(target) if target else ""
         overhead = job_packing.overhead_tokens(
-            deployment, litellm_model, job["instruction"]
+            deployment, litellm_model, instruction, extra
         )
         room = job_packing.batch_room(
-            deployment, litellm_model, overhead, job["shrink"]
+            deployment,
+            litellm_model,
+            overhead,
+            job["shrink"],
+            job_packing.LAYOUT_OUTPUT_RATIO if job.get("layout") else 1.0,
         )
         batch = job_packing.pack_next(
             units,
@@ -381,9 +476,9 @@ async def run_batch(
             tuple(job["sub"]) if job["sub"] else None,
             room,
             job_packing.make_sizer(deployment, litellm_model),
-            settings.job_max_records_per_batch,
+            _max_records(job, settings.job_max_records_per_batch),
         )
-        messages = job_packing.lean_messages(job["instruction"], batch.items)
+        messages = job_packing.lean_messages(instruction, batch.items, extra)
         holder.update(
             batch=batch,
             units=units,
@@ -466,11 +561,20 @@ async def run_batch(
             return
         batch: job_packing.Batch | None = holder.get("batch")
         if stop == "failed" or batch is None:
+            if batch is not None and len(batch.items) > 1:
+                # The call failed after packing — most often the provider
+                # dropping a long-running stream (live 2026-11-23, nvidia:
+                # 401 records, socket read timeout after ~150 s, twice).
+                # Retrying the same size fails the same way: shrink it.
+                job["shrink"] = max(_MIN_SHRINK, job["shrink"] * 0.5)
             logger.warning(
-                "job batch failed session=%s job=%s batch=%d",
+                "job batch failed session=%s job=%s batch=%d items=%d "
+                "next_shrink=%.2f",
                 session_id,
                 job["id"],
                 batch_no,
+                len(batch.items) if batch else 0,
+                job["shrink"],
             )
             yield fail(SERVICE_BUSY_MESSAGE)
             return
@@ -478,14 +582,24 @@ async def run_batch(
         combined = "".join(parts)
         logger.debug("job batch output session=%s: %s", session_id, combined)
         if _unreadable(combined):
-            job["shrink"] = max(0.25, job["shrink"] * 0.5)
+            covered = _records_answered(combined, job["scope_path"])
+            if covered >= 2:
+                # The cut answer shows how many records fit in one answer:
+                # cap the next batches there (with margin) instead of halving
+                # blindly (live 2026-11-23: 401 → 200 → 100 → 50, each a
+                # 2.5-minute call cut at the same ~48k characters).
+                job["max_records"] = max(1, int(covered * 0.8))
+            else:
+                job["shrink"] = max(_MIN_SHRINK, job["shrink"] * 0.5)
             logger.warning(
                 "job batch unreadable session=%s job=%s batch=%d output_len=%d "
-                "next_shrink=%.2f",
+                "records_answered=%d next_max_records=%s next_shrink=%.2f",
                 session_id,
                 job["id"],
                 batch_no,
                 len(combined),
+                covered,
+                job.get("max_records"),
                 job["shrink"],
             )
             yield fail(_CUT_OFF)
@@ -496,6 +610,23 @@ async def run_batch(
         shown = [u.path for u in units[batch.start : batch.end + 1]]
         outside = [d for d in diffs if not _in_batch(str(d.get("path", "")), shown)]
         diffs = [d for d in diffs if _in_batch(str(d.get("path", "")), shown)]
+        if outside and not diffs:
+            # Nothing addressed the records shown: they were NOT reviewed,
+            # so the cursor must not pass them. Retry with a pointed note.
+            paths = sorted({str(d.get("path", "")) or "/" for d in outside})
+            job["retry_note"] = _OUTSIDE_RETRY_NOTE.format(
+                paths=", ".join(paths[:3]) + (" …" if len(paths) > 3 else "")
+            )
+            logger.warning(
+                "job batch all outside session=%s job=%s batch=%d paths=%s",
+                session_id,
+                job["id"],
+                batch_no,
+                paths[:5],
+            )
+            yield fail(_ALL_OUTSIDE)
+            return
+        job.pop("retry_note", None)
 
         # The document may have changed while the model worked (a diff was
         # rejected, a chat edit landed): expand and apply against it as it
@@ -503,19 +634,60 @@ async def run_batch(
         # the truncation guard and the normal failed-diff path (C-36).
         doc = session["working_json"]
         diffs = _retarget_text_edits(diffs, doc, shown)
-        diffs, notes = expand_text_edits(diffs, doc)
+        expanded = expand_answer(diffs, [], doc, settings.bulk_max_matches)
+        notes = expanded.notes
         if notes:
             logger.info(
-                "job batch text edits skipped session=%s job=%s batch=%d notes=%s",
+                "job batch edits skipped session=%s job=%s batch=%d notes=%s",
                 session_id,
                 job["id"],
                 batch_no,
                 notes[:10],
             )
-        from .chat_service import _is_noop
-
-        diffs = [d for d in diffs if not _is_noop(d, doc)]
-        merged, applied, failed = DiffUtils.apply_all_verbose(diffs, doc)
+        # A move's source / a created parent can fall outside the records
+        # shown: those halves are refused like any out-of-batch diff.
+        diffs = [d for d in expanded.diffs if _in_batch(str(d["path"]), shown)]
+        outside += [d for d in expanded.diffs if not _in_batch(str(d["path"]), shown)]
+        target = layout_rules.Layout.from_dict(job.get("layout"))
+        if target and not job.get("top_done"):
+            # The example's top-level parts ("pack") are added once, by the
+            # server: no batch ever sees the document's top level.
+            diffs = [*layout_rules.top_level_diffs(target, doc), *diffs]
+        result = answer_pipeline.apply_guarded(
+            diffs,
+            doc,
+            job["instruction"],
+            min_elements=max(_GUARD_MIN_ELEMENTS, min(guards.MIN_ELEMENTS, len(shown))),
+        )
+        merged, applied, failed = result.merged, result.applied, result.failed
+        guard_note = result.note
+        failed = [*failed, *((d, guard_note) for d in result.held)]
+        if guard_note:
+            logger.warning(
+                "job batch guard held session=%s job=%s batch=%d held=%d",
+                session_id,
+                job["id"],
+                batch_no,
+                len(result.held),
+            )
+        if target and not guard_note:
+            problems = _layout_problems(job, target, doc, merged, shown)
+            if problems:
+                job["retry_note"] = layout_rules.retry_note(problems, target)
+                logger.warning(
+                    "job batch layout broken session=%s job=%s batch=%d problems=%s",
+                    session_id,
+                    job["id"],
+                    batch_no,
+                    problems,
+                )
+                yield fail(
+                    "The AI's changes for this batch did not follow the target "
+                    "layout (" + "; ".join(problems) + "). Nothing was applied; "
+                    "retrying tells it what went wrong."
+                )
+                return
+            job["top_done"] = True
         tag = {"job_id": job["id"], "batch_no": batch_no}
         applied_entries = [
             {**d, "id": str(uuid4()), "status": "pending", **tag} for d in applied
@@ -543,11 +715,17 @@ async def run_batch(
             )
         session["working_json"] = merged
 
-        # Progress.
-        job["cursor"] = batch.cursor
-        job["sub"] = list(batch.sub) if batch.sub else None
+        # Progress. A held batch keeps its cursor: once the user answers
+        # the guard's question (/next with guidance) the same records are
+        # reviewed again — the held ones were not changed.
+        if not guard_note:
+            job["cursor"] = batch.cursor
+            job["sub"] = list(batch.sub) if batch.sub else None
         job["batches_done"] = batch_no
-        job["shrink"] = 1.0
+        # job["shrink"] is NOT reset: the answer size per record is a property
+        # of this instruction, so the size that fit keeps fitting. Resetting
+        # sent the next batch back to full size and it was cut off again
+        # (live 2026-11-23, nvidia: 401 → cut → 200 → cut → 100 ok → 401 cut).
         job["error"] = None
         job["total"] = len(units)
         job["last_s"] = time.monotonic() - started
@@ -555,6 +733,10 @@ async def run_batch(
         job["pace_s"] = job.get("pace_s", 0.0) + holder.get("pace_s", 0.0)
         finished = job["cursor"] >= len(units)
         job["status"] = "done" if finished else "ready"
+        # A held batch pauses the job (client stops on `held`) until the
+        # user answers the question.
+        job["held"] = guard_note
+        job["held_question"] = result.question
         if finished:
             session["active_job_id"] = None
         _estimate_rest(job, len(units))
@@ -570,6 +752,8 @@ async def run_batch(
         if failed_entries:
             content += f", {len(failed_entries)} could not be applied"
         content += "."
+        if guard_note:
+            content += " " + guard_note
         turn = chat_history_service.make_turn(
             "assistant",
             content,
@@ -620,7 +804,13 @@ async def run_batch(
                 "cursor": job["cursor"],
                 "total": len(units),
                 "eta_s": job["eta_s"],
-                "explanation": explanation or content,
+                "explanation": (
+                    f"{guard_note} {explanation or ''}".strip()
+                    if guard_note
+                    else explanation or content
+                ),
+                "held": guard_note,
+                "question": result.question,
                 "working_json": merged,
                 "turn": turn,
                 "job": public(job, session),

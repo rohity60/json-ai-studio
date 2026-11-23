@@ -40,7 +40,9 @@ Models are not deterministic: judge a change by the rate over several runs, not 
 | `array_index` | `test_array_index_live.py` | Array indices (prompt rule 4): append via `-`, several inserts in one gap, inserts in two gaps, delete + insert, replace, delete + rename, delete + append, prod case (4 roles on a 51-role Discord JSON), insert after a named role in a long list, add-then-modify across turns (pending / accepted). |
 | `chat_history` | `test_chat_history_live.py` | Follow-ups over replayed history (ADR-0021): "do the same for all", never re-propose done work. |
 | `json_tools` | `test_json_tools_live.py` | Lookup-tool loop on large docs (ADR-0024). |
-| `suggested_fixes` | `test_suggested_fixes_live.py` | Proactive format fixes (ADR-0023). |
+| `suggested_fixes` | `test_suggested_fixes_live.py` | Proactive format fixes (ADR-0023); explicit invalid values applied with a warning. |
+| `restructure` | `test_restructure_live.py` | Chat: restructure every element to a layout example (prod 449 skins). Outcomes mapped / asked / guarded pass; data loss fails. `SKIN_COUNTS=40,449`. |
+| `review` | `test_review_live.py` | Review jobs (ADR-0026) driven like the web client: layout reviews (449 skins + top-level `pack`; tracks with an example default) and a plain typo review. Fails on lost own values, added/removed records, layout rules in a non-layout prompt. `REVIEW_SKINS=449`. |
 
 You can also run a file directly: `LIVE_LLM=1 [LIVE_DEPLOYMENT=…] [LIVE_MODEL=…] [LIVE_CALL_SPACING_S=…] PYTHONPATH=. uv run pytest evals/<file> -s`.
 

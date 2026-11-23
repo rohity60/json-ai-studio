@@ -201,8 +201,11 @@ class Item:
         return _compact({"path": self.path, "value": self.value})
 
 
-def lean_messages(instruction: str, items: list[Item]) -> list[dict[str, Any]]:
-    system = _SYSTEM.replace("__INSTRUCTION__", instruction.strip())
+def lean_messages(
+    instruction: str, items: list[Item], extra_rules: str = ""
+) -> list[dict[str, Any]]:
+    """`extra_rules` is appended to the system prompt (e.g. layout rules)."""
+    system = _SYSTEM.replace("__INSTRUCTION__", instruction.strip()) + extra_rules
     records = "\n".join(item.render() for item in items)
     return [
         {"role": "system", "content": system},
@@ -210,19 +213,41 @@ def lean_messages(instruction: str, items: list[Item]) -> list[dict[str, Any]]:
     ]
 
 
-def overhead_tokens(deployment: Any, litellm_model: str, instruction: str) -> int:
+def overhead_tokens(
+    deployment: Any, litellm_model: str, instruction: str, extra_rules: str = ""
+) -> int:
     """Calibrated tokens of the prompt without records, floored (§6)."""
     key = budget.budget_key(deployment, litellm_model)
-    raw = budget.estimate_tokens(litellm_model, lean_messages(instruction, []))
+    raw = budget.estimate_tokens(
+        litellm_model, lean_messages(instruction, [], extra_rules)
+    )
     return max(budget.calibrated(key, raw), get_settings().job_lean_overhead_tokens)
 
 
+# A layout answer is one whole-record modify per record (layout.prompt_rules):
+# about the record's own size plus its path and the diff's keys, ~2× the
+# record's tokens. 1/4 leaves room for models that still answer field by
+# field (live 2026-11-23, nvidia: 3 adds + 3 deletes per skin, ~6×); a
+# cut-off answer then caps the batch by the records it covered.
+LAYOUT_OUTPUT_RATIO = 1 / 4
+
+
 def batch_room(
-    deployment: Any, litellm_model: str, overhead: int, shrink: float = 1.0
+    deployment: Any,
+    litellm_model: str,
+    overhead: int,
+    shrink: float = 1.0,
+    output_ratio: float = 1.0,
 ) -> int:
-    """Tokens of records one batch may carry on this deployment (C-30)."""
+    """Tokens of records one batch may carry on this deployment (C-30).
+
+    `output_ratio` scales the answer-size limit for jobs whose answer is
+    larger than their input (a layout change writes several diffs per
+    record; see LAYOUT_OUTPUT_RATIO)."""
     settings = get_settings()
-    limits: list[float] = [settings.llm_max_tokens * settings.job_input_per_output]
+    limits: list[float] = [
+        settings.llm_max_tokens * settings.job_input_per_output * output_ratio
+    ]
     usable = budget.plan_budget(deployment)
     if usable is not None:
         reserve = usable * settings.job_retry_reserve_share
@@ -408,8 +433,13 @@ def plan_job(
 ) -> JobPlan:
     settings = get_settings()
     units = build_units(doc, scope_path)
-    overhead = overhead_tokens(deployment, litellm_model, instruction)
-    room = batch_room(deployment, litellm_model, overhead)
+    from ..layout import layout_for, prompt_rules
+
+    target = layout_for(instruction, doc, scope_path)
+    extra = prompt_rules(target) if target else ""
+    overhead = overhead_tokens(deployment, litellm_model, instruction, extra)
+    ratio = LAYOUT_OUTPUT_RATIO if target else 1.0
+    room = batch_room(deployment, litellm_model, overhead, 1.0, ratio)
     sizer = make_sizer(deployment, litellm_model)
     batches = simulate(units, room, sizer, settings.job_max_records_per_batch)
     eta = sum(

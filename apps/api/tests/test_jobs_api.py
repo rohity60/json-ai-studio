@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from src.json_ai_studio import guards
 from src.json_ai_studio.db.session_store import store
 from src.json_ai_studio.diff_utils import TRUNCATION_REASON
 from src.json_ai_studio.gateway import GatewayService
@@ -399,9 +400,11 @@ class TestOneBatch:
                 "explanation": "x",
             }
         ]
-        done = event(next_batch(client, sid, job["id"]), "batch_complete")
-        assert [d["status"] for d in done["diffs"]] == ["failed", "failed"]
-        assert all("outside this batch" in d["failure_reason"] for d in done["diffs"])
+        # Only outside changes: the batch's records were not reviewed, so it
+        # fails and keeps its place (see the retry-note test below).
+        failed = event(next_batch(client, sid, job["id"]), "batch_failed")
+        assert "outside this batch" in failed["error"]
+        assert failed["job"]["cursor"] == 0
         state = session_of(client, sid)["working_json"]
         assert state["name"] == "book"
         assert state["entries"][59]["content"].startswith("teh entry 59")
@@ -571,7 +574,11 @@ class TestLifecycle:
         assert create_job(client, sid).status_code == 409
 
         done = event(next_batch(client, sid, job["id"]), "batch_complete")
-        assert llm.batches[2] == llm.batches[1]  # the same batch again
+        # The same records again, fewer of them (a failed call shrinks the
+        # batch: a dropped long stream would fail again at the same size).
+        assert llm.batches[2] == llm.batches[1][: len(llm.batches[2])]
+        if len(llm.batches[1]) > 1:
+            assert len(llm.batches[2]) < len(llm.batches[1])
         assert done["batch_no"] == 2 and done["job"]["status"] == "ready"
         assert done["job"]["error"] is None
         assert done["cursor"] == cursor + len(llm.batches[2])
@@ -598,6 +605,18 @@ class TestLifecycle:
         assert len(llm.batches[1]) < len(llm.batches[0])
         assert llm.batches[1] == llm.batches[0][: len(llm.batches[1])]
         assert done["batch_no"] == 1
+
+    def test_smaller_size_sticks_after_a_cut_off(self, client, llm):
+        # Uniform records, so batch length tracks the room factor.
+        sid = new_session(client, book([40] * 400))
+        job = create_job(client, sid).json()
+        llm.script = ['{"diffs": [{"path": "/entries/0/content", "operat']
+        event(next_batch(client, sid, job["id"]), "batch_failed")
+        event(next_batch(client, sid, job["id"]), "batch_complete")
+        event(next_batch(client, sid, job["id"]), "batch_complete")
+        full, retry, after = (len(b) for b in llm.batches[:3])
+        assert retry < full
+        assert after <= retry + 1  # not back to full size
 
     def test_prose_answer_means_no_changes(self, client, sid, job, llm):
         llm.script = ["Everything in this batch looks fine."]
@@ -775,3 +794,228 @@ class TestPerBatchResolve:
         next_batch(client, sid, job["id"])
         client.post(f"/api/sessions/{sid}/diffs/reject-all")
         assert self.statuses(client, sid)[3] == {"rejected"}
+
+
+# -- Guards (shared answer pipeline with chat) --------------------------------
+
+SKINS = {
+    "skins": [
+        {"localization_name": f"Skin {i}", "geometry": f"geometry.s{i}"}
+        for i in range(8)
+    ]
+}
+LAYOUT = (
+    "Make every skin match this layout: "
+    '{"skins": [{"id": "Steve", "geometry": "models/steve.obj"}]}'
+)
+
+
+def _stamp_all(records):
+    """Model stamps the example over every record shown."""
+    return {
+        "diffs": [
+            {
+                "path": r["path"],
+                "operation": "modify",
+                "new_value": {"id": "Steve", "geometry": "models/steve.obj"},
+            }
+            for r in records
+        ],
+        "explanation": "Matched the layout.",
+    }
+
+
+def _example_geometry(records):
+    """Ids mapped correctly, but every geometry becomes the example's."""
+    diffs = []
+    for r in records:
+        diffs += [
+            {
+                "path": r["path"] + "/id",
+                "operation": "add",
+                "new_value": r["value"]["localization_name"],
+            },
+            {"path": r["path"] + "/localization_name", "operation": "delete"},
+            {
+                "path": r["path"] + "/geometry",
+                "operation": "modify",
+                "new_value": "models/steve.obj",
+            },
+        ]
+    return {"diffs": diffs, "explanation": "Matched the layout."}
+
+
+@pytest.mark.parametrize("reply", [_stamp_all, _example_geometry])
+def test_guard_holds_batch_and_pauses(client, llm, reply):
+    sid = new_session(client, SKINS)
+    llm.reply = reply
+    job = create_job(client, sid, scope_path="/skins", instruction=LAYOUT).json()
+    done = event(next_batch(client, sid, job["id"]), "batch_complete")
+    assert done["held"]
+    assert done["explanation"].startswith("Not applied")
+    assert all(d["status"] == "failed" for d in done["diffs"])
+    assert all(d["failure_reason"] == done["held"] for d in done["diffs"])
+    skins = session_of(client, sid)["working_json"]["skins"]
+    assert skins == SKINS["skins"]  # nothing changed
+
+
+def test_guard_override_in_instruction(client, llm):
+    sid = new_session(client, SKINS)
+    llm.reply = _example_geometry
+    job = create_job(
+        client,
+        sid,
+        scope_path="/skins",
+        instruction=LAYOUT + " Use the example's values for every skin.",
+    ).json()
+    done = event(next_batch(client, sid, job["id"]), "batch_complete")
+    assert not done["held"]
+    skins = session_of(client, sid)["working_json"]["skins"]
+    assert {s["geometry"] for s in skins[: done["range"][1] + 1]} == {
+        "models/steve.obj"
+    }
+
+
+def test_guard_ignores_plain_fixes(client, llm, sid, job):
+    done = event(next_batch(client, sid, job["id"]), "batch_complete")
+    assert done["held"] is None
+
+
+def _keep_own(records):
+    """Correct restructure: own name → id, own geometry kept."""
+    diffs = []
+    for r in records:
+        diffs += [
+            {
+                "path": r["path"] + "/id",
+                "operation": "add",
+                "new_value": r["value"]["localization_name"],
+            },
+            {"path": r["path"] + "/localization_name", "operation": "delete"},
+        ]
+    return {"diffs": diffs, "explanation": "Renamed."}
+
+
+def next_with(client, sid, job_id, guidance):
+    resp = client.post(
+        f"/api/sessions/{sid}/jobs/{job_id}/next", json={"guidance": guidance}
+    )
+    assert resp.status_code == 200, resp.text
+    return [parse_sse(b) for b in resp.text.split("\n\n") if b.strip()]
+
+
+def test_held_batch_keeps_cursor_and_asks(client, llm):
+    sid = new_session(client, SKINS)
+    llm.reply = _example_geometry
+    job = create_job(client, sid, scope_path="/skins", instruction=LAYOUT).json()
+    done = event(next_batch(client, sid, job["id"]), "batch_complete")
+    assert done["cursor"] == 0
+    assert done["question"]["options"] == [
+        guards.EXAMPLE_KEEP_OPTION,
+        guards.EXAMPLE_USE_OPTION,
+    ]
+    polled = client.get(f"/api/sessions/{sid}/jobs/{job['id']}").json()
+    assert polled["held"] == done["held"]
+    assert polled["question"] == done["question"]
+
+
+def test_keep_answer_reviews_same_records_with_guidance(client, llm):
+    sid = new_session(client, SKINS)
+    llm.reply = _example_geometry
+    job = create_job(client, sid, scope_path="/skins", instruction=LAYOUT).json()
+    first = event(next_batch(client, sid, job["id"]), "batch_complete")
+    llm.reply = _keep_own
+    done = event(
+        next_with(client, sid, job["id"], guards.EXAMPLE_KEEP_OPTION),
+        "batch_complete",
+    )
+    # Same records again, and the model was told what the user chose.
+    assert llm.batches[1] == llm.batches[0]
+    assert "keeps its value" in (
+        llm.plans[1].messages[0]["content"] + llm.plans[1].messages[1]["content"]
+    )
+    assert not done["held"] and done["job"]["question"] is None
+    assert done["cursor"] > first["cursor"]
+    skins = session_of(client, sid)["working_json"]["skins"]
+    assert skins[0] == {"geometry": "geometry.s0", "id": "Skin 0"}
+
+
+def test_use_example_answer_lets_change_through(client, llm):
+    sid = new_session(client, SKINS)
+    llm.reply = _example_geometry
+    job = create_job(client, sid, scope_path="/skins", instruction=LAYOUT).json()
+    next_batch(client, sid, job["id"])
+    done = event(
+        next_with(client, sid, job["id"], guards.EXAMPLE_USE_OPTION),
+        "batch_complete",
+    )
+    assert not done["held"]
+    skins = session_of(client, sid)["working_json"]["skins"]
+    assert skins[0]["geometry"] == "models/steve.obj"
+
+
+def _whole_doc(records):
+    """Live 2026-11-23 (nvidia): the whole document replaced by the example."""
+    return {
+        "diffs": [{"path": "/", "operation": "modify", "new_value": {"x": 1}}],
+        "explanation": "Matched the layout.",
+    }
+
+
+def test_batch_with_only_outside_changes_fails_and_retries_with_note(
+    client, sid, job, llm
+):
+    llm.script = [_whole_doc]
+    failed = event(next_batch(client, sid, job["id"]), "batch_failed")
+    assert failed and "outside this batch" in failed["error"]
+    assert failed["job"]["cursor"] == 0 and failed["retryable"] is True
+    before = session_of(client, sid)["working_json"]
+
+    done = event(next_batch(client, sid, job["id"]), "batch_complete")
+    assert llm.batches[1][0] == llm.batches[0][0]  # the same records again
+    retry_prompt = json.dumps(llm.plans[1].messages)
+    assert "changed paths outside them (/)" in retry_prompt
+    assert done["cursor"] > 0
+    assert before["name"] == "book"  # nothing outside the batch changed
+    # The note is gone once a batch addressed its records.
+    event(next_batch(client, sid, job["id"]), "batch_complete")
+    assert "changed paths outside" not in json.dumps(llm.plans[2].messages)
+
+
+def test_outside_changes_next_to_real_ones_still_advance(client, sid, job, llm):
+    def mixed(records):
+        out = fix_typo(records)
+        out["diffs"].append({"path": "/name", "operation": "modify", "new_value": "x"})
+        return out
+
+    llm.script = [mixed]
+    done = event(next_batch(client, sid, job["id"]), "batch_complete")
+    assert done["cursor"] == len(llm.batches[0])
+    assert any(d["path"] == "/name" and d["status"] == "failed" for d in done["diffs"])
+
+
+def test_identical_answer_lets_stamp_through(client, llm):
+    sid = new_session(client, SKINS)
+    llm.reply = _stamp_all
+    job = create_job(client, sid, scope_path="/skins", instruction=LAYOUT).json()
+    held = event(next_batch(client, sid, job["id"]), "batch_complete")
+    assert held["held"] and guards.SAME_OPTION in held["question"]["options"]
+    done = event(
+        next_with(client, sid, job["id"], guards.SAME_OPTION), "batch_complete"
+    )
+    assert done and not done["held"], done
+    skins = session_of(client, sid)["working_json"]["skins"]
+    assert all(s == {"id": "Steve", "geometry": "models/steve.obj"} for s in skins)
+
+
+@pytest.mark.parametrize("guidance", ["", "x" * 1001])
+def test_next_rejects_bad_guidance_and_leaves_job(client, llm, sid, job, guidance):
+    before = client.get(f"/api/sessions/{sid}/jobs/{job['id']}").json()
+    resp = client.post(
+        f"/api/sessions/{sid}/jobs/{job['id']}/next", json={"guidance": guidance}
+    )
+    assert resp.status_code == 422
+    after = client.get(f"/api/sessions/{sid}/jobs/{job['id']}").json()
+    assert after["instruction"] == before["instruction"]
+    assert after["status"] == "ready" and after["cursor"] == 0
+    assert llm.batches == []

@@ -39,6 +39,8 @@ SUITES = {
     "chat_history": "test_chat_history_live.py",
     "json_tools": "test_json_tools_live.py",
     "suggested_fixes": "test_suggested_fixes_live.py",
+    "restructure": "test_restructure_live.py",
+    "review": "test_review_live.py",
 }
 
 

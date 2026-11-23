@@ -629,6 +629,9 @@ export type Job = {
     diffs_pending: number;
     eta_s?: number | null;
     error?: string | null;
+    /** Guard note while a held batch waits for the user's answer. */
+    held?: string | null;
+    question?: {text: string; options: string[]} | null;
     batches: JobBatch[];
     created_at?: string | null;
     updated_at?: string | null;
@@ -646,6 +649,9 @@ export type BatchComplete = {
     working_json: Record<string, any>;
     turn?: ChatTurn;
     job: Job;
+    /** Guard note when this batch's changes to an array were held back
+     *  (they are failed entries in `diffs`). The loop pauses on it. */
+    held?: string | null;
 };
 
 /** SSE `batch_failed` payload: the cursor did not move; /next retries. */
@@ -691,10 +697,14 @@ export async function cancelJob(sessionId: string, jobId: string, apiKey: string
  *  retrying, diff, then batch_complete | batch_failed | a quota event).
  *  `signal` aborts the stream (error.userAborted); only safe before the
  *  model call starts — the server reserves nothing while it waits. */
-export async function* nextBatch(sessionId: string, jobId: string, apiKey: string, signal?: AbortSignal) {
+/** `guidance` answers a held batch's question (an option or free text). */
+export async function* nextBatch(sessionId: string, jobId: string, apiKey: string, signal?: AbortSignal, guidance?: string) {
+    const headers = await authHeaders(apiKey);
     yield* sseEvents(
         `${BASE}/sessions/${sessionId}/jobs/${jobId}/next`,
-        {method: 'POST', headers: await authHeaders(apiKey)},
+        guidance
+            ? {method: 'POST', headers: {...headers, 'Content-Type': 'application/json'}, body: JSON.stringify({guidance})}
+            : {method: 'POST', headers},
         'Review batch failed',
         'The review batch timed out. Server may be slow or unavailable.',
         signal,

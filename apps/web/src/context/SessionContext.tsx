@@ -115,7 +115,8 @@ type SessionContextValue = {
   // a time; pausing stops asking, closing the tab pauses too.
   startJob: (proposal: api.JobProposal, sourceTurnId?: string) => Promise<void>;
   pauseJob: () => void;
-  resumeJob: () => void;
+  /** `guidance` answers a held batch's question. */
+  resumeJob: (guidance?: string) => void;
   cancelJob: () => Promise<void>;
   dismissJob: () => void;
   acceptJobBatch: (jobId: string, batchNo: number) => Promise<void>;
@@ -880,7 +881,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   // The client loop: one POST .../next per batch until the job is done,
   // paused or failed. Pausing never aborts a batch in flight — it stops
   // after it, so no model call is wasted.
-  const runJobLoop = useCallback(async (sessionId: string, jobId: string) => {
+  const runJobLoop = useCallback(async (sessionId: string, jobId: string, guidance?: string) => {
     const loop = jobLoopRef.current;
     if (loop.active) return;
     loop.active = true;
@@ -907,7 +908,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         const abortCtrl = new AbortController();
         loop.abort = () => abortCtrl.abort();
         try {
-          for await (const chunk of api.nextBatch(sessionId, jobId, apiKey, abortCtrl.signal)) {
+          const answer = guidance;
+          guidance = undefined; // only the first batch carries the answer
+          for await (const chunk of api.nextBatch(sessionId, jobId, apiKey, abortCtrl.signal, answer)) {
             const d = chunk.data || {};
             if (chunk.type === 'progress' && (d.stage === 'calling' || d.stage === 'answering')) {
               loop.abort = null;
@@ -936,6 +939,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
                 });
               result = 'complete';
               finished = done.job.status === 'done';
+              if (done.held && !finished) {
+                // Guard refused changes: pause until the user answers
+                // job.question (JobPanel; resumeJob(option) sends it).
+                loop.pause = true;
+                }
               } else if (chunk.type === 'batch_failed') {
               const failed = d as api.BatchFailed;
               patchJob({ job: failed.job, error: failed.error, retryable: failed.retryable !== false });
@@ -1060,9 +1068,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     patchJob({ pausing: true });
     }, []);
 
-  const resumeJob = useCallback(() => {
+  const resumeJob = useCallback((guidance?: string) => {
     if (!state.sessionId || !state.job) return;
-    void runJobLoop(state.sessionId, state.job.job.id);
+    void runJobLoop(state.sessionId, state.job.job.id, typeof guidance === 'string' ? guidance : undefined);
     }, [state.sessionId, state.job, runJobLoop]);
 
   const cancelJob = useCallback(async () => {

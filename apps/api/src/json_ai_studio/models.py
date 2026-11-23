@@ -132,6 +132,16 @@ class CreateJobRequest(BaseModel):
     source_turn_id: str | None = None
 
 
+class NextBatchRequest(BaseModel):
+    """Optional body for POST .../jobs/{id}/next (spec: NextBatchRequest).
+
+    `guidance` answers the question of a held batch (one of its options or
+    free text); it is added to the job's instruction before the batch runs.
+    """
+
+    guidance: str | None = Field(default=None, min_length=1, max_length=1_000)
+
+
 class JobBatch(BaseModel):
     """Summary of one finished review batch (spec: JobBatch)."""
 
@@ -161,6 +171,8 @@ class Job(BaseModel):
     diffs_pending: int = 0
     eta_s: int | None = None
     error: str | None = None
+    held: str | None = None
+    question: dict[str, Any] | None = None
     batches: list[JobBatch] = []
     created_at: datetime | None = None
     updated_at: datetime | None = None

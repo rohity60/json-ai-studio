@@ -26,6 +26,33 @@ _NOTES_PATH = os.path.join(os.path.dirname(__file__), "config", "format_notes.js
 _MAX_FORMATS = 2  # cap prompt growth if several signatures match
 
 
+# Formats with no web template (so not in the exported file): notes kept
+# here, merged after the exported ones.
+BUILTIN_FORMATS: tuple[dict[str, Any], ...] = (
+    {
+        # Live evals 2026-11-24 (nvidia): asked which function calls the
+        # import /Imports/1, the model looked for StackNode 1, found none and
+        # answered "nothing calls it"; the dump uses -2. 0/3 and 1/3 runs.
+        "id": "uassetapi-json",
+        "title": "UAssetAPI JSON dump (Unreal Engine .uasset)",
+        "signature": ["/Imports", "/Exports", "/NameMap"],
+        "notes": [
+            "Package indexes (StackNode, OuterIndex, ClassIndex, SuperIndex, "
+            "TemplateIndex and similar int fields) point into Imports or "
+            "Exports: a NEGATIVE value n means /Imports/(-n-1) (-1 → /Imports/0, "
+            "-2 → /Imports/1); a POSITIVE value n means /Exports/(n-1) "
+            "(1 → /Exports/0); 0 means none.",
+            "To find what calls or references /Imports/k, look for the value "
+            "-(k+1) (e.g. StackNode -2 for /Imports/1) — the import's name does "
+            "not appear in the bytecode. For /Exports/k look for k+1.",
+            "ObjectName and NameMap entries are names (text); a function export "
+            "is an Exports entry whose $type ends in FunctionExport, its code is "
+            "ScriptBytecode (an array of expressions, $type EX_...).",
+        ],
+    },
+)
+
+
 @lru_cache(maxsize=1)
 def load_formats() -> tuple[dict[str, Any], ...]:
     try:
@@ -33,12 +60,13 @@ def load_formats() -> tuple[dict[str, Any], ...]:
             data = json.load(f)
     except (OSError, ValueError):
         logger.warning("format notes unavailable at %s", _NOTES_PATH)
-        return ()
-    return tuple(
+        data = {}
+    exported = tuple(
         f
         for f in data.get("formats", [])
         if isinstance(f.get("signature"), list) and f["signature"]
     )
+    return exported + BUILTIN_FORMATS
 
 
 def _resolves(doc: Any, pointer: str) -> bool:

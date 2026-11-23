@@ -323,6 +323,22 @@ async def _backoff(deployment: Any, model: str, wait: float) -> None:
         await asyncio.sleep(wait)
 
 
+_FINAL_REASK = (
+    "Tools are NOT available any more — your last reply tried to call one. "
+    "Answer NOW with the final single JSON object (diffs + explanation), "
+    "using what you have already read. If something is still unknown, say so "
+    "in explanation instead of calling a tool."
+)
+_TOOL_MARKUP = re.compile(r"<tool_call>|<function=|<\|tool_call|\"tool_calls\"\s*:")
+
+
+def looks_like_tool_markup(text: str | None) -> bool:
+    """A reply that is a tool call written as text, not an answer."""
+    if not text or not _TOOL_MARKUP.search(text):
+        return False
+    return '"diffs"' not in text and '"explanation"' not in text
+
+
 class GatewayService:
     """Single gateway class. All LLM calls flow through invoke()."""
 
@@ -999,9 +1015,12 @@ class GatewayService:
         pol = policy_of(deployment)
         start_round = min(max(0, start_round), max_rounds)
         round_no = start_round
-        for round_no in range(start_round, max_rounds + 1):
+        reasked = False
+        # One spare final round, used only to re-ask after a final reply that
+        # is tool-call markup instead of the answer (_FINAL_REASK).
+        for round_no in [*range(start_round, max_rounds + 1), max_rounds]:
             final = round_no == max_rounds or time.monotonic() > deadline
-            if final and round_no > 0:
+            if final and round_no > 0 and not reasked:
                 messages.append(
                     {
                         "role": "user",
@@ -1143,6 +1162,20 @@ class GatewayService:
             calls = list(getattr(message, "tool_calls", None) or [])
             content = message.content or ""
             if not calls or final:
+                if final and not reasked and looks_like_tool_markup(content):
+                    # Live 2026-11-24 (nvidia): with tool_choice "none" the
+                    # final reply was "<tool_call><function=read>…" as text —
+                    # no answer, though both target values had been read.
+                    reasked = True
+                    logger.warning(
+                        "tool loop session=%s final reply was tool-call text; "
+                        "re-asking once",
+                        session_id,
+                    )
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": _FINAL_REASK})
+                    content = ""
+                    continue
                 if calls:
                     logger.warning(
                         "tool loop session=%s model still calling tools at final round",
