@@ -483,10 +483,274 @@ def _star_add_to_append(diffs: list[dict[str, Any]], doc: Any) -> list[dict[str,
 def normalise_diffs(diffs: list[dict[str, Any]], doc: Any) -> list[dict[str, Any]]:
     """Server-side index repair before applying a model answer (snapshot
     convention, prompt rule 4). Order: '*' adds → '-', delete/modify
-    retargeted by old_value, sequential append runs folded."""
+    retargeted by old_value, {"$from"} copies resolved (after retarget, so
+    they read the element the diff finally points at), sequential append
+    runs folded."""
     diffs = _star_add_to_append(list(diffs), doc)
     diffs = _retarget_by_old_value(diffs, doc)
+    diffs = _expand_from_markers(diffs, doc)
+    diffs = _create_missing_parents(diffs, doc)
+    diffs = _fill_old_values(diffs, doc)
+    diffs = _keep_scalar_types(diffs, doc)
     return _normalise_append_runs(diffs, doc)
+
+
+_NUMBER = re.compile(r"-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?")
+
+
+def _keep_scalar_types(diffs: list[dict[str, Any]], doc: Any) -> list[dict[str, Any]]:
+    """A modify that writes a number/boolean as its string spelling keeps the
+    field's type: 8.0 → "0.0" becomes 0.0, true → "false" becomes false.
+
+    Live eval 2026-11-24 (nvidia): "change the float constant 8.0 to 0.0"
+    stored "0.0" (a string) over a float — the UAsset would no longer load.
+    Only a string that IS a number/boolean literal is converted; any other
+    string (a deliberate type change, "8 seconds") is left as sent.
+    """
+    out = []
+    for d in diffs:
+        new = d.get("new_value")
+        if d.get("operation") == "modify" and isinstance(new, str):
+            try:
+                found, cur = _current_value(doc, _split_path(d.get("path", "")))
+            except DiffApplyError:
+                found = False
+            text = new.strip()
+            fixed: Any = new
+            if found and isinstance(cur, bool):
+                if text in ("true", "false"):
+                    fixed = text == "true"
+            elif found and isinstance(cur, (int, float)) and _NUMBER.fullmatch(text):
+                as_float = float(text)
+                if isinstance(cur, int) and as_float.is_integer() and "." not in text:
+                    fixed = int(text)
+                else:
+                    fixed = as_float
+            if fixed is not new:
+                logger.info(
+                    "normalise kept type at %s: %r -> %r", d.get("path"), new, fixed
+                )
+                d = {**d, "new_value": fixed}
+        out.append(d)
+    return out
+
+
+def _fill_old_values(diffs: list[dict[str, Any]], doc: Any) -> list[dict[str, Any]]:
+    """A modify/delete without old_value gets the document's current value.
+
+    Reject restores old_value: a whole-record modify sent without it (the
+    layout prompt asks for none, to keep answers short; models also drop it
+    in chat) would otherwise be rejected back to null, losing the record.
+    """
+    out = []
+    for d in diffs:
+        if d.get("operation") in ("modify", "delete") and d.get("old_value") is None:
+            try:
+                found, value = _current_value(doc, _split_path(d.get("path", "")))
+            except DiffApplyError:
+                found = False
+            if found and value is not None:
+                d = {**d, "old_value": copy.deepcopy(value)}
+        out.append(d)
+    return out
+
+
+def _create_missing_parents(
+    diffs: list[dict[str, Any]], doc: Any
+) -> list[dict[str, Any]]:
+    """An add whose parent objects do not exist yet ('/skins/3/textures/body'
+    with no 'textures') becomes an add of the first missing object holding
+    the value nested ({"body": ...}). Several adds into the same missing
+    object are merged into one add (or into the model's own add of that
+    object). Without this the add fails while a delete of its source in the
+    same answer still applies — the value is lost (live eval 2026-11-23,
+    449 skins). Only object keys are created; a missing array index or '-'
+    is left to fail."""
+    out: list[dict[str, Any]] = []
+    by_path: dict[str, dict[str, Any]] = {}  # add diffs by path, mergeable
+    for d in diffs:
+        try:
+            op = _resolve_op(d)
+            parts = _split_path(d.get("path", ""))
+        except DiffApplyError:
+            out.append(d)
+            continue
+        if op == "add" and len(parts) >= 2 and not _current_value(doc, parts[:-1])[0]:
+            k = len(parts) - 1
+            while k > 0 and not _current_value(doc, parts[:k])[0]:
+                k -= 1
+            _, anchor = _current_value(doc, parts[:k])
+            missing = parts[k:-1]
+            if isinstance(anchor, dict) and not any(
+                p.isdigit() or p == "-" for p in missing
+            ):
+                created = _join_path(parts[: k + 1])
+                host = by_path.get(created)
+                if host is not None and isinstance(host.get("new_value"), dict):
+                    node = host["new_value"]
+                    for part in parts[k + 1 : -1]:
+                        node = node.setdefault(part, {})
+                        if not isinstance(node, dict):
+                            break
+                    if isinstance(node, dict) and parts[-1] not in node:
+                        node[parts[-1]] = copy.deepcopy(d.get("new_value"))
+                        logger.info(
+                            "normalise merge add %s into %s", d.get("path"), created
+                        )
+                        continue
+                    out.append(d)  # conflicting: leave it to fail visibly
+                    continue
+                value: Any = copy.deepcopy(d.get("new_value"))
+                for part in reversed(parts[k + 1 :]):
+                    value = {part: value}
+                logger.info("normalise create parents %s -> %s", d.get("path"), created)
+                d = {**d, "path": created, "old_value": None, "new_value": value}
+                parts = parts[: k + 1]
+        if op == "add":
+            if isinstance(d.get("new_value"), dict):
+                d = {**d, "new_value": copy.deepcopy(d["new_value"])}
+                by_path.setdefault(_join_path(parts), d)
+        out.append(d)
+    return out
+
+
+def _is_from_marker(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {"$from"}
+
+
+def _has_from(value: Any) -> bool:
+    if isinstance(value, dict):
+        return _is_from_marker(value) or any(_has_from(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_from(v) for v in value)
+    return False
+
+
+def _lookup(node: Any, pointer: str) -> tuple[bool, Any]:
+    """(found, value) for a field name or relative pointer inside node."""
+    for part in [p for p in pointer.strip("/").split("/") if p]:
+        part = part.replace("~1", "/").replace("~0", "~")
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+        else:
+            return False, None
+    return True, node
+
+
+def bind_stars(pointer: str, concrete: list[str]) -> str | None:
+    """'/skins/*/texture' + concrete path parts ['skins', '3', 'textures']
+    → '/skins/3/texture': each '*' takes the segment at the same position,
+    and the other segments before the last '*' must match. None if not."""
+    parts = _split_path(pointer)
+    if "*" not in parts:
+        return pointer
+    last = max(i for i, p in enumerate(parts) if p == "*")
+    if last >= len(concrete):
+        return None
+    bound = []
+    for i, p in enumerate(parts):
+        if i <= last and p != "*" and p != concrete[i]:
+            return None
+        bound.append(concrete[i] if p == "*" else p)
+    return _join_path(bound)
+
+
+def _fill_from(
+    value: Any, sources: list[Any], root: Any = None, at: list[str] | None = None
+) -> Any:
+    """Replace {"$from": "<field or /pointer>"} markers (anywhere inside
+    value) with that field's value from the first source that has it. A
+    pointer starting with "/" that no source has is tried as an absolute
+    pointer into `root` (models write "/skins/0/texture"). Unresolvable
+    markers are left in place so the apply step refuses them."""
+    if _is_from_marker(value):
+        pointer = value["$from"]
+        if isinstance(pointer, str) and "*" in pointer and at is not None:
+            # "/skins/*/texture" on a diff at /skins/3/…: this element's own.
+            pointer = bind_stars(pointer, at) or pointer
+        if isinstance(pointer, str):
+            tries = [*sources, root] if pointer.startswith("/") else sources
+            for source in tries:
+                found, hit = _lookup(source, pointer)
+                if found:
+                    return copy.deepcopy(hit)
+        return value
+    if isinstance(value, dict):
+        return {k: _fill_from(v, sources, root, at) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_fill_from(v, sources, root, at) for v in value]
+    return value
+
+
+def _from_sources(diff: dict[str, Any], doc: Any) -> list[Any]:
+    """Where a plain diff's {"$from": field} reads from, nearest first:
+    the value at its path (or its old_value when the path does not exist,
+    e.g. an add), then each ancestor up to and including the nearest array
+    element — so "/skins/3/id" = {"$from": "localization_name"} copies the
+    sibling field of skin 3, like a bulk op's '*' element (bulk_edits)."""
+    try:
+        parts = _split_path(diff.get("path", ""))
+    except DiffApplyError:
+        return [diff["old_value"]] if "old_value" in diff else []
+    sources: list[Any] = []
+    exists, current = _current_value(doc, parts)
+    if exists:
+        sources.append(current)
+    elif "old_value" in diff:
+        sources.append(diff["old_value"])
+    for k in range(len(parts) - 1, -1, -1):
+        exists, node = _current_value(doc, parts[:k])
+        if not exists:
+            continue
+        sources.append(node)
+        if k > 0:
+            _, parent = _current_value(doc, parts[: k - 1])
+            if isinstance(parent, list):
+                break  # node is an array element: never read past it
+    return sources
+
+
+def _json_short(value: Any, limit: int = 200) -> str:
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _expand_from_markers(diffs: list[dict[str, Any]], doc: Any) -> list[dict[str, Any]]:
+    """Plain (non-bulk) diffs may carry {"$from": field} placeholders the
+    model meant as "copy this element's own field" (prod 2026-11-22: 449
+    modifies on /skins/N with {"$from": "localization_name"}). Resolved
+    against _from_sources; whatever stays unresolved is refused at apply."""
+    out = []
+    resolved = unresolved = 0
+    for diff in diffs:
+        if not isinstance(diff, dict) or not _has_from(diff.get("new_value")):
+            out.append(diff)
+            continue
+        try:
+            at = _split_path(diff.get("path", ""))
+        except DiffApplyError:
+            at = None
+        filled = _fill_from(diff["new_value"], _from_sources(diff, doc), doc, at)
+        if _has_from(filled):
+            unresolved += 1
+            if unresolved == 1:
+                logger.info(
+                    "normalise $from unresolved e.g. path=%s new_value=%s",
+                    diff.get("path"),
+                    _json_short(diff.get("new_value")),
+                )
+        else:
+            resolved += 1
+        out.append({**diff, "new_value": filled})
+    if resolved or unresolved:
+        logger.info(
+            "normalise $from in plain diffs resolved=%d unresolved=%d",
+            resolved,
+            unresolved,
+        )
+    return out
 
 
 _OP_RANK = {"delete": 0, "modify": 0, "add": 1}
@@ -560,6 +824,75 @@ def _apply_order(diffs: list[dict[str, Any]], doc: Any = None) -> list[int]:
     return result
 
 
+def _apply_pass(
+    normalised: list[dict[str, Any]], json_doc: Any, held: dict[int, str]
+) -> tuple[Any, list, list, list]:
+    """One apply over a copy of json_doc in _apply_order. `held` maps diff
+    positions to a reason: those are reported failed without applying.
+    Returns (result, applied, failed, steps) with positions attached."""
+    result = copy.deepcopy(json_doc)
+    applied: list[tuple[int, dict[str, Any]]] = []
+    failed: list[tuple[int, tuple[dict[str, Any], str]]] = []
+    steps: list[tuple[str, list[str]]] = []  # (op, concrete parts)
+    for n in _apply_order(normalised, json_doc):
+        diff = normalised[n]
+        try:
+            if n in held:
+                raise DiffApplyError(held[n])
+            check_truncation(diff, result)
+            if _has_from(diff.get("new_value")):
+                raise DiffApplyError(
+                    'new_value has an unresolved {"$from": ...} placeholder '
+                    "(source field not found); not applied"
+                )
+            parts = _split_path(diff.get("path", ""))
+            if parts and parts[-1] == "-":
+                _, parent = _current_value(result, parts[:-1])
+                if isinstance(parent, list):
+                    parts = [*parts[:-1], str(len(parent))]
+            _apply_one(diff, result)
+            steps.append((_resolve_op(diff), parts))
+            applied.append((n, diff))
+        except DiffApplyError as exc:
+            failed.append((n, (diff, str(exc))))
+    return result, applied, failed, steps
+
+
+HELD_DELETE_REASON = (
+    "not applied: another change to the same element failed, and this "
+    "delete may remove the value that change was moving"
+)
+
+
+def _held_deletes(
+    normalised: list[dict[str, Any]], applied: list, failed: list
+) -> dict[int, str]:
+    """Deletes to hold back: those inside an element where an add/modify
+    of the same answer failed. A failed 'add textures = {body: <texture>}'
+    next to an applied 'delete texture' is a half-done move that loses the
+    value (live eval 2026-11-23, 449 skins)."""
+    parents: set[tuple[str, ...]] = set()
+    for _, (diff, _reason) in failed:
+        try:
+            if _resolve_op(diff) == "delete":
+                continue
+            parts = _split_path(diff.get("path", ""))
+        except DiffApplyError:
+            continue
+        if len(parts) >= 2:
+            parents.add(tuple(parts[:-1]))
+    if not parents:
+        return {}
+    held: dict[int, str] = {}
+    for n, diff in applied:
+        if _resolve_op(diff) != "delete":
+            continue
+        parts = tuple(_split_path(diff.get("path", "")))
+        if any(len(parts) > len(p) and parts[: len(p)] == p for p in parents):
+            held[n] = HELD_DELETE_REASON
+    return held
+
+
 class DiffUtils:
     """Apply or revert DiffEntry dicts on a JSON document.
 
@@ -608,25 +941,12 @@ class DiffUtils:
         (the "-" kept as "model_path" for accept on the baseline), so "-"
         never reaches history, the UI or reject.
         """
-        result = copy.deepcopy(json_doc)
         normalised = normalise_diffs(diffs, json_doc)
-        applied: list[tuple[int, dict[str, Any]]] = []
-        failed: list[tuple[int, tuple[dict[str, Any], str]]] = []
-        steps: list[tuple[str, list[str]]] = []  # (op, concrete parts)
-        for n in _apply_order(normalised, json_doc):
-            diff = normalised[n]
-            try:
-                check_truncation(diff, result)
-                parts = _split_path(diff.get("path", ""))
-                if parts and parts[-1] == "-":
-                    _, parent = _current_value(result, parts[:-1])
-                    if isinstance(parent, list):
-                        parts = [*parts[:-1], str(len(parent))]
-                _apply_one(diff, result)
-                steps.append((_resolve_op(diff), parts))
-                applied.append((n, diff))
-            except DiffApplyError as exc:
-                failed.append((n, (diff, str(exc))))
+        result, applied, failed, steps = _apply_pass(normalised, json_doc, {})
+        held = _held_deletes(normalised, applied, failed)
+        if held:
+            logger.info("held %d delete(s) next to failed changes", len(held))
+            result, applied, failed, steps = _apply_pass(normalised, json_doc, held)
 
         final: list[tuple[int, dict[str, Any]]] = []
         for k, (n, diff) in enumerate(applied):
@@ -758,7 +1078,13 @@ def normalize_entry(d: Any) -> dict[str, Any] | None:
     raw_op = str(entry.get("operation", "")).strip().lower()
     op = _OP_ALIASES.get(raw_op)
     from .text_edits import TEXT_OPS, normalize_text_edit  # circular at import
+    from .move_edits import is_move  # circular at import
 
+    if op is None and is_move(entry):
+        # Move / rename; expanded to add + delete server-side (move_edits).
+        keep = ("path", "operation", "from", "source", "old_path", "to", "target")
+        keep += ("new_key", "new_name", "key", "new_value", "where")
+        return {k: entry[k] for k in keep if k in entry}
     if op is None and raw_op not in TEXT_OPS:
         return None
     path = entry.get("path")

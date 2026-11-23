@@ -467,3 +467,75 @@ class TestBulkRobustness:
             {"path": "/items/*/b", "new_value": {"$from": "a"}}, doc, 100
         )
         assert diffs[0]["new_value"] == [1]
+
+
+def test_bulk_from_star_pointer_binds_to_element():
+    from src.json_ai_studio.bulk_edits import expand_bulk
+
+    doc = {"items": [{"a": 1}, {"a": 2}]}
+    diffs = expand_bulk(
+        {
+            "path": "/items/*/b",
+            "operation": "add",
+            "new_value": {"$from": "/items/*/a"},
+        },
+        doc,
+        100,
+    )
+    assert [d["new_value"] for d in diffs] == [1, 2]
+
+
+# -- Live 2026-11-23 (nvidia): copy into a new nested field + delete source --
+
+_SKINS = {"skins": [{"texture": f"a{i}.png", "type": "free"} for i in range(3)]}
+
+
+def test_bulk_add_creates_missing_nested_field():
+    from src.json_ai_studio.bulk_edits import expand_all
+    from src.json_ai_studio.diff_utils import DiffUtils
+
+    ops = [
+        {
+            "path": "/skins/*/textures/body",
+            "operation": "add",
+            "new_value": {"$from": "texture"},
+        },
+        {"path": "/skins/*/texture", "operation": "delete"},
+    ]
+    diffs, notes = expand_all(ops, _SKINS, 1000)
+    merged, applied, failed = DiffUtils.apply_all_verbose(diffs, _SKINS)
+    assert failed == []
+    assert merged["skins"][2] == {"type": "free", "textures": {"body": "a2.png"}}
+
+
+def test_bulk_delete_held_when_its_copy_failed():
+    from src.json_ai_studio.bulk_edits import expand_all
+
+    ops = [  # delete first: order must not matter
+        {"path": "/skins/*/texture", "operation": "delete"},
+        {  # copy source missing everywhere → copy produces nothing
+            "path": "/skins/*/textures/body",
+            "operation": "add",
+            "new_value": {"$from": "/skins/*/tex"},
+        },
+        {
+            "path": "/skins/*/x",
+            "operation": "add",
+            "new_value": {"$from": "texture"},
+            "where": {"type": "paid"},  # matches nothing
+        },
+    ]
+    diffs, notes = expand_all(ops, _SKINS, 1000)
+    assert not any(d["operation"] == "delete" for d in diffs)
+    assert any("copy failed" in n for n in notes)
+
+
+def test_bulk_delete_runs_when_copy_worked():
+    from src.json_ai_studio.bulk_edits import expand_all
+
+    ops = [
+        {"path": "/skins/*/texture", "operation": "delete"},
+        {"path": "/skins/*/tex", "operation": "add", "new_value": {"$from": "texture"}},
+    ]
+    diffs, _ = expand_all(ops, _SKINS, 1000)
+    assert sum(d["operation"] == "delete" for d in diffs) == 3

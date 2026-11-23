@@ -736,7 +736,9 @@ class TestTruncationGuard:
         }
         result, applied, failed = _apply_one_verbose(diff, doc)
         assert applied == []
-        assert failed == [(diff, TRUNCATION_REASON)]
+        assert [(d["path"], d["new_value"], r) for d, r in failed] == [
+            (diff["path"], diff["new_value"], TRUNCATION_REASON)
+        ]
         assert result["data"]["description"] == _LONG
 
     def test_edited_preview_without_marker_rejected(self):
@@ -1011,3 +1013,191 @@ class TestMergedEntries:
                 "new_value": {"path": "x", "k": 1},
             }
         ]
+
+
+def test_from_marker_in_plain_modify_is_resolved():
+    from src.json_ai_studio.diff_utils import DiffUtils
+
+    doc = {"skins": [{"localization_name": "Target", "geometry": "geometry.a9"}]}
+    diff = {
+        "path": "/skins/0",
+        "operation": "modify",
+        "old_value": doc["skins"][0],
+        "new_value": {
+            "id": {"$from": "localization_name"},
+            "geometry": {"$from": "geometry"},
+            "textures": {"body": {"$from": "geometry"}},
+        },
+    }
+    result, applied, failed = DiffUtils.apply_all_verbose([diff], doc)
+    assert not failed
+    assert result["skins"][0] == {
+        "id": "Target",
+        "geometry": "geometry.a9",
+        "textures": {"body": "geometry.a9"},
+    }
+
+
+def test_unresolved_from_marker_is_refused_not_applied():
+    from src.json_ai_studio.diff_utils import DiffUtils
+
+    doc = {"skins": [{"a": 1}]}
+    diff = {
+        "path": "/skins/0",
+        "operation": "modify",
+        "old_value": {"a": 1},
+        "new_value": {"id": {"$from": "nope"}},
+    }
+    result, applied, failed = DiffUtils.apply_all_verbose([diff], doc)
+    assert not applied and len(failed) == 1
+    assert result == doc
+
+
+def test_from_marker_on_leaf_path_reads_sibling_field():
+    from src.json_ai_studio.diff_utils import DiffUtils
+
+    doc = {"skins": [{"n": "A", "g": "ga"}, {"n": "B", "g": "gb"}]}
+    diffs = [
+        {"path": "/skins/1/id", "operation": "add", "new_value": {"$from": "n"}},
+        {
+            "path": "/skins/0/g",
+            "operation": "modify",
+            "old_value": "ga",
+            "new_value": {"$from": "n"},
+        },
+    ]
+    result, applied, failed = DiffUtils.apply_all_verbose(diffs, doc)
+    assert not failed
+    assert result["skins"] == [{"n": "A", "g": "A"}, {"n": "B", "g": "gb", "id": "B"}]
+
+
+def test_from_marker_follows_old_value_retarget():
+    from src.json_ai_studio.diff_utils import DiffUtils
+
+    doc = {"skins": [{"n": "A"}, {"n": "B"}]}
+    diff = {
+        "path": "/skins/0",  # wrong index; old_value names skin B
+        "operation": "modify",
+        "old_value": {"n": "B"},
+        "new_value": {"id": {"$from": "n"}, "tags": [{"$from": "n"}]},
+    }
+    result, applied, failed = DiffUtils.apply_all_verbose([diff], doc)
+    assert not failed
+    assert result["skins"] == [{"n": "A"}, {"id": "B", "tags": ["B"]}]
+
+
+def test_from_marker_never_reads_past_its_array_element():
+    from src.json_ai_studio.diff_utils import DiffUtils
+
+    doc = {"name": "root", "skins": [{"n": "A"}]}
+    diff = {"path": "/skins/0/id", "operation": "add", "new_value": {"$from": "name"}}
+    result, applied, failed = DiffUtils.apply_all_verbose([diff], doc)
+    assert not applied and len(failed) == 1
+    assert result == doc
+
+
+def test_add_into_missing_parent_creates_it_and_merges():
+    doc = {"skins": [{"texture": "a0.png", "arm": "arm0.png"}]}
+    diffs = [
+        {"path": "/skins/0/textures/body", "operation": "add", "new_value": "a0.png"},
+        {"path": "/skins/0/textures/arm", "operation": "add", "new_value": "arm0.png"},
+        {"path": "/skins/0/texture", "operation": "delete", "old_value": "a0.png"},
+        {"path": "/skins/0/arm", "operation": "delete", "old_value": "arm0.png"},
+    ]
+    result, applied, failed = DiffUtils.apply_all_verbose(diffs, doc)
+    assert not failed
+    assert result == {"skins": [{"textures": {"body": "a0.png", "arm": "arm0.png"}}]}
+    assert [d["path"] for d in applied if d["operation"] == "add"] == [
+        "/skins/0/textures"
+    ]
+
+
+def test_add_merges_into_models_own_parent_add():
+    doc = {"a": {}}
+    diffs = [
+        {"path": "/a/b", "operation": "add", "new_value": {"x": 1}},
+        {"path": "/a/b/y", "operation": "add", "new_value": 2},
+    ]
+    result, _, failed = DiffUtils.apply_all_verbose(diffs, doc)
+    assert not failed and result == {"a": {"b": {"x": 1, "y": 2}}}
+
+
+def test_add_missing_array_index_parent_still_fails():
+    doc = {"a": {}}
+    diff = {"path": "/a/list/0/x", "operation": "add", "new_value": 1}
+    result, applied, failed = DiffUtils.apply_all_verbose([diff], doc)
+    assert not applied and len(failed) == 1 and result == doc
+
+
+def test_delete_held_when_move_half_fails():
+    doc = {"skins": [{"texture": "a0.png", "type": "free"}]}
+    diffs = [
+        # add fails: unresolvable $from; its paired delete must not apply
+        {
+            "path": "/skins/0/textures",
+            "operation": "add",
+            "new_value": {"body": {"$from": "nope"}},
+        },
+        {"path": "/skins/0/texture", "operation": "delete", "old_value": "a0.png"},
+        {"path": "/other", "operation": "add", "new_value": 1},
+    ]
+    result, applied, failed = DiffUtils.apply_all_verbose(diffs, doc)
+    assert result == {"skins": [{"texture": "a0.png", "type": "free"}], "other": 1}
+    assert [d["path"] for d in applied] == ["/other"]
+    assert len(failed) == 2
+
+
+def test_absolute_from_pointer_resolves_against_document():
+    doc = {"skins": [{"texture": "a0.png"}, {"texture": "a1.png"}]}
+    diff = {
+        "path": "/skins/1/textures",
+        "operation": "add",
+        "new_value": {"body": {"$from": "/skins/1/texture"}},
+    }
+    result, _, failed = DiffUtils.apply_all_verbose([diff], doc)
+    assert not failed
+    assert result["skins"][1]["textures"] == {"body": "a1.png"}
+
+
+def test_from_pointer_with_star_binds_to_diff_element():
+    doc = {"skins": [{"texture": "a0.png"}, {"texture": "a1.png"}]}
+    diffs = [
+        {
+            "path": f"/skins/{i}/textures",
+            "operation": "add",
+            "new_value": {"body": {"$from": "/skins/*/texture"}},
+        }
+        for i in range(2)
+    ]
+    result, _, failed = DiffUtils.apply_all_verbose(diffs, doc)
+    assert not failed
+    assert [s["textures"]["body"] for s in result["skins"]] == ["a0.png", "a1.png"]
+
+
+def test_modify_without_old_value_rejects_back_to_record():
+    # Regression 2026-11-23: old_value None → reject wrote null over the record.
+    from src.json_ai_studio.diff_utils import DiffUtils
+
+    doc = {"s": [{"n": "A"}, {"n": "B"}]}
+    diff = {"path": "/s/1", "operation": "modify", "new_value": {"id": "B"}}
+    merged, applied, failed = DiffUtils.apply_all_verbose([diff], doc)
+    assert not failed and applied[0]["old_value"] == {"n": "B"}
+    assert DiffUtils.revert(applied[0], merged) == doc
+
+
+def test_numeric_string_over_number_keeps_type():
+    # Live eval 2026-11-24: "0.0" (string) written over the float 8.0.
+    from src.json_ai_studio.diff_utils import DiffUtils
+
+    doc = {"f": 8.0, "n": 3, "b": True, "s": "x", "big": 5}
+    diffs = [
+        {"path": "/f", "operation": "modify", "new_value": "0.0"},
+        {"path": "/n", "operation": "modify", "new_value": "7"},
+        {"path": "/b", "operation": "modify", "new_value": "false"},
+        {"path": "/s", "operation": "modify", "new_value": "9"},  # was a string
+        {"path": "/big", "operation": "modify", "new_value": "5 seconds"},
+    ]
+    merged, applied, failed = DiffUtils.apply_all_verbose(diffs, doc)
+    assert not failed
+    assert merged == {"f": 0.0, "n": 7, "b": False, "s": "9", "big": "5 seconds"}
+    assert isinstance(merged["f"], float) and isinstance(merged["n"], int)

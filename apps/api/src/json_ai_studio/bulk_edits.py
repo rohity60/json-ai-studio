@@ -134,13 +134,20 @@ def _step(node: Any, part: str) -> tuple[bool, Any]:
 
 
 def _walk(
-    node: Any, parts: list[str], walked: list[str], anchor: tuple | None
+    node: Any,
+    parts: list[str],
+    walked: list[str],
+    anchor: tuple | None,
+    create: bool = False,
 ) -> Iterator[tuple[list[str], bool, Any, tuple | None]]:
     """Yield (concrete_parts, exists, value, anchor) for every match.
 
     ``anchor`` = (node, key) captured at the last ``*``, for ``where``.
     The final segment may be missing (``exists`` False) so ``add`` can
-    create a field on each matched element.
+    create a field on each matched element. With ``create`` (bulk add) a
+    missing object key may also be followed by more plain keys
+    ('/skins/*/textures/body' on skins without "textures"): the add then
+    creates the missing objects (diff_utils._create_missing_parents).
     """
     if not parts:
         yield walked, True, node, anchor
@@ -148,13 +155,15 @@ def _walk(
     head, rest = parts[0], parts[1:]
     if head == "*":
         for key, child in _children(node):
-            yield from _walk(child, rest, walked + [key], (child, key))
+            yield from _walk(child, rest, walked + [key], (child, key), create)
         return
     found, child = _step(node, head)
     if found:
-        yield from _walk(child, rest, walked + [head], anchor)
-    elif not rest and isinstance(node, dict):
-        yield walked + [head], False, None, anchor
+        yield from _walk(child, rest, walked + [head], anchor, create)
+    elif isinstance(node, dict) and (
+        not rest or (create and "*" not in rest and not rest[-1] == "-")
+    ):
+        yield walked + [head, *rest], False, None, anchor
 
 
 _MISSING = object()
@@ -295,7 +304,8 @@ def expand_bulk(op: dict[str, Any], doc: Any, max_matches: int) -> list[dict[str
 
     parts = _split_path(path)
     diffs: list[dict[str, Any]] = []
-    for concrete, exists, value, anchor in _walk(doc, parts, [], None):
+    walk = _walk(doc, parts, [], None, create=operation == "add")
+    for concrete, exists, value, anchor in walk:
         if operation != "add" and not exists:
             continue
         if operation == "add" and exists:
@@ -307,7 +317,17 @@ def expand_bulk(op: dict[str, Any], doc: Any, max_matches: int) -> list[dict[str
         if copied:
             if not anchor:
                 raise BulkEditError("'$from' needs a '*' element to copy from")
-            new_value = _resolve(anchor[0], str(new_value["$from"]))
+            pointer = str(new_value["$from"])
+            if "*" in pointer:  # "/items/*/createdAt": this element's own
+                from .diff_utils import bind_stars, _current_value
+
+                bound = bind_stars(pointer, concrete)
+                found, hit = (
+                    _current_value(doc, _split_path(bound)) if bound else (False, None)
+                )
+                new_value = hit if found else _MISSING
+            else:
+                new_value = _resolve(anchor[0], pointer)
             if new_value is _MISSING:
                 continue  # this element has no source field
             new_value = copy.deepcopy(new_value)
@@ -315,7 +335,10 @@ def expand_bulk(op: dict[str, Any], doc: Any, max_matches: int) -> list[dict[str
             continue  # already has the target value
         if (
             operation == "modify"
-            and not copied  # $from copies the element's own data verbatim
+            # $from may copy a container over a leaf (verbatim element data)
+            # but never collapse a whole list/object into one of its fields
+            # ('/skins/*' = {"$from": "name"} would wipe every skin).
+            and (not copied or _container(value))
             and _container(value) != _container(new_value)
         ):
             # e.g. writing 60 over a whole parameters array — almost always a
@@ -344,6 +367,65 @@ def expand_bulk(op: dict[str, Any], doc: Any, max_matches: int) -> list[dict[str
     return diffs
 
 
+def split_wildcard_diffs(
+    diffs: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(plain diffs, bulk ops). Models sometimes put a bulk pattern in
+    "diffs" ('modify /skins/*' with {"$from": ...}; nvidia nemotron live
+    eval 2026-11-23). A '*' path segment can never apply as a plain diff, so
+    such diffs are handed to expand_bulk instead. 'add /list/*' stays: it
+    means append (diff_utils._star_add_to_append)."""
+    plain: list[dict[str, Any]] = []
+    ops: list[dict[str, Any]] = []
+    for d in diffs:
+        path = d.get("path") if isinstance(d, dict) else None
+        try:
+            parts = _split_path(path) if isinstance(path, str) else []
+        except ValueError:
+            parts = []
+        op = str(d.get("operation", "")).lower() if isinstance(d, dict) else ""
+        append_only = parts[-1:] == ["*"] and "*" not in parts[:-1]
+        if "*" not in parts or (append_only and op in ("add", "insert", "append")):
+            plain.append(d)
+            continue
+        bulk = {k: d[k] for k in ("path", "operation", "new_value", "where") if k in d}
+        ops.append(bulk)
+    return plain, ops
+
+
+def _op_name(op: dict[str, Any]) -> str:
+    name = str(op.get("operation", "modify")).strip().lower()
+    return {"set": "modify", "update": "modify", "remove": "delete"}.get(name, name)
+
+
+def _pattern(path: Any) -> str | None:
+    """Canonical form of a bulk path ('/skins/*/texture'), None if not one."""
+    if not isinstance(path, str):
+        return None
+    try:
+        return "/" + "/".join(_escape(p) for p in _split_path(path))
+    except ValueError:
+        return None
+
+
+def _copy_source(op: dict[str, Any]) -> str | None:
+    """Bulk path pattern an add/modify copies from via {"$from": ...}.
+
+    Relative ("texture") is resolved against the element at the op's last
+    '*' ('/skins/*/textures/body' → '/skins/*/texture')."""
+    value = op.get("new_value")
+    if not (isinstance(value, dict) and set(value) == {"$from"}):
+        return None
+    pointer = str(value["$from"])
+    if pointer.startswith("/"):
+        return _pattern(pointer)
+    path = _pattern(op.get("path"))
+    if not path or "/*" not in path:
+        return None
+    element = path[: path.rindex("/*") + 2]
+    return _pattern(element + "/" + pointer.strip("/"))
+
+
 def expand_all(
     ops: list[dict[str, Any]], doc: Any, max_matches: int
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -352,11 +434,30 @@ def expand_all(
     diffs: list[dict[str, Any]] = []
     notes: list[str] = []
     seen: set[str] = set()
-    for op in ops:
+    # Deletes run last, so a delete whose field an add/modify was meant to
+    # copy ($from) is skipped when that copy produced nothing (live
+    # 2026-11-23, nvidia: "add /skins/*/textures/body {$from: texture}"
+    # matched nothing, "delete /skins/*/texture" wiped all 449 textures).
+    lost: set[str] = set()
+    ordered = sorted(ops, key=lambda o: _op_name(o) == "delete")
+    for op in ordered:
+        if _op_name(op) == "delete" and _pattern(op.get("path")) in lost:
+            notes.append(
+                f"Bulk delete on {op.get('path')} not applied: its value was "
+                "to be copied elsewhere and that copy failed, so deleting it "
+                "would lose it."
+            )
+            continue
         try:
             expanded = expand_bulk(op, doc, max_matches)
         except BulkEditError as exc:
             notes.append(f"Bulk edit on {op.get('path')!r} not applied: {exc}.")
+            expanded = None
+        if not expanded:
+            source = _copy_source(op)
+            if source:
+                lost.add(source)
+        if expanded is None:
             continue
         fresh = [d for d in expanded if d["path"] not in seen]
         seen.update(d["path"] for d in fresh)
