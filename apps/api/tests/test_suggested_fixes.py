@@ -48,10 +48,10 @@ class TestPromptContract:
     def test_rule_is_proactive_with_explicit_request_exception(self, prompt):
         assert "11. FORMAT CORRECTNESS — on EVERY request" in prompt
         assert (
-            "EXCEPTION: when the user explicitly asks for a specific key or value"
-            in prompt
+            "EXCEPTION — the user explicitly asks for a specific key or value" in prompt
         )
         assert "never silently override the user" in prompt
+        assert '"explanation" MUST warn about it' in prompt
 
     def test_rationale_goes_in_explanation_not_a_field(self, prompt):
         assert 'in "explanation" list EACH fix and why' in prompt

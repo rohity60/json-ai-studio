@@ -14,8 +14,10 @@ from typing import Any, AsyncGenerator
 from uuid import uuid4
 
 from ..db.session_store import store
-from ..bulk_edits import expand_all, extract_bulk, extract_question
-from ..text_edits import expand_text_edits
+from ..bulk_edits import extract_bulk, extract_question
+from ..answer_pipeline import MISSING as _MISSING
+from ..answer_pipeline import apply_guarded, expand_answer
+from ..answer_pipeline import value_at as _value_at
 from ..diff_utils import (
     TRUNCATION_REASON,
     DiffApplyError,
@@ -57,34 +59,6 @@ def _truncation_note(diff: dict[str, Any], working_json: Any) -> str:
 def sse(event: str, payload: dict[str, Any]) -> str:
     """Format one spec-compliant SSE event block."""
     return f"event: {event}\ndata: {_json.dumps(payload)}\n\n"
-
-
-_MISSING = object()
-
-
-def _value_at(doc: Any, path: str) -> Any:
-    """Value at a JSON Pointer, or _MISSING if it does not resolve."""
-    try:
-        parts = _split_path(path)
-    except DiffApplyError:
-        return _MISSING
-    current = doc
-    for part in parts:
-        if isinstance(current, list) and part.isdigit() and int(part) < len(current):
-            current = current[int(part)]
-        elif isinstance(current, dict) and part in current:
-            current = current[part]
-        else:
-            return _MISSING
-    return current
-
-
-def _is_noop(diff: dict[str, Any], doc: Any) -> bool:
-    """A modify whose new_value equals the document's current value."""
-    if diff.get("operation") != "modify" or not diff.get("path"):
-        return False
-    current = _value_at(doc, diff["path"])
-    return current is not _MISSING and current == diff.get("new_value")
 
 
 def parse_sse(event_text: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -264,36 +238,31 @@ async def _stream_llm(
         question = extract_question(combined)
         if focus_path:
             # The model saw only the focused subtree; re-anchor its paths.
-            for d in diffs:
-                if isinstance(d.get("path"), str):
-                    d["path"] = focus_path + d["path"]
-            for op in bulk_ops:
-                if isinstance(op.get("path"), str):
-                    op["path"] = focus_path + op["path"]
+            for entry in [*diffs, *bulk_ops]:
+                for key in ("path", "from"):  # "from": move ops
+                    if isinstance(entry.get(key), str):
+                        entry[key] = focus_path + entry[key]
         if question:
             outcome["question"] = question
-        # Find/replace inside long strings → one full-value modify per field,
-        # computed against the FULL value the model may only have seen cut.
-        diffs, text_notes = expand_text_edits(diffs, working_json)
-        if text_notes:
-            logger.info("text edits notes=%s", text_notes)
-        bulk_notes: list[str] = list(text_notes)
-        if bulk_ops:
-            bulk_diffs, op_notes = expand_all(
-                bulk_ops, working_json, get_settings().bulk_max_matches
-            )
-            bulk_notes.extend(op_notes)
-            listed = {d.get("path") for d in diffs}
-            diffs = [*diffs, *(d for d in bulk_diffs if d["path"] not in listed)]
+        expanded = expand_answer(
+            diffs, bulk_ops, working_json, get_settings().bulk_max_matches
+        )
+        diffs, bulk_notes = expanded.diffs, expanded.notes
+        if expanded.bulk_ops:
             explanation = bulk_explanation or explanation
-            outcome["bulk"] = bulk_ops
+            outcome["bulk"] = expanded.bulk_ops
             logger.info(
-                "bulk ops=%d expanded_diffs=%d notes=%s",
-                len(bulk_ops),
-                len(bulk_diffs),
-                bulk_notes,
+                "bulk ops=%d expanded_diffs=%d",
+                len(expanded.bulk_ops),
+                expanded.bulk_diffs,
             )
-            logger.debug("bulk ops (full) session=%s ops=%s", session_id, bulk_ops)
+            logger.debug(
+                "bulk ops (full) session=%s ops=%s", session_id, expanded.bulk_ops
+            )
+        if bulk_notes:
+            logger.info("expansion notes=%s", bulk_notes)
+        if expanded.noops:
+            logger.info("dropped no-op diffs=%d", expanded.noops)
         logger.info(
             "parsed llm response: diffs=%d explanation=%r",
             len(diffs),
@@ -319,12 +288,6 @@ async def _stream_llm(
         )
 
         outcome.update(store=True, applied=[], failed=[])
-        # Drop modifies that set a value to what it already is (prod: the
-        # model re-emitted an unchanged "ip", which reads as "nothing changed").
-        kept = [d for d in diffs if not _is_noop(d, working_json)]
-        if len(kept) < len(diffs):
-            logger.info("dropped no-op diffs=%d", len(diffs) - len(kept))
-        diffs = kept
         if not diffs and bulk_notes:
             # The model claimed a bulk change but nothing matched / it was
             # rejected — report that, not the model's optimistic sentence.
@@ -351,7 +314,12 @@ async def _stream_llm(
             return
 
         yield progress.applying(len(diffs))  # B-52
-        merged, applied, failed = DiffUtils.apply_all_verbose(diffs, working_json)
+        result = apply_guarded(diffs, working_json, message)
+        merged, applied, failed = result.merged, result.applied, result.failed
+        guard_note = result.note or ""
+        if result.question:
+            question = result.question  # the held diffs depend on it
+            outcome["question"] = question
         logger.info("diff application: applied=%d failed=%d", len(applied), len(failed))
         # Per-failed-diff path + reason at INFO — the key signal for "model
         # produced N diffs but none applied" (usually a path that does not
@@ -383,7 +351,12 @@ async def _stream_llm(
         ]
 
         notes: list[str] = []
-        if explanation:
+        if guard_note:
+            # The model's own sentence describes the refused change: drop it.
+            notes.append(guard_note)
+            if applied:
+                notes.append(f"Applied the other {len(applied)} change(s).")
+        elif explanation:
             notes.append(explanation)
         elif applied:
             notes.append(f"Applied {len(applied)} change(s).")
