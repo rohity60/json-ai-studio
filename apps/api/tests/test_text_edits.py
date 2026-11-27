@@ -348,3 +348,87 @@ def test_chat_reports_failed_text_edit(client, replies):
     done = next(p for e, p in events if e == "complete")
     assert "'Goblinz' was not found" in done["explanation"]
     assert done["working_json"]["data"]["description"] == LONG
+
+
+class TestLooseFind:
+    """Prod 2026-11-25: "translate the entire script" sent the 12k-char
+    global_prompt as find, retyped with small differences → "not found"."""
+
+    PROMPT = (
+        "You are Natalie Freeman, a calm, warm, professional Compliance Support "
+        "Representative from INCORP CENTRAL.\nYour role is to remind the client "
+        "about the annual report.\n\n## Rules\n- Never say “guaranteed”.\n"
+        "- Keep each reply short — two sentences at most.\n"
+    ) * 3
+
+    def doc(self):
+        return {"conversationFlow": {"global_prompt": self.PROMPT}}
+
+    def test_whitespace_quote_and_dash_variants_match(self):
+        doc = {"p": "Say “hello”  to the\nclient — politely."}
+        out, notes = expand_text_edits(
+            [te("/p", 'Say "hello" to the client - politely.', "Pozdravte.")], doc
+        )
+        assert notes == []
+        assert out[0]["new_value"] == "Pozdravte."
+
+    def test_loose_match_keeps_surrounding_text(self):
+        doc = {"p": "First line.\nSay  hello\tnow. Last line."}
+        out, _ = expand_text_edits([te("/p", "Say hello now.", "Ahoj.")], doc)
+        assert out[0]["new_value"] == "First line.\nAhoj. Last line."
+
+    def test_loose_match_still_refuses_ambiguous_and_partial_words(self):
+        doc = {"p": "the  cat and the\ncat"}
+        _, notes = expand_text_edits([te("/p", "the cat", "x")], doc)
+        assert "occurs 2 times" in notes[0]
+        doc = {"p": "scattered  cat"}
+        _, notes = expand_text_edits([te("/p", "tered cat", "x")], doc)
+        assert "part of a word" in notes[0]
+
+    def test_whole_value_retyped_with_slips_replaces_whole(self):
+        retyped = (
+            self.PROMPT.replace("INCORP CENTRAL.\nYour", "INCORP CENTRAL. Your", 1)
+            .replace("annual report", "anual report", 1)
+            .replace("—", "--", 1)
+        )
+        slovak = "Ste Natalie Freeman, pokojná a profesionálna zástupkyňa."
+        out, notes = expand_text_edits(
+            [te("/conversationFlow/global_prompt", retyped, slovak)], self.doc()
+        )
+        assert out == [
+            {
+                "path": "/conversationFlow/global_prompt",
+                "operation": "modify",
+                "old_value": self.PROMPT,
+                "new_value": slovak,
+            }
+        ]
+        assert "whole value was replaced" in notes[0]
+
+    def test_whole_value_of_older_version_replaces_whole(self):
+        """The model copied the prompt from before an earlier turn's edit."""
+        current = self.PROMPT.replace(
+            "CENTRAL.", "CENTRAL. You speak Slovak throughout the call.", 1
+        )
+        out, _ = expand_text_edits(
+            [te("/p", self.PROMPT, "Preložené.")], {"p": current}
+        )
+        assert out[0]["new_value"] == "Preložené."
+
+    def test_long_find_that_is_not_the_text_is_not_found(self):
+        other = "Completely different instructions about billing. " * 20
+        out, notes = expand_text_edits([te("/p", other, "x")], {"p": self.PROMPT})
+        assert out == []
+        assert "was not found" in notes[0]
+
+    def test_short_find_never_replaces_whole(self):
+        out, notes = expand_text_edits(
+            [te("/p", "Natalie Freemen, a calm", "x")], {"p": self.PROMPT}
+        )
+        assert out == []
+        assert "was not found" in notes[0]
+
+    def test_prompt_rule_for_whole_rewrites(self):
+        prompt = build_system_prompt({"a": 1}, mode="inline")
+        assert "X4. Translating, rewriting or restyling a WHOLE string" in prompt
+        assert '"path": "/agent/script", "operation": "modify", "old_value": null' in prompt

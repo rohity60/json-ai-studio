@@ -52,6 +52,7 @@ RULES:
 4c. Delete or modify an element: its CURRENT index, with "old_value" copied from that element — even when you also insert or delete other elements before it in the same answer.
 4d. "-" is only for "add". To change or remove an element — including one added in an earlier turn — find its numeric index in the CURRENT WORKING JSON.
 4e. Only emit diffs for elements you actually change. Never re-emit untouched elements to "move" them — inserts and deletes shift the others automatically. Never put "*" in a plain diff path ("*" is only for "bulk" and "move").
+4f. An element's id or name ("m1", "step2", "role_3", 7) is NOT its index. Find the element, then count from 0: in [{"id": "m1"}, {"id": "m2"}], m1 is index 0 and m2 is index 1. ARRAY LENGTHS spells this out for such arrays.
 5. To change or remove an array element identified by a field value (e.g. where mode is "c"), find that element's index in the CURRENT WORKING JSON above and use it in the path.
 6. For "add", the new key NOT existing in the CURRENT WORKING JSON is expected — never refuse an add because the key is missing. If the user does not say where to put the new key, add it at the TOP LEVEL of the document (path "/<key>"). Strip units or currency words from values ("10 rs" -> 10). Only return empty diffs for an add when the user names a container that does not exist.
 7. If a modify or delete request cannot be applied (target not found, ambiguous, or unrelated to this JSON), return {"diffs": [], "explanation": "..."} — say why, list what actually exists, and suggest the closest match.
@@ -82,9 +83,11 @@ M2. With "*" (same number in "from" and "path"; each "*" in "path" is the elemen
 M3. The target must not exist yet. Combine moves with ordinary add/delete/modify diffs (e.g. add a new field, delete one that is dropped) in the same answer.
 
 TEXT EDITS — to fix spelling, wording or sentences INSIDE a long string (descriptions, prompts, lore, notes), do not rewrite the whole string: emit one "replace_text" diff per fix. The server applies it to the FULL text, so you only need to have seen the snippet.
+X0. "replace_text" works ONLY on a string value — never on a list or object. To add items to a list: one "add" per item at "/<list>/-". To change one list item: "modify" at "/<list>/<index>".
 X1. "find" is copied EXACTLY (case, spaces, punctuation) from the text, covers WHOLE words (never part of a word), and must occur exactly ONCE in that string — include a few surrounding words if the snippet repeats. Only fix text you actually read; a page that ends mid-sentence is not a typo. Set "all": true to change every occurrence (e.g. one misspelled name used throughout).
 X2. "replace" is the new snippet ("" deletes it). Several fixes in the same string = several replace_text diffs on the same path; they apply in order.
 X3. Use plain "modify" only for short values or when replacing the whole string with text you fully wrote yourself. Never "modify" a string you only saw truncated (ending in "…").
+X4. Translating, rewriting or restyling a WHOLE string (all of it, not a few phrases) = ONE "modify" at that path with the complete new text as "new_value" and "old_value": null (the server fills it in) — never a "replace_text" whose "find" is the whole text or most of it. The CURRENT WORKING JSON shows every string in full unless it ends in "…" — values quoted in earlier turns are shortened, ignore that and use the CURRENT WORKING JSON. Only a string that ends in "…" in the CURRENT WORKING JSON is changed with replace_text snippets.
 
 EXAMPLES (illustrative only — real answers must use paths, values, and indices from the CURRENT WORKING JSON above, never from these examples):
 
@@ -111,6 +114,10 @@ Response: {"diffs": [{"path": "/howToRedeem/1", "operation": "add", "old_value":
 User: "Delete Step 1, rename Step 3 to Final, and add a step Bonus at the end." (original indices: Step 3 is still index 2)
 JSON: {"howToRedeem": [{"title": "Step 1"}, {"title": "Step 2"}, {"title": "Step 3"}]}
 Response: {"diffs": [{"path": "/howToRedeem/0", "operation": "delete", "old_value": {"title": "Step 1"}, "new_value": null}, {"path": "/howToRedeem/2/title", "operation": "modify", "old_value": "Step 3", "new_value": "Final"}, {"path": "/howToRedeem/-", "operation": "add", "old_value": null, "new_value": {"title": "Bonus"}}], "explanation": "Removed Step 1, renamed Step 3 to Final, and appended Bonus."}
+
+User: "Add keyword 'reassurance' to Trust and 'cherish' to Love." (rule 4f: ids are not indices; X0: a list gets "add", not replace_text)
+JSON: {"meters": [{"id": "m1", "label": "Trust", "keywords": ["promise"]}, {"id": "m2", "label": "Love", "keywords": ["adore"]}]}
+Response: {"diffs": [{"path": "/meters/0/keywords/-", "operation": "add", "old_value": null, "new_value": "reassurance"}, {"path": "/meters/1/keywords/-", "operation": "add", "old_value": null, "new_value": "cherish"}], "explanation": "Added 'reassurance' to Trust (index 0, id m1) and 'cherish' to Love (index 1, id m2)."}
 
 User: "Remove the step with mode 'c'."
 JSON: {"howToRedeem": [{"mode": "a", "title": "Step 1"}, {"mode": "c", "title": "Step 2"}]}
@@ -151,6 +158,10 @@ Response: {"diffs": [{"path": "/album", "operation": "add", "old_value": null, "
 User: "Fix the typos in the description."
 JSON: {"description": "A world of Elfs and Halfings. The Halfings live in hills and trade with Elfs…"}
 Response: {"diffs": [{"path": "/description", "operation": "replace_text", "find": "Halfings", "replace": "Halflings", "all": true}, {"path": "/description", "operation": "replace_text", "find": "Elfs", "replace": "Elves", "all": true}], "explanation": "Fixed 'Halfings' → 'Halflings' and 'Elfs' → 'Elves' throughout the description."}
+
+User: "Translate the whole greeting script to German." (X4: the whole string, shown in full → ONE modify with the complete translation, old_value null — not replace_text snippets)
+JSON: {"agent": {"script": "Greet the caller by name.\nAsk how you can help.\n\n## Rules\n- Keep replies short."}}
+Response: {"diffs": [{"path": "/agent/script", "operation": "modify", "old_value": null, "new_value": "Begrüße den Anrufer mit Namen.\nFrage, wie du helfen kannst.\n\n## Regeln\n- Halte die Antworten kurz."}], "explanation": "Translated the whole script to German, keeping its line breaks and headings."}
 
 __HISTORY__Now respond to the user's message using ONLY the CURRENT WORKING JSON above.
 """
@@ -443,10 +454,34 @@ _LENGTHS_MIN_ITEMS = 10
 _LENGTHS_MAX_LINES = 40
 
 
+_LABEL_KEYS = ("id", "name", "key", "label", "title")
+
+
+def _numbered_label(item: Any) -> tuple[str, Any] | None:
+    """(field, value) of an element's id-like field when that value carries a
+    number ("m1", "step2", 3): the thing models mistake for the index."""
+    if not isinstance(item, dict):
+        return None
+    for key in _LABEL_KEYS:
+        value = item.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) or (
+            isinstance(value, str) and any(c.isdigit() for c in value)
+        ):
+            return key, value
+    return None
+
+
 def build_array_lengths(data: Any) -> list[str]:
     """'/roles: 51 items (indices 0..50)' for every array longer than
     _LENGTHS_MIN_ITEMS, in document order, capped. Models miscount long
-    arrays in inline JSON (prod 2026-11-21: 50 for a 51-item list)."""
+    arrays in inline JSON (prod 2026-11-21: 50 for a 51-item list).
+
+    Arrays of objects whose first and last elements carry a numbered id or
+    name ("m1".."m6") are listed at any length >= 2, with the index of those
+    two spelled out: models read id "m1" as index 1 (prod 2026-11-24: keywords
+    for meters 0..5 sent to /meters/1..6)."""
     lines: list[str] = []
 
     def esc(key: str) -> str:
@@ -456,10 +491,16 @@ def build_array_lengths(data: Any) -> list[str]:
         if len(lines) >= _LENGTHS_MAX_LINES:
             return
         if isinstance(node, list):
-            if len(node) > _LENGTHS_MIN_ITEMS:
-                lines.append(
-                    f"{path or '/'}: {len(node)} items (indices 0..{len(node) - 1})"
-                )
+            first = _numbered_label(node[0]) if len(node) >= 2 else None
+            last = _numbered_label(node[-1]) if first else None
+            if len(node) > _LENGTHS_MIN_ITEMS or (first and last):
+                line = f"{path or '/'}: {len(node)} items (indices 0..{len(node) - 1})"
+                if first and last:
+                    line += (
+                        f" — index 0 is {first[0]} {json.dumps(first[1])}, "
+                        f"index {len(node) - 1} is {last[0]} {json.dumps(last[1])}"
+                    )
+                lines.append(line)
             for i, item in enumerate(node):
                 walk(item, f"{path}/{i}")
         elif isinstance(node, dict):

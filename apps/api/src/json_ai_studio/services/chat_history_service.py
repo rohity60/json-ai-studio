@@ -127,12 +127,18 @@ async def clear_chat(session_id: str) -> None:
 # -- LLM replay ------------------------------------------------------------
 
 
+# Prod 2026-11-25 (live eval text_edits/after_edit): a bare "…(truncated)" on
+# an earlier turn's old_value made the model believe the CURRENT value was
+# truncated too, so it refused to translate the whole prompt.
+HISTORY_CUT = "…(shortened in history only; full value in the CURRENT WORKING JSON)"
+
+
 def _compact_value(value: Any, max_chars: int) -> Any:
     """Return value as-is when small, else a truncated JSON string."""
     text = json.dumps(value, ensure_ascii=False, default=str)
     if len(text) <= max_chars:
         return value
-    return text[:max_chars] + "…(truncated)"
+    return text[:max_chars] + HISTORY_CUT
 
 
 def _assistant_payload(turn: dict[str, Any]) -> str:

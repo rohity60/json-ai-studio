@@ -6,13 +6,13 @@
     "google_ai_studio": {"min_pass_rate": 0.85, "model": "gemma-4-26b-a4b-it", "measured": "12/13 (2 provider skips)"}
   },
   "chat_history": {
-    "ollama_local": {"min_pass_rate": null},
-    "nvidia_nim": {"min_pass_rate": null},
+    "ollama_local": {"min_pass_rate": null, "measured": "11-12/21 on 2026-11-26 (old prompt 6/21)"},
+    "nvidia_nim": {"min_pass_rate": null, "measured": "18-20/21 on 2026-11-26 (old prompt 18/21)"},
     "google_ai_studio": {"min_pass_rate": null}
   },
   "json_tools": {
-    "ollama_local": {"min_pass_rate": null},
-    "nvidia_nim": {"min_pass_rate": null},
+    "ollama_local": {"min_pass_rate": null, "measured": "9-10/18 on 2026-11-26 (old prompt 10/18)"},
+    "nvidia_nim": {"min_pass_rate": null, "measured": "10-14/18 on 2026-11-26 (old prompt 13/18)"},
     "google_ai_studio": {"min_pass_rate": null}
   },
   "suggested_fixes": {
@@ -28,6 +28,16 @@
   "review": {
     "ollama_local": {"min_pass_rate": null, "measured": "3/3 on 2026-11-24 (REVIEW_SKINS=120)"},
     "nvidia_nim": {"min_pass_rate": null, "measured": "3/3 on 2026-11-24 (449 skins exact in 5 batches)"},
+    "google_ai_studio": {"min_pass_rate": null}
+  },
+  "id_index": {
+    "ollama_local": {"min_pass_rate": null, "measured": "9/12 on 2026-11-26 (appends 9/9; prod yes_turn 0/3, capability); old prompt 0/12"},
+    "nvidia_nim": {"min_pass_rate": null, "measured": "12/12 on 2026-11-26 (yes_turn checked by meter ids); 9/12 on 2026-11-27 (yes_turn 2/4 with or without X4: noisy); old prompt 9/12 (yes_turn 0/3: id slip, text edits on lists)"},
+    "google_ai_studio": {"min_pass_rate": null}
+  },
+  "text_edits": {
+    "ollama_local": {"min_pass_rate": null, "measured": "9/9 on 2026-11-27; old prompt+server 7/9 (translate_after_edit reproduced prod: whole prompt as find → not found)"},
+    "nvidia_nim": {"min_pass_rate": null, "measured": "6/9 on 2026-11-27 (failures: a heading left in English, nothing failed to apply; whole prompt as replace_text find now applied); old prompt+server 5/9"},
     "google_ai_studio": {"min_pass_rate": null}
   }
 }
