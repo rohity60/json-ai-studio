@@ -41,6 +41,8 @@ SUITES = {
     "suggested_fixes": "test_suggested_fixes_live.py",
     "restructure": "test_restructure_live.py",
     "review": "test_review_live.py",
+    "id_index": "test_id_index_live.py",
+    "text_edits": "test_text_edits_live.py",
 }
 
 

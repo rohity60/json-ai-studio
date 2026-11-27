@@ -43,6 +43,8 @@ Models are not deterministic: judge a change by the rate over several runs, not 
 | `suggested_fixes` | `test_suggested_fixes_live.py` | Proactive format fixes (ADR-0023); explicit invalid values applied with a warning. |
 | `restructure` | `test_restructure_live.py` | Chat: restructure every element to a layout example (prod 449 skins). Outcomes mapped / asked / guarded pass; data loss fails. `SKIN_COUNTS=40,449`. |
 | `review` | `test_review_live.py` | Review jobs (ADR-0026) driven like the web client: layout reviews (449 skins + top-level `pack`; tracks with an example default) and a plain typo review. Fails on lost own values, added/removed records, layout rules in a non-layout prompt. `REVIEW_SKINS=449`. |
+| `id_index` | `test_id_index_live.py` | Numbered ids vs indices (prod 2026-11-24 "Love" rulebook: ids m1..m6 at 0..5 used as indices 1..6; replace_text on keyword lists). Cases: the prod "Yes" turn, keyword appends on numbered ids (small + prod-sized doc), and a control with word ids. Fails on any keyword on the wrong meter, missing, lost, or a failed diff. |
+| `text_edits` | `test_text_edits_live.py` | Whole-string rewrites vs phrase edits (prod 2026-11-25 Retell agent: "translate the entire script to Slovak" sent the whole 12k-char prompt as a replace_text `find`, retyped → not found, nothing applied). Cases: translate the script, translate after an earlier turn edited it (history holds the older text), and a control that changes one phrase (rest must stay byte-identical). Fails when English phrases remain, the prompt shrinks below 60 %, other keys change, or a diff fails. |
 
 You can also run a file directly: `LIVE_LLM=1 [LIVE_DEPLOYMENT=…] [LIVE_MODEL=…] [LIVE_CALL_SPACING_S=…] PYTHONPATH=. uv run pytest evals/<file> -s`.
 

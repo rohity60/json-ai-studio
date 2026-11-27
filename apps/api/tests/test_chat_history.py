@@ -597,7 +597,7 @@ class TestReplayShaping:
         replay = json.loads(history.build_history_messages(session)[1]["content"])
 
         assert len(replay["diffs"]) == 3  # 2 diffs + summary note
-        assert replay["diffs"][0]["new_value"].endswith("…(truncated)")
+        assert replay["diffs"][0]["new_value"].endswith(history.HISTORY_CUT)
         assert "3 more diffs" in replay["diffs"][-1]["note"]
 
     def test_unpaired_user_turn_not_replayed(self):
